@@ -1,0 +1,56 @@
+= Object Store Model
+
+The Object Store is responsible for persisting and validating raw, immutable content-addressable data files.
+
+== Storage Contract
+
+The Object Store guarantees three primary characteristics:
+
+* **Content Addressable Storage (CAS)** ::
+Objects are identified and accessed strictly by their content cryptographic hash. The store makes no assumptions about logical file paths.
+
+* **Eventual Consistency** ::
+The store assumes eventual consistency semantics. Once an object is committed, it is guaranteed to be eventually durable and accessible globally across all replica nodes, but replication or read delays may occur transiently.
+
+* **Durable Object** ::
+Once committed and verified, objects are read-only and durable. They cannot be overwritten or altered.
+
+== Internal Layout and Decoupling
+
+An Object Store implementation may incorporate internal caching or layered storage mechanisms:
+
+* **Local Cache** ::
+An ephemeral, high-speed storage layer residing close to the client process (such as a local directory cache) to accelerate file reads and staging.
+
+* **Durable Backend** ::
+A robust, distributed storage system (such as Google Cloud Storage or Amazon S3) that acts as the final destination of committed objects.
+
+The `Repository` is **entirely unaware** (Repository はそれらを意識しません) of these internal layers. It interacts solely with the abstract Object Store interface.
+
+== Object Commit Coordination and Leases
+
+During concurrent file updates, multiple clients may attempt to upload and commit the same file content simultaneously. To prevent duplicate transfer and processing work, the repository uses a Lease mechanism:
+
+=== Lease
+
+* **Hash-Based Boundary** ::
+Leases are managed per individual content cryptographic `Hash` unit.
+
+* **Absolute Expiration Time** ::
+A Lease has an `ExpiresAt` property representing an absolute UTC timestamp after which the lease becomes invalid. It is **not** a relative Time-To-Live (TTL) duration.
+
+* **Acquisition Check** ::
+To successfully acquire a Lease, the client must verify:
++
+[source,text]
+----
+ExpiresAt > now
+----
++
+If another valid active lease exists on the hash, the acquire attempt is rejected, throttling redundant upload tasks.
+
+* **Deletion after Commit** ::
+Once the Object Commit is successfully completed, the corresponding Lease is deleted.
+
+* **Throttling Purpose Only** ::
+The Lease is **not used to enforce read/write consistency** for data files. Its sole purpose is to **suppress and throttle duplicate upload and commit actions** (Object Commit の重複作業を抑制する目的で使用します) across concurrent client processes.

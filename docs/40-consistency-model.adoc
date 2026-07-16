@@ -1,0 +1,41 @@
+= Consistency Model
+
+Because `nando` manages resources across two disjoint, non-transactional storage layers (the Metadata Store and the Object Store), it implements custom client-side protocols to guarantee safe consistent reads and atomic commits.
+
+Both SQLite and Firestore implementations must satisfy the exact same semantics defined in this document.
+
+== Read Protocol
+
+To prevent clients from observing stale, partially committed, or deleted content (especially given the eventual consistency of the Object Store), the Read operation must follow this strict sequence:
+
+1. **Retrieve Metadata** ::
+Find and fetch the logical `Entry` from the Metadata Store. Read its referenced content `Hash` and its `Revision`.
+
+2. **Retrieve Object** ::
+Retrieve the content bytes from the Object Store using the referenced `Hash`.
+
+3. **Re-Verify Metadata Revision** ::
+Read the logical `Entry` from the Metadata Store again, and check if its `Revision` has changed since step 1.
+
+4. **Retry Condition** ::
+If the `Revision` has changed between step 1 and step 3 (indicating a concurrent modification or delete committed during the read), the client **must abort the current read and retry** (Revision が変化していれば Retry) from step 1.
+
+== Commit Protocol
+
+To guarantee that no metadata entry ever points to a missing or partial object, write operations must follow this sequence of actions:
+
+1. **Acquire Lease** ::
+Acquire a lock/lease on the content `Hash` to prevent duplicate concurrent upload tasks from starting.
+
+2. **Commit Object** ::
+Upload and finalize the data object in the Object Store. Ensure the object is successfully and durably saved.
+
+3. **Commit Metadata** ::
+Upsert or create the metadata `Entry` in the Metadata Store, linking it to the committed object's `Hash`. This step must be atomic inside the Metadata Store, transitioning the entry state to `ready` and incrementing its `Revision`.
+
+4. **Release Lease** ::
+Delete the lease on the content `Hash` to free the upload coordination record.
+
+== Eventual Consistency
+
+The Object Store operates under eventual consistency assumptions. Replicating committed object files across nodes may take time. The Read Protocol (by re-verifying the Metadata Revision) guarantees that eventual replication delays do not expose invalid files to clients, and that concurrent client processes converge on the exact same logical state.

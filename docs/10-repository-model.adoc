@@ -1,0 +1,70 @@
+= Repository Model
+
+The `Repository` is the central coordinator of `nando`. It orchestrates interactions between the two underlying, independent storage subsystems: the Metadata Store and the Object Store.
+
+== Storage Separation of Concerns
+
+The repository operates purely by managing:
+
+1. **Metadata Store**: Holds logical attributes, parent-child hierarchies, file modes, and content references.
+2. **Object Store**: Holds raw, immutable content-addressable data bytes.
+
+[cols="1,2,2", options="header"]
+|===
+| Subsystem | Managed Entities | Source of Truth
+
+| **Metadata Store**
+| `EntryID`, `ParentID`, logical names, file states, revisions, permissions, directory hierarchy.
+| Logical namespace, state visibility, metadata revisions.
+
+| **Object Store**
+| Cryptographic content objects identified by hash.
+| Durable, immutable file content bytes.
+|===
+
+Neither subsystem has awareness of the other's internal structure. The Repository alone is responsible for upholding cross-subsystem consistency. The repository does not assume the presence of a path-based storage schema in either subsystem.
+
+== Entry Structure
+
+Logical files and directories are modeled as an `Entry` in the metadata store.
+
+[source,text]
+----
+Entry
+    EntryID
+    ParentID
+    Name
+    Kind
+    Revision
+    Hash (file only)
+----
+
+=== Fields
+
+* **EntryID** ::
+An immutable UUIDv4 identifier assigned at creation. This ID is strictly reserved for **internal implementation use only** (内部実装専用) and is **never exposed to any external API** (外部 API に公開しない).
+
+* **ParentID** ::
+The UUIDv4 of the parent directory entry, establishing the repository directory hierarchy.
+
+* **Name** ::
+The base name of the file or directory.
+
+* **Kind** ::
+Identifies whether the entry represents a file or a directory.
+
+* **Revision** ::
+A monotonically increasing `uint64` indicating the transactional version of the metadata entry.
+
+* **Hash** (file only) ::
+The content cryptographic hash representing the content-addressable object in the Object Store. This field is absent for directory entries.
+
+== Directory Semantics
+
+Directories are first-class logical structures in the repository. They are characterized by the following semantics:
+
+* **No Object Reference** ::
+A directory entry never references an object in the Object Store. The `Hash` field remains absent.
+
+* **Metadata Only** ::
+A directory entry holds metadata only (such as its `EntryID`, `ParentID`, `Name`, and `Revision`). Directories exist entirely inside the Metadata Store logical namespace.

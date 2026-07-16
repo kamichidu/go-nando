@@ -4,15 +4,18 @@ This directory contains the design documents for `nando`.
 
 The documents intentionally distinguish between:
 
-* *Current* -- behavior implemented by the current scaffolding.
-* *Planned* -- behavior accepted as the next design target but not yet implemented.
-* *Open* -- behavior that still requires a decision.
+* *Current Design* -- behaviors and contracts finalized and accepted as core repository semantics.
+* *Open Questions* -- behaviors that still require a decision.
 
 == Documents
 
 * xref:architecture.adoc[Architecture]
-* xref:storage-model.adoc[Storage Model]
-* xref:consistency-model.adoc[Consistency and Recovery Model]
+* xref:05-invariants.adoc[Repository Invariants]
+* xref:10-repository-model.adoc[Repository Model]
+* xref:20-metadata-model.adoc[Metadata Model]
+* xref:30-object-store.adoc[Object Store Model]
+* xref:40-consistency-model.adoc[Consistency Model]
+* xref:50-state-machine.adoc[State Machines]
 * xref:roadmap.adoc[Implementation Roadmap]
 
 == Design Principles
@@ -22,7 +25,15 @@ The following principles apply across the repository:
 . Correctness before optimization.
 . The content-addressable object is immutable after commit.
 . Metadata becomes visible only after the referenced object is durable and verified.
-. Storage backends may differ in implementation, but must expose equivalent observable semantics.
+. Storage backends may differ in implementation, but must expose equivalent observable semantics (SQLite and Firestore share the same semantics).
 . Failures must leave either recoverable intermediate state or a previously valid state.
 . Repository format and runtime configuration are distinct concerns.
 . Design documents describe invariants and ownership; source code describes mechanisms.
+
+== Open Questions
+
+* **Canonical Path Cache Update Strategy** ::
+How should the derived Canonical Path Cache (managed by the Metadata Store) be updated when Entry moves or renames occur?
+  - *Synchronous Update* (同期更新) -- Recursively update path cache rows atomically during the move/rename transaction.
+  - *Invalidate* (無効化) -- Soft-invalidate/clear the affected subtree paths and re-calculate them only when next queried.
+  - *Lazy Rebuild* (遅延再構築) -- Queue a background task to rebuild the path cache asynchronously.

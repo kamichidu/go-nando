@@ -1,0 +1,48 @@
+= Repository Invariants
+
+This document defines the core, immutable invariants of the `nando` repository. These invariants form the contract that any implementation (such as SQLite or Firestore) must strictly satisfy.
+
+== Metadata Invariants
+
+* Logical Namespace Authority ::
+The metadata store is the absolute and sole source of truth (正本) for the logical namespace. The presence or layout of objects in the object store does not determine logical file visibility or structure.
+
+* Immutable Entry ID ::
+Every metadata entry possesses an immutable identifier (`EntryID`) assigned at creation. This ID never changes throughout the entry's lifecycle.
+
+* Per-Entry Revision Management ::
+The `Revision` is managed strictly at the individual entry level. It is a monotonically increasing `uint64` value.
+
+* Revision Increment on Commit Only ::
+An entry's `Revision` increases only when a metadata transaction is successfully committed.
+
+* Root Directory Existence ::
+The root directory of the logical namespace exists as a first-class directory entry in the metadata store.
+
+* Directory Metadata Only ::
+A directory entry holds metadata only (such as its ID, parent relation, name, and revision). A directory does not reference or contain any content object in the object store.
+
+== Object Store Invariants
+
+* Content Addressable Storage ::
+The object store functions purely as a Content Addressable Storage (CAS).
+
+* Hash-Based Identification ::
+Objects are uniquely identified and addressed by their content cryptographic hash.
+
+* Metadata Commit After Object Commit ::
+A metadata entry referencing an object can only transition to the `ready` state after the referenced object is successfully and durably committed to the object store. The metadata must never refer to an incomplete or uncommitted object.
+
+* Eventual Consistency Assumption ::
+The object store operates under eventual consistency semantics. Once committed, an object is guaranteed to be eventually durable and accessible, but reads may experience transient replication delays.
+
+* Lease Throttling ::
+A lease on a content hash exists solely to coordinate and throttle duplicate concurrent upload/commit tasks. It does not guarantee read/write consistency for objects.
+
+== Derived Data Invariants
+
+* Canonical Path is Derived ::
+The canonical path of an entry is derived data calculated from the hierarchy of parent-child relationships. It is not the repository's source of truth.
+
+* Path Cache Decoupling ::
+Any path cache (such as a database index or materialized path string used for fast query) is entirely disposable and can be deleted and reconstructed at any time from the parent-child relationships.
