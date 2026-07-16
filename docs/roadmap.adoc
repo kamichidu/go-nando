@@ -1,0 +1,184 @@
+= Implementation Roadmap
+
+== Purpose
+
+This roadmap orders implementation by invariant dependency rather than by user-visible feature count.
+
+A later phase assumes the guarantees of earlier phases. Features should not bypass unfinished consistency work.
+
+== Phase 0: Scaffolding
+
+Status:: Current.
+
+Delivered:
+
+* CLI command structure;
+* application and repository boundaries;
+* SQLite metadata backend;
+* local object store backend;
+* logical path normalization;
+* basic put/get/list/stat/move/remove/gc/doctor flow;
+* integration and storage tests;
+* GCS interface placeholder.
+
+Known limitation::
+The current code demonstrates the vertical flow but does not yet provide the final commit, concurrency, or recovery semantics documented here.
+
+== Phase 1: Repository Identity and Format
+
+Goals:
+
+* introduce repository-owned configuration;
+* define repository format version;
+* select SHA-256 as the default content identity;
+* namespace object identifiers by digest algorithm;
+* introduce real SQLite schema migrations;
+* reject unsupported repository formats explicitly.
+
+Exit criteria:
+
+* a repository can be opened only with compatible format semantics;
+* the digest algorithm cannot be silently reinterpreted;
+* migration tests cover every supported format transition.
+
+== Phase 2: Correct Local CAS Commit
+
+Goals:
+
+* derive digest from bytes written to the temporary object;
+* atomically publish local objects;
+* verify or safely reuse existing objects;
+* handle concurrent identical commits;
+* prevent a caller-supplied digest from naming unrelated bytes;
+* make object enumeration return committed objects only.
+
+Exit criteria:
+
+* an interrupted write never exposes a partial committed object;
+* every committed object matches its identifier;
+* repeated commits of identical content are idempotent;
+* corruption of an existing object is detected before adding a new logical reference.
+
+== Phase 3: Metadata State Machine and Locking
+
+Goals:
+
+* add repository-wide locking for mutating local operations;
+* replace unrestricted entry upsert with explicit state transitions;
+* make `pending` operational rather than descriptive;
+* preserve the previous ready state during replacement;
+* provide stable busy, conflict, and corruption errors;
+* stop classifying errors through message text.
+
+Exit criteria:
+
+* put and gc cannot produce a ready reference to a deleted object;
+* interrupted replacement exposes either the old or the new complete entry;
+* stale or abandoned operations are discoverable.
+
+== Phase 4: Recovery and Atomic Export
+
+Goals:
+
+* recover or report pending operations deterministically;
+* clean abandoned temporary objects safely;
+* make `get` write through a temporary destination;
+* add explicit repair operations separate from `doctor`;
+* define tombstone retention or metadata compaction policy.
+
+Exit criteria:
+
+* process termination at each documented failure point has a tested recovery result;
+* `get` failure does not truncate an existing destination;
+* doctor is non-destructive by default.
+
+== Phase 5: Directory Semantics
+
+Decision required::
+Choose implicit or explicit directories before implementing filesystem-oriented adapters.
+
+Likely direction::
+Explicit directory entries, because future Explorer, WebDAV, or WinFsp access benefits from preserving empty directories and directory metadata.
+
+Goals if explicit directories are selected:
+
+* define root entry semantics;
+* add `mkdir`;
+* define parent creation and validation rules;
+* constrain file-only and directory-only metadata fields;
+* make subtree move and delete conflict-safe;
+* reject moving a path into its own subtree;
+* test literal `%` and `_` path handling.
+
+Exit criteria:
+
+* one directory model is used consistently by all commands and stores;
+* path hierarchy invariants are enforced by metadata operations.
+
+== Phase 6: GCS Object Store
+
+Prerequisite::
+Local object commit semantics and recovery rules are already stable.
+
+Goals:
+
+* implement temporary GCS uploads;
+* publish digest objects with generation preconditions;
+* safely reuse existing verified objects;
+* enumerate only committed objects;
+* clean abandoned temporary uploads;
+* preserve local backend observable semantics.
+
+Exit criteria:
+
+* the shared object-store conformance suite passes for local and GCS backends;
+* retry and interruption behavior is deterministic;
+* no GCS-specific behavior leaks into repository use cases.
+
+== Phase 7: Sync and Remote Operation
+
+Status:: Deferred.
+
+Before implementing `sync`, define:
+
+* source of truth between local and remote metadata;
+* conflict identity and resolution policy;
+* snapshot or generation boundaries;
+* deletion propagation;
+* offline mutation behavior;
+* authentication and repository ownership.
+
+The current `sync` command placeholder does not establish these semantics.
+
+== Cross-Cutting Test Strategy
+
+Each phase should add tests at the narrowest responsible boundary.
+
+Object store conformance::
+Run the same immutable commit, verification, idempotency, interruption, and enumeration tests against every backend.
+
+Metadata conformance::
+Test explicit state transitions, subtree conflicts, literal path characters, migrations, and transaction rollback.
+
+Repository integration::
+Test interleavings between put, replacement, remove, gc, doctor, and recovery.
+
+CLI behavior::
+Test stable exit-code mapping and ensure verbose output does not alter command data streams.
+
+Failure injection::
+Introduce controlled failures after each durable transition rather than relying only on happy-path tests.
+
+== Deferred Optimizations
+
+The following should follow correctness work:
+
+* hash fan-out directory tuning;
+* parallel verification;
+* batched GC deletion;
+* GCS listing optimization;
+* metadata query indexes beyond observed need;
+* content-type detection improvements;
+* remote read caching.
+
+Optimization must not redefine repository visibility or commit boundaries.
