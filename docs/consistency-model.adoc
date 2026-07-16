@@ -1,0 +1,242 @@
+= Consistency and Recovery Model
+
+== Goal
+
+`nando` spans a metadata store and an object store that do not share a transaction manager.
+
+The consistency model therefore defines operation ordering, protected intermediate states, recovery behavior, and garbage-collection safety explicitly.
+
+The primary invariant is:
+
+[quote]
+A visible `ready` metadata entry must reference a committed object whose content matches its identifier.
+
+The reverse is not required. A committed object may temporarily or permanently have no visible metadata reference and can later be garbage-collected.
+
+== Visibility
+
+Normal read operations only observe `ready` entries.
+
+`pending` and `deleted` entries are hidden from:
+
+* `get`;
+* `cat`;
+* `stat`;
+* normal directory listings.
+
+Maintenance operations may inspect all states.
+
+== Put Protocol
+
+The target protocol is:
+
+[source,text]
+----
+1. Acquire repository operation protection.
+2. Materialize source bytes as a temporary object while deriving the digest.
+3. Record or update protected pending metadata for the destination path.
+4. Commit or verify the immutable object.
+5. Transition metadata from pending to ready atomically.
+6. Release operation protection.
+----
+
+The exact ordering of steps 2 and 3 may differ depending on whether the digest is known before the pending row can be created. Regardless of implementation:
+
+* garbage collection must protect every object that may become referenced by an in-progress operation;
+* a failed operation must not expose a `ready` entry referencing a missing or unverified object;
+* a committed but unreferenced object is acceptable and recoverable through garbage collection.
+
+=== Replacement
+
+Replacing an existing path must preserve the previously valid entry until the new object is ready to commit.
+
+Acceptable outcomes after interruption are:
+
+* the old `ready` entry remains visible; or
+* the new `ready` entry is fully visible.
+
+A partially replaced visible entry is prohibited.
+
+This may require a separate operation record or a pending generation rather than overwriting the only row in place.
+
+== Get Protocol
+
+`get` must not leave a truncated or partial destination as a successful-looking file.
+
+Target protocol:
+
+[source,text]
+----
+1. Resolve ready metadata.
+2. Open the committed object.
+3. Write to a temporary file near the destination.
+4. Flush and close the temporary file.
+5. Apply supported metadata.
+6. Atomically replace the destination.
+----
+
+If the operation fails before replacement, the previous destination remains unchanged where the host filesystem supports atomic rename semantics.
+
+`cat` cannot provide destination atomicity because the output stream is owned by the caller. It guarantees only that repository state is not mutated.
+
+== Move Protocol
+
+Move is a metadata transaction.
+
+Before committing a subtree move, the metadata store must validate:
+
+* the source exists and is visible;
+* the destination is valid;
+* the destination is not inside the source subtree;
+* every resulting path is conflict-free;
+* root path rules are respected.
+
+All affected paths must change atomically within the metadata store.
+
+Immutable objects are not copied or renamed.
+
+== Remove Protocol
+
+Remove transitions a file or subtree from `ready` to `deleted` atomically in metadata.
+
+Object deletion is not part of the remove transaction. Objects remain available until garbage collection determines they are unreachable.
+
+This separation ensures that deleting one logical path does not remove content referenced by another path.
+
+== Garbage Collection
+
+Garbage collection computes:
+
+[source,text]
+----
+committed objects - protected references = unreachable objects
+----
+
+Protected references include at least:
+
+* all `ready` entries;
+* all valid in-progress `pending` entries;
+* any operation journal records required for recovery.
+
+=== Exclusion
+
+Initial local implementation::
+A repository-wide lock is acceptable and preferred for simplicity. `put`, replacement, recovery, and `gc` must not interleave in unsafe phases.
+
+Future remote implementation::
+A lease or generation-based protocol may replace local locking. It must provide equivalent protection against deleting an object that an in-progress operation is about to publish.
+
+=== Safe Deletion
+
+Deletion of unreachable objects should be idempotent. A missing object discovered during deletion may be treated as already deleted unless it indicates a conflicting repository invariant.
+
+GC must never classify backend temporary objects as committed objects. Temporary object cleanup is a separate maintenance concern.
+
+== Repository Lock
+
+Status:: Planned for the local implementation.
+
+The lock protects cross-store operations, not ordinary immutable reads.
+
+Candidate operations requiring an exclusive lock:
+
+* `put` and replacement;
+* subtree move;
+* remove when coordinated with operation records;
+* `gc`;
+* repair and migration.
+
+Read-only operations may use no lock or a shared lock depending on migration and repair requirements.
+
+The lock implementation must:
+
+* identify the repository being protected;
+* avoid silently stealing a valid active lock;
+* expose a stable repository-busy error;
+* permit explicit stale-lock recovery with diagnostics;
+* define behavior after process termination.
+
+== Recovery
+
+Recovery runs when a repository is opened or through an explicit maintenance command.
+
+It examines:
+
+* pending metadata entries;
+* temporary local objects or temporary GCS objects;
+* operation journal records, if introduced;
+* committed objects referenced by pending operations.
+
+A recovery decision may:
+
+* complete publication when all required durable state exists;
+* revert to the prior ready generation;
+* mark an abandoned operation deleted or failed;
+* retain ambiguous state for explicit repair rather than guessing.
+
+Recovery must be deterministic from durable state. Process memory is not part of the recovery protocol.
+
+== Failure Matrix
+
+[cols="2,3,3", options="header"]
+|===
+| Failure Point | Required Visible Result | Recoverable Residue
+
+| Before temporary object is complete
+| Previous metadata state remains visible
+| Partial temporary object
+
+| After object commit, before metadata ready
+| Previous state or no new visible entry
+| Valid unreferenced object and pending state
+
+| During metadata ready transition
+| Atomic old or new metadata state
+| Backend transaction rollback or pending journal
+
+| After metadata ready transition
+| New entry is visible and object is readable
+| Temporary cleanup may remain
+
+| During GC enumeration
+| No referenced or protected object is deleted
+| Partial set of already deleted unreachable objects
+
+| During get destination write
+| Existing destination remains unchanged
+| Partial temporary output file
+|===
+
+== Doctor and Repair
+
+`doctor` detects violations without automatically choosing a destructive repair.
+
+Detected conditions include:
+
+* ready reference to a missing object;
+* digest mismatch;
+* invalid metadata state transition residue;
+* unsupported or partially migrated schema;
+* abandoned pending operation;
+* malformed committed object name;
+* conflicting path hierarchy.
+
+Repair should be explicit and policy-driven. Examples:
+
+* remove a broken ready reference;
+* restore metadata from an operation journal;
+* reclassify an object as unreachable;
+* complete a pending commit;
+* quarantine a corrupt object.
+
+When multiple repairs are plausible, `nando` must report the ambiguity instead of inventing user intent.
+
+== Concurrency Boundary
+
+Current target::
+Multiple CLI invocations may exist, but mutating operations are serialized per repository.
+
+Not currently promised::
+Concurrent distributed writers using SQLite and a shared remote object store.
+
+Any future relaxation of serialization requires tests that preserve the same externally visible invariants under interleaving operations.
