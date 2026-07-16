@@ -10,7 +10,13 @@ The Object Store guarantees three primary characteristics:
 Objects are identified and accessed strictly by their content cryptographic hash. The store makes no assumptions about logical file paths.
 
 * **Eventual Consistency** ::
-The store assumes eventual consistency semantics. Once an object is committed, it is guaranteed to be eventually durable and accessible globally across all replica nodes, but replication or read delays may occur transiently.
+The Object Store is eventually consistent (Eventually Consistentである). The details of this model are:
++
+--
+* **Immediate Writer Visibility** :: The writer process can immediately recognize and acknowledge a successful commit (WriterはCommit成功を即座に認識できる).
+* **Eventually Consistent Readers** :: Other concurrent reader processes observe the committed object eventually (他ReaderはEventually観測可能となる).
+* **No Read-after-Write Guarantee** :: The Object Store does not guarantee immediate Read-after-Write consistency across different nodes (Object StoreはRead-after-Writeを保証しない).
+--
 
 * **Durable Object** ::
 Once committed and verified, objects are read-only and durable. They cannot be overwritten or altered.
@@ -33,6 +39,14 @@ During concurrent file updates, multiple clients may attempt to upload and commi
 
 === Lease
 
+Leases are strictly an optimization for Object Commits (LeaseはObject Commitの最適化です). They are governed by the following rules:
+
+* **No Consistency Guarantees** ::
+Leases do not guarantee metadata or transactional consistency (Leaseは整合性を保証しない).
+
+* **Throttling and Suppression** ::
+The sole purpose of a lease is to suppress and throttle duplicate, redundant Object Commit and upload tasks across concurrent writer processes (Leaseは重複Object Commitを抑制する目的である).
+
 * **Hash-Based Boundary** ::
 Leases are managed per individual content cryptographic `Hash` unit.
 
@@ -49,8 +63,8 @@ ExpiresAt > now
 +
 If another valid active lease exists on the hash, the acquire attempt is rejected, throttling redundant upload tasks.
 
-* **Deletion after Commit** ::
-Once the Object Commit is successfully completed, the corresponding Lease is deleted.
+* **Commit Failure Expiration** ::
+If a commit fails or is aborted, the lease is allowed to simply expire naturally (Commit失敗時はLeaseがExpireしてもよい).
 
-* **Throttling Purpose Only** ::
-The Lease is **not used to enforce read/write consistency** for data files. Its sole purpose is to **suppress and throttle duplicate upload and commit actions** (Object Commit の重複作業を抑制する目的で使用します) across concurrent client processes.
+* **Expiration is Normal Termination** ::
+Explicitly releasing the lease is not the only valid termination path; lease expiration (Expire) is also treated as a normal, valid success and termination path (Releaseは正常終了時のみではなく、Expireも正常終了経路とする).

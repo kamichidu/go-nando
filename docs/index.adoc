@@ -10,12 +10,13 @@ The documents intentionally distinguish between:
 == Documents
 
 * xref:architecture.adoc[Architecture]
-* xref:05-invariants.adoc[Repository Invariants]
-* xref:10-repository-model.adoc[Repository Model]
-* xref:20-metadata-model.adoc[Metadata Model]
-* xref:30-object-store.adoc[Object Store Model]
-* xref:40-consistency-model.adoc[Consistency Model]
-* xref:50-state-machine.adoc[State Machines]
+* xref:invariants.adoc[Repository Invariants]
+* xref:repository-model.adoc[Repository Model]
+* xref:metadata-model.adoc[Metadata Model]
+* xref:object-store.adoc[Object Store Model]
+* xref:consistency-model.adoc[Consistency Model]
+* xref:state-machine.adoc[State Machines]
+* xref:glossary.adoc[Repository Glossary]
 * xref:roadmap.adoc[Implementation Roadmap]
 
 == Design Principles

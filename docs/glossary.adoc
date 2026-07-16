@@ -1,0 +1,31 @@
+= Repository Glossary
+
+This glossary defines the core terminology used throughout the `nando` system. These definitions establish unified, consistent semantics across all design documents and storage implementations.
+
+[glossary]
+Entry::
+A logical record in the Metadata Store representing a directory or file structure with associated properties and permissions.
+
+Directory::
+A first-class `Entry` representing a logical folder that holds metadata and hierarchy pointers but does not reference any physical content `Object`.
+
+Object::
+An immutable, durable data file stored in the Object Store, uniquely identified and addressed by its cryptographic content hash.
+
+Commit::
+The atomic transaction of finalising an `Object` in storage or updating an `Entry` in the metadata namespace to make changes durable and visible.
+
+Revision::
+A monotonically increasing `uint64` version identifier tracked per individual `Entry` to verify transactional consistency.
+
+Lease::
+A temporal coordination key managed per hash to suppress redundant concurrent uploads and optimize the Object Commit process.
+
+Canonical Path::
+A calculated, human-readable logical path (such as `/docs/report.pdf`) derived entirely from parent-child metadata relationships.
+
+Derived Data::
+Disposible, calculated repository metadata (such as Canonical Paths and Path Caches) that is not the primary source of truth and can be safely reconstructed at any time.
+
+Object Store::
+The content-addressable, eventually consistent storage subsystem responsible for persisting and validating immutable file `Objects` by hash.

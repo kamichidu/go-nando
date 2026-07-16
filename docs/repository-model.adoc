@@ -42,10 +42,13 @@ Entry
 === Fields
 
 * **EntryID** ::
-An immutable UUIDv4 identifier assigned at creation. This ID is strictly reserved for **internal implementation use only** (内部実装専用) and is **never exposed to any external API** (外部 API に公開しない).
+An opaque, immutable, globally unique identifier assigned at creation (Opaque immutable identifier). The Repository contract guarantees only that the ID is immutable, opaque, and globally unique. It is strictly reserved for **internal implementation use only** (内部実装専用) and is **never exposed to any external API** (外部 API に公開しない).
++
+_Current Implementation_::
+The active local scaffolding uses standard UUIDv4 for `EntryID` values.
 
 * **ParentID** ::
-The UUIDv4 of the parent directory entry, establishing the repository directory hierarchy.
+The `EntryID` of the parent directory entry, establishing the repository directory hierarchy.
 
 * **Name** ::
 The base name of the file or directory.

@@ -15,11 +15,14 @@ The Metadata Store's primary responsibilities include:
 
 === EntryID
 
-* **Immutable UUIDv4** ::
-Each entry is assigned a unique UUIDv4 at the time of creation. This identifier is completely immutable and remains unchanged throughout the entry's lifecycle.
+* **Opaque Immutable Identifier** ::
+Each entry is assigned a globally unique `EntryID` at the time of creation. The Repository contract guarantees only that the `EntryID` is completely immutable, opaque, and globally unique.
 
 * **Internal Only** ::
 The `EntryID` is strictly used for internal implementation logic (such as parent-child foreign key mappings) and is never exposed to users or external client APIs.
++
+_Current Implementation_::
+The active local scaffolding uses standard UUIDv4 for `EntryID` values.
 
 === Parent Relationship
 
@@ -41,6 +44,11 @@ This guarantees that no two entries with the same base name can exist under the 
 * **Path is Decoupled** ::
 A fully qualified logical path (such as `/docs/report.pdf`) is not stored as the primary, unique key in the store. The primary identifier is the `EntryID`, and hierarchy is reconstructed entirely via parent-child relations.
 
+== Metadata States
+
+* **Ready State Only** ::
+The Metadata Store only holds and represents active, visible `Ready` entries. There is **no 'Pending' state** inside the Metadata Store logical schema. The concept of a `Pending` state is strictly internal to the Object Store during upload and staging operations.
+
 == Metadata Revision
 
 Transactional changes are tracked using explicit version counters:
@@ -48,8 +56,8 @@ Transactional changes are tracked using explicit version counters:
 * **Type** ::
 The `Revision` is defined as a `uint64` integer.
 
-* **Increment on Commit Only** ::
-An entry's revision is increased by one only when a write transaction altering that specific entry is successfully committed.
+* **Monotonically Increasing Only** ::
+The Repository contract guarantees only that an entry's revision is monotonically increasing (単調増加する) on each successful write transaction affecting that specific entry. It does not guarantee or assume any specific step size (such as incrementing exactly by one).
 
 * **Per-Entry Boundary** ::
 Revisions are isolated to individual entries.
