@@ -31,7 +31,7 @@ Acquire a lock/lease on the content `Hash` to prevent duplicate concurrent uploa
 Upload and finalize the data object in the Object Store. Ensure the object is successfully and durably saved.
 
 3. **Commit Metadata** ::
-Upsert or create the metadata `Entry` in the Metadata Store, linking it to the committed object's `Hash`. This step must be atomic inside the Metadata Store, transitioning the entry state to `ready` and incrementing its `Revision`.
+Upsert or create the metadata `Entry` in the Metadata Store, linking it to the committed object's `Hash`. This step must be atomic inside the Metadata Store, finalizing the entry (committed metadata state) and incrementing its `Revision`.
 
 4. **Release Lease** ::
 Delete the lease on the content `Hash` to free the upload coordination record.

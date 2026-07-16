@@ -66,13 +66,13 @@ Goals:
 * add repository-wide locking for mutating local operations;
 * replace unrestricted entry upsert with explicit state transitions;
 * make `pending` operational rather than descriptive;
-* preserve the previous ready state during replacement;
+* preserve the previous committed metadata entry during replacement;
 * provide stable busy, conflict, and corruption errors;
 * stop classifying errors through message text.
 
 Exit criteria:
 
-* put and gc cannot produce a ready reference to a deleted object;
+* put and gc cannot produce a committed metadata reference to a deleted object;
 * interrupted replacement exposes either the old or the new complete entry;
 * stale or abandoned operations are discoverable.
 

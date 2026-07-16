@@ -35,6 +35,6 @@ The following principles apply across the repository:
 
 * **Canonical Path Cache Update Strategy** ::
 How should the derived Canonical Path Cache (managed by the Metadata Store) be updated when Entry moves or renames occur?
-  - *Synchronous Update* (同期更新) -- Recursively update path cache rows atomically during the move/rename transaction.
-  - *Invalidate* (無効化) -- Soft-invalidate/clear the affected subtree paths and re-calculate them only when next queried.
-  - *Lazy Rebuild* (遅延再構築) -- Queue a background task to rebuild the path cache asynchronously.
+  - *Synchronous Update* -- Recursively update path cache rows atomically during the move/rename transaction.
+  - *Invalidate* -- Soft-invalidate/clear the affected subtree paths and re-calculate them only when next queried.
+  - *Lazy Rebuild* -- Queue a background task to rebuild the path cache asynchronously.

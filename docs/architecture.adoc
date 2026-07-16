@@ -153,7 +153,7 @@ Target semantics:
 . Determine the content identifier from the bytes actually written.
 . Commit or reuse the immutable object.
 . Verify the committed object according to backend guarantees.
-. Atomically make metadata visible as `ready`.
+. Atomically commit the metadata (committed metadata state).
 
 A caller-supplied digest must not be trusted as proof of object identity.
 

@@ -5,7 +5,7 @@ This document defines the core, immutable invariants of the `nando` repository. 
 == Metadata Invariants
 
 * Logical Namespace Authority ::
-The metadata store is the absolute and sole source of truth (正本) for the logical namespace. The presence or layout of objects in the object store does not determine logical file visibility or structure.
+The metadata store is the absolute and sole source of truth for the logical namespace. The presence or layout of objects in the object store does not determine logical file visibility or structure.
 
 * Immutable Entry ID ::
 Every metadata entry possesses an immutable identifier (`EntryID`) assigned at creation. This ID never changes throughout the entry's lifecycle.
@@ -31,7 +31,7 @@ The object store functions purely as a Content Addressable Storage (CAS).
 Objects are uniquely identified and addressed by their content cryptographic hash.
 
 * Metadata Commit After Object Commit ::
-A metadata entry referencing an object can only transition to the `ready` state after the referenced object is successfully and durably committed to the object store. The metadata must never refer to an incomplete or uncommitted object.
+A metadata entry referencing an object can only become committed (committed metadata state) after the referenced object is successfully and durably committed to the object store. The metadata must never refer to an incomplete or uncommitted object.
 
 * Eventual Consistency Assumption ::
 The object store operates under eventual consistency semantics. Once committed, an object is guaranteed to be eventually durable and accessible, but reads may experience transient replication delays.

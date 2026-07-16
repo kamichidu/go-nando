@@ -44,10 +44,10 @@ This guarantees that no two entries with the same base name can exist under the 
 * **Path is Decoupled** ::
 A fully qualified logical path (such as `/docs/report.pdf`) is not stored as the primary, unique key in the store. The primary identifier is the `EntryID`, and hierarchy is reconstructed entirely via parent-child relations.
 
-== Metadata States
+== Committed Metadata
 
-* **Ready State Only** ::
-The Metadata Store only holds and represents active, visible `Ready` entries. There is **no 'Pending' state** inside the Metadata Store logical schema. The concept of a `Pending` state is strictly internal to the Object Store during upload and staging operations.
+* **Committed Metadata State Only** ::
+The Metadata Store only holds and represents active, visible, and fully committed entries (committed metadata state). There are no intermediate or transient states (such as "Pending" or "Draft") inside the Metadata Store logical schema. The concept of a `Pending` state is strictly internal to the Object Store during upload and staging operations.
 
 == Metadata Revision
 
@@ -57,7 +57,7 @@ Transactional changes are tracked using explicit version counters:
 The `Revision` is defined as a `uint64` integer.
 
 * **Monotonically Increasing Only** ::
-The Repository contract guarantees only that an entry's revision is monotonically increasing (単調増加する) on each successful write transaction affecting that specific entry. It does not guarantee or assume any specific step size (such as incrementing exactly by one).
+The Repository contract guarantees only that an entry's revision is monotonically increasing on each successful write transaction affecting that specific entry. It does not guarantee or assume any specific step size (such as incrementing exactly by one).
 
 * **Per-Entry Boundary** ::
 Revisions are isolated to individual entries.
@@ -70,10 +70,10 @@ Modifying, renaming, or deleting a child entry increases the child's `Revision`,
 To quickly look up files by logical path, a `Canonical Path` can be computed:
 
 * **Not the Source of Truth** ::
-The Canonical Path is **never the source of truth** (正本) of the repository. It is a calculated, derived representation.
+The Canonical Path is **never the source of truth** of the repository. It is a calculated, derived representation.
 
 * **Path Cache** ::
 The Metadata Store can materialize and maintain a path-to-EntryID mapping as a **Path Cache** (such as an index table or cache layer) to speed up logical path searches.
 
 * **Repository Independence** ::
-The Repository layer operates entirely on the basis of parent-child relationships and EntryIDs. The Repository **does not assume the existence of a Canonical Path** (Repository は Canonical Path の存在を前提としません).
+The Repository layer operates entirely on the basis of parent-child relationships and EntryIDs. The Repository **does not assume the existence of a Canonical Path**.

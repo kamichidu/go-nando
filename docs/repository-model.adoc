@@ -14,8 +14,8 @@ The repository operates purely by managing:
 | Subsystem | Managed Entities | Source of Truth
 
 | **Metadata Store**
-| `EntryID`, `ParentID`, logical names, file states, revisions, permissions, directory hierarchy.
-| Logical namespace, state visibility, metadata revisions.
+| `EntryID`, `ParentID`, logical names, file properties, revisions, permissions, directory hierarchy.
+| Logical namespace, entry metadata, metadata revisions.
 
 | **Object Store**
 | Cryptographic content objects identified by hash.
@@ -42,7 +42,7 @@ Entry
 === Fields
 
 * **EntryID** ::
-An opaque, immutable, globally unique identifier assigned at creation (Opaque immutable identifier). The Repository contract guarantees only that the ID is immutable, opaque, and globally unique. It is strictly reserved for **internal implementation use only** (内部実装専用) and is **never exposed to any external API** (外部 API に公開しない).
+An opaque, immutable, globally unique identifier assigned at creation (Opaque immutable identifier). The Repository contract guarantees only that the ID is immutable, opaque, and globally unique. It is strictly reserved for internal implementation use only and is never exposed to any external API.
 +
 _Current Implementation_::
 The active local scaffolding uses standard UUIDv4 for `EntryID` values.
