@@ -1,0 +1,28 @@
+= nando Design Documents
+
+This directory contains the design documents for `nando`.
+
+The documents intentionally distinguish between:
+
+* *Current* -- behavior implemented by the current scaffolding.
+* *Planned* -- behavior accepted as the next design target but not yet implemented.
+* *Open* -- behavior that still requires a decision.
+
+== Documents
+
+* xref:architecture.adoc[Architecture]
+* xref:storage-model.adoc[Storage Model]
+* xref:consistency-model.adoc[Consistency and Recovery Model]
+* xref:roadmap.adoc[Implementation Roadmap]
+
+== Design Principles
+
+The following principles apply across the repository:
+
+. Correctness before optimization.
+. The content-addressable object is immutable after commit.
+. Metadata becomes visible only after the referenced object is durable and verified.
+. Storage backends may differ in implementation, but must expose equivalent observable semantics.
+. Failures must leave either recoverable intermediate state or a previously valid state.
+. Repository format and runtime configuration are distinct concerns.
+. Design documents describe invariants and ownership; source code describes mechanisms.
