@@ -1,0 +1,188 @@
+= nando
+
+`nando` is a file repository system designed to save files as content-addressable objects and manage logical path structures using a SQLite metadata database.
+
+== Architecture
+
+The system has a clear separation of concerns across multiple layers:
+
+[cols="1,3,2,2", options="header"]
+|===
+| Layer | Responsibility | Allowed Dependencies | Prohibited Actions
+
+| CLI
+| Handles arguments, stream setup, exit code mapping, and calling the Application layer.
+| Application layer, `paths`, `config`.
+| Direct SQLite/Object store access, hash generation, GC judgment.
+
+| Application
+| Direct entry points for use cases. Uses application-specific structs.
+| `repository`, `metadata`, `objectstore`, `content`.
+| CLI-specific types.
+
+| Repository
+| Coordinates metadata store and object store. Ensures metadata is committed after object is verified.
+| Metadata store, Object store, `content`.
+| CLI or direct UI logic.
+
+| Metadata Store
+| Manages logical paths and properties inside a SQLite database.
+| Standard `sql` library, `modernc.org/sqlite`.
+| Storing actual file content data.
+
+| Object Store
+| Manages content-addressable immutable objects in local or GCS storage.
+| Local filesystem, standard `io` reader/writer.
+| Logical directory tree tracking.
+|===
+
+== Directory Structure
+
+----
+nando/
+|-- cmd/
+|   `-- nando/
+|       `-- main.go
+|-- internal/
+|   |-- app/
+|   |   |-- app.go
+|   |   |-- init.go
+|   |   |-- put.go
+|   |   |-- get.go
+|   |   |-- list.go
+|   |   |-- move.go
+|   |   |-- remove.go
+|   |   |-- gc.go
+|   |   `-- sync.go
+|   |-- cli/
+|   |   |-- root.go
+|   |   `-- commands/
+|   |-- repository/
+|   |   |-- repository.go
+|   |   |-- put.go
+|   |   |-- get.go
+|   |   |-- move.go
+|   |   `-- remove.go
+|   |-- metadata/
+|   |   |-- store.go
+|   |   |-- sqlite/
+|   |   |   |-- store.go
+|   |   |   |-- schema.go
+|   |   |   `-- store_test.go
+|   |   `-- model.go
+|   |-- objectstore/
+|   |   |-- store.go
+|   |   |-- local/
+|   |   |   |-- store.go
+|   |   |   `-- store_test.go
+|   |   `-- gcs/
+|   |       `-- store.go
+|   |-- content/
+|   |   |-- hash.go
+|   |   `-- hash_test.go
+|   |-- sync/
+|   |   `-- engine.go
+|   |-- gc/
+|   |   `-- collector.go
+|   |-- config/
+|   |   `-- config.go
+|   `-- paths/
+|       `-- paths.go
+|-- go.mod
+|-- go.sum
+|-- README.adoc
+`-- Taskfile.yml
+----
+
+== Key Specifications
+
+=== Logical Paths
+
+* **Separators** :: Forward slash `/` is always used as the path separator, on all platforms.
+* **Normalization** :: Paths are absolute, clean of duplicate slashes, and resolve `.` and `..` recursively.
+* **Case-Sensitivity** :: Logical repository paths are strictly case-sensitive. For example, `/docs/Report.pdf` and `/docs/report.pdf` are treated as different logical files.
+* **Isolation** :: Paths are barred from escaping the repository root directory.
+
+=== Exit Codes
+
+* **`0`** :: Success
+* **`1`** :: General failure
+* **`2`** :: Invalid CLI arguments
+* **`3`** :: Entry or object not found
+* **`4`** :: Conflict (such as destination path already exists during move)
+* **`5`** :: Repository corruption or verification failure
+
+== Quick Start and Verification
+
+Follow these steps to build and run the system:
+
+1. Build the binary:
++
+[source,bash]
+----
+task build
+----
+
+2. Initialize the repository:
++
+[source,bash]
+----
+./bin/nando --repository ./test-repo init
+----
+
+3. Import a local file:
++
+[source,bash]
+----
+echo "hello nando" > hello.txt
+./bin/nando --repository ./test-repo put ./hello.txt /documents/hello.txt
+----
+
+4. List logical directory entries:
++
+[source,bash]
+----
+./bin/nando --repository ./test-repo ls /documents
+----
+
+5. Check file metadata details:
++
+[source,bash]
+----
+./bin/nando --repository ./test-repo stat /documents/hello.txt
+----
+
+6. Restore/Export the file:
++
+[source,bash]
+----
+./bin/nando --repository ./test-repo get /documents/hello.txt ./restored.txt
+----
+
+7. Verify identical file content:
++
+[source,bash]
+----
+diff hello.txt restored.txt
+----
+
+8. Move or rename a path:
++
+[source,bash]
+----
+./bin/nando --repository ./test-repo mv /documents/hello.txt /documents/greeting.txt
+----
+
+9. Remove/Soft-delete a path:
++
+[source,bash]
+----
+./bin/nando --repository ./test-repo rm /documents/greeting.txt
+----
+
+10. Run garbage collection:
++
+[source,bash]
+----
+./bin/nando --repository ./test-repo gc
+----

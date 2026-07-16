@@ -1,0 +1,28 @@
+version: '3'
+
+tasks:
+  default:
+    cmds:
+      - task: vet
+      - task: test
+      - task: build
+
+  build:
+    desc: Build the nando CLI executable
+    cmds:
+      - go build -o bin/nando cmd/nando/main.go
+
+  test:
+    desc: Run unit and integration tests
+    cmds:
+      - go test ./...
+
+  vet:
+    desc: Run static analysis checks (go vet)
+    cmds:
+      - go vet ./...
+
+  clean:
+    desc: Remove built binaries and output files
+    cmds:
+      - rm -rf bin/
