@@ -16,6 +16,11 @@ tasks:
     cmds:
       - go build -o {{.BIN_DIR}}/nando cmd/nando/main.go
 
+  init:
+    desc: Initialize local development environment
+    cmds:
+      - cp -nv envrc.sample .envrc
+
   test:
     desc: Run unit and integration tests
     cmds:
