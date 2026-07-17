@@ -303,12 +303,8 @@ func (s *Store) ListChildren(ctx context.Context, parentID metadata.EntryID) ([]
 	return entries, nil
 }
 
-// Create inserts a new entry into SQLite after performing basic invariant validation.
+// Create inserts a new entry into SQLite.
 func (s *Store) Create(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
-	if err := s.validateEntry(ctx, entry, false); err != nil {
-		return metadata.Entry{}, err
-	}
-
 	var parentIDVal sql.NullString
 	if entry.ParentID != nil {
 		parentIDVal = sql.NullString{String: entry.ParentID.String(), Valid: true}

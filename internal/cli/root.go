@@ -177,7 +177,8 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func(), error) {
 		return nil, "", nil, fmt.Errorf("failed to open object store: %w", err)
 	}
 
-	repo := repository.NewRepository(metaStore, objStore, hasher)
+	validatingMetaStore := metadata.NewValidatingStore(metaStore)
+	repo := repository.NewRepository(validatingMetaStore, objStore, hasher)
 	application := app.NewApp(repo)
 
 	cleanup := func() {

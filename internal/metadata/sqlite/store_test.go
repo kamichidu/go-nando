@@ -629,55 +629,6 @@ func TestSQLiteStore(t *testing.T) {
 			t.Fatalf("failed to parse: %v", err)
 		}
 
-		// 1. Creating an entry with a non-existent ParentID must fail in validation
-		invalidParentID := metadata.EntryID("non-existent-parent")
-		_, err = store.Create(ctx, metadata.Entry{
-			ID:        "file-orphan",
-			ParentID:  &invalidParentID,
-			Name:      "orphan.txt",
-			Kind:      metadata.EntryKindFile,
-			Revision:  1,
-			CreatedAt: now,
-			UpdatedAt: now,
-		})
-		if err == nil {
-			t.Errorf("expected Create to fail for non-existent parent, but succeeded")
-		} else if !errors.Is(err, metadata.ErrEntryConflict) {
-			t.Errorf("expected ErrEntryConflict, got %v", err)
-		}
-
-		// 2. Creating an entry whose parent is a file (not a directory) must fail in validation
-		fileID := metadata.EntryID("file-parent")
-		_, err = store.Create(ctx, metadata.Entry{
-			ID:        fileID,
-			ParentID:  &rootID,
-			Name:      "file_parent.txt",
-			Kind:      metadata.EntryKindFile,
-			ObjectID:  &oid,
-			Revision:  1,
-			CreatedAt: now,
-			UpdatedAt: now,
-		})
-		if err != nil {
-			t.Fatalf("failed to create file parent: %v", err)
-		}
-
-		_, err = store.Create(ctx, metadata.Entry{
-			ID:        "invalid-child",
-			ParentID:  &fileID,
-			Name:      "child_of_file.txt",
-			Kind:      metadata.EntryKindFile,
-			ObjectID:  &oid,
-			Revision:  1,
-			CreatedAt: now,
-			UpdatedAt: now,
-		})
-		if err == nil {
-			t.Errorf("expected Create to fail when parent is a file, but succeeded")
-		} else if !errors.Is(err, metadata.ErrEntryConflict) {
-			t.Errorf("expected ErrEntryConflict, got %v", err)
-		}
-
 		// 3. Deleting a directory that has active children must fail in Go validation
 		dirID := metadata.EntryID("parent-dir")
 		_, err = store.Create(ctx, metadata.Entry{

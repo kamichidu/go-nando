@@ -54,8 +54,9 @@ func TestRepository(t *testing.T) {
 			t.Fatalf("failed to create object store: %v", err)
 		}
 
-		repo := repository.NewRepository(metaStore, objStore, hasher)
-		return repo, tempDir, metaStore
+		validatingMetaStore := metadata.NewValidatingStore(metaStore)
+		repo := repository.NewRepository(validatingMetaStore, objStore, hasher)
+		return repo, tempDir, validatingMetaStore
 	}
 
 	t.Run("put followed by get restores the original file content", func(t *testing.T) {
@@ -234,7 +235,7 @@ func TestRepository(t *testing.T) {
 		}
 
 		// Wrap in fixedIDMetadataStore to generate stable golden EntryIDs!
-		metaStore := &fixedIDMetadataStore{MetadataStore: rawStore}
+		metaStore := &fixedIDMetadataStore{MetadataStore: metadata.NewValidatingStore(rawStore)}
 
 		objectsDir := filepath.Join(tempDir, "objects")
 		tempObjDir := filepath.Join(tempDir, "temp")
