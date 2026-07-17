@@ -95,8 +95,12 @@ func (s *ValidatingStore) Update(ctx context.Context, entry Entry) (Entry, error
 }
 
 // Move validates the move operation before delegating to the next store.
-func (s *ValidatingStore) Move(ctx context.Context, id EntryID, newParentID EntryID, newName string) (Entry, error) {
-	if err := runMoveValidators(moveParams{ID: id, NewParentID: newParentID, NewName: newName},
+func (s *ValidatingStore) Move(ctx context.Context, entry Entry) (Entry, error) {
+	if entry.ParentID == nil {
+		return Entry{}, fmt.Errorf("%w: parent ID cannot be empty", ErrEntryConflict)
+	}
+
+	if err := runMoveValidators(moveParams{ID: entry.ID, NewParentID: *entry.ParentID, NewName: entry.Name},
 		mustHaveMoveEntryID,
 		mustNotMoveRoot,
 		mustHaveMoveDestination,
@@ -106,46 +110,7 @@ func (s *ValidatingStore) Move(ctx context.Context, id EntryID, newParentID Entr
 		return Entry{}, err
 	}
 
-	entry, err := s.next.GetByID(ctx, id)
-	if err != nil {
-		return Entry{}, err
-	}
-
-	newParent, err := s.next.GetByID(ctx, newParentID)
-	if err != nil {
-		if errors.Is(err, ErrEntryNotFound) {
-			return Entry{}, fmt.Errorf("%w: destination parent entry %s does not exist", ErrEntryConflict, newParentID)
-		}
-		return Entry{}, fmt.Errorf("failed to verify destination parent existence: %w", err)
-	}
-	if newParent.Kind != EntryKindDirectory {
-		return Entry{}, fmt.Errorf("%w: destination parent %s must be a directory", ErrEntryConflict, newParentID)
-	}
-
-	if entry.Kind == EntryKindDirectory {
-		current := newParentID
-		visited := make(map[EntryID]bool)
-		for current != "root" {
-			if current == id {
-				return Entry{}, fmt.Errorf("%w: directory cannot be moved under its own descendant (hierarchy cycle)", ErrEntryConflict)
-			}
-			if visited[current] {
-				return Entry{}, fmt.Errorf("%w: cycle detected in parent ancestry during move", ErrEntryConflict)
-			}
-			visited[current] = true
-
-			p, err := s.next.GetByID(ctx, current)
-			if err != nil {
-				return Entry{}, fmt.Errorf("failed to verify ancestry during move: %w", err)
-			}
-			if p.ParentID == nil {
-				break
-			}
-			current = *p.ParentID
-		}
-	}
-
-	return s.next.Move(ctx, id, newParentID, newName)
+	return s.next.Move(ctx, entry)
 }
 
 // Delete validates the deletion before delegating to the next store.

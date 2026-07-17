@@ -62,7 +62,85 @@ Implementation describes:
 
 ---
 
-## 3. Repository Constitution
+## 3. Core Engineering Principles
+
+This section defines the core architectural and implementation contracts that govern the Repository and Metadata Store (`MetadataStore`) subsystem.
+
+### 3.1. Correctness before Convenience
+
+Do not add process-local mutexes or caches to hide persistence-layer concurrency issues. All correctness guarantees must remain valid across:
+* multiple Store instances;
+* multiple processes;
+* and alternative database backend implementations.
+
+Use backend-native transactional and conditional-write mechanisms, including physical unique constraints where available and appropriate.
+
+### 3.2. Backend-Independent Store Semantics
+
+The metadata store contract must not depend on SQLite-specific behaviors. SQLite transactions and UNIQUE constraints are implementation details, not API semantics. Design every operation so that an equivalent Firestore implementation remains completely possible under the same interface.
+
+### 3.3. Validation Responsibility Boundaries
+
+* **`ValidatingStore`:** Handles request-local, state-independent validations such as non-empty IDs, valid input enum values, revision lower bounds, and required field invariants.
+* **Backend Store (e.g., SQLite `Store`):** Handles state-dependent validations (such as parent existence, parent directory kind, and namespace/ancestry cycle verification).
+* **Mutation Atomicity:** State-dependent validation must execute within the exact same transaction block as the corresponding mutation to eliminate TOCTOU (Time-of-Check to Time-of-Use) race conditions. Do not move state-dependent checks outside of the transaction boundary.
+
+### 3.4. Operation-Specific Invariant Validation
+
+Implement dedicated, operation-specific private validation functions rather than building generic, reusable validation engines that blur invariant boundaries. Use explicit, named validation helpers:
+* `validateCreateInvariants`
+* `validateUpdateInvariants`
+* `validateMoveInvariants`
+* `validateDeleteInvariants` (if required)
+
+### 3.5. Optimistic Concurrency & CAS Semantics
+
+`Entry.Revision` represents the revision observed by the caller. Mutating operations (such as `Update` and `Move`) must:
+1. Compare the requested revision against the persisted state.
+2. Employ backend-native conditional writes using the requested revision as the expected version.
+3. Return `ErrEntryConflict` without applying the mutation if a revision mismatch is detected.
+4. Increment the revision exactly once on success.
+
+Do not silently reread the latest revision from the database to apply a stale caller request.
+
+### 3.6. Entry-Based Mutation Contracts
+
+Mutating APIs such as `Create`, `Update`, and `Move` use `Entry` values rather than introducing operation-specific mutation DTOs without a clear semantic benefit.
+
+For partial operations such as `Move`:
+
+* Explicitly document which fields serve as inputs (`ID`, `ParentID`, `Name`, and `Revision`).
+* Ignore unrelated input fields completely.
+* Use the persisted `Entry` fetched inside the transaction as the base of the returned value.
+* Apply only the fields owned by the operation, preserving unrelated persisted fields such as `Kind`, `Size`, `ObjectID`, and `CreatedAt`.
+
+Never let unrelated stale fields on the input argument overwrite persisted state or appear in the returned value.
+
+### 3.7. Invariant-Focused Final-State Testing
+
+Concurrency and transactional testing must focus on verifying end-state invariants rather than over-specifying transient SQLite locking error types. Assertions must verify:
+* total count of successful mutations (e.g., exactly 1 success out of concurrent operations);
+* final persisted state values and revision progression;
+* parent/name namespace uniqueness;
+* and the absence of hierarchical directory cycles.
+
+### 3.8. Minimal Conceptual Overhead
+
+Avoid introducing new structs, abstractions, helpers, or synchronization layers unless they measurably reduce semantic complexity. Prefer explicit, straightforward operation code over reusable abstractions that hide critical invariants.
+
+### 3.9. Common Rejected Patterns
+
+The following patterns are rejected by default and require explicit architectural approval:
+* Store-local mutexes used to simulate persistent consistency.
+* State-dependent validation executing outside the mutation transaction boundary.
+* Generic invariant engines or shared validation pipelines that obscure Metadata Store mutation boundaries.
+* Treating all database `UNIQUE` constraint errors as the same generic conflict.
+* Returning caller-supplied stale fields after a partial mutation.
+* Relying on SQLite-specific foreign keys as repository semantics.
+
+---
+
+## 4. Repository Constitution
 
 The Repository is the sole owner of cross-store semantics.
 
@@ -87,7 +165,7 @@ Storage implementations must remain independently replaceable without changing o
 
 ---
 
-## 4. Core Invariants
+## 5. Core Invariants
 
 Implementation must preserve the invariants defined under `docs/`.
 
@@ -107,7 +185,7 @@ Correctness takes priority over optimization.
 
 ---
 
-## 5. State Authority
+## 6. State Authority
 
 Every persistent or cached state must explicitly identify its role.
 
@@ -130,7 +208,7 @@ If state is authoritative, document its durability and compatibility contract.
 
 ---
 
-## 6. Responsibility Boundaries
+## 7. Responsibility Boundaries
 
 ### CLI
 
@@ -191,7 +269,7 @@ Responsibilities must not leak across these boundaries.
 
 ---
 
-## 7. Observation and Interpretation
+## 8. Observation and Interpretation
 
 Keep observed facts distinct from derived meaning whenever that distinction is architecturally relevant.
 
@@ -202,7 +280,7 @@ Keep observed facts distinct from derived meaning whenever that distinction is a
 
 ---
 
-## 8. Documentation Impact Assessment
+## 9. Documentation Impact Assessment
 
 Every non-trivial implementation change must be evaluated for documentation impact.
 
@@ -226,7 +304,7 @@ Do not silently redefine repository architecture.
 
 ---
 
-## 9. Go Development Workflow
+## 10. Go Development Workflow
 
 Before considering work complete, run:
 
@@ -241,7 +319,7 @@ Do not enable additional linters without documenting the intended contract.
 
 ---
 
-## 10. Testing
+## 11. Testing
 
 Repositories may classify tests by contract purpose:
 
@@ -253,26 +331,23 @@ Repositories may classify tests by contract purpose:
 Golden tests protect compatibility contracts.
 
 Golden tests must:
-
 * use independently declared expected values;
 * fail when compatibility changes;
 * be updated only after compatibility impact has been reviewed.
 
 Do not:
-
 * derive golden expectations from production code;
 * weaken compatibility tests simply because implementation changed;
 * skip golden tests to make CI pass.
 
 When changing persistent formats, compatibility boundaries, or externally observable semantics:
-
 * determine whether versioning is required;
 * add or update migration tests;
 * document intentional compatibility breaks.
 
 ---
 
-## 11. Error Handling
+## 12. Error Handling
 
 Ignoring an error is a design decision.
 
@@ -289,7 +364,7 @@ Comments alone are not error handling.
 
 ---
 
-## 12. Test Support Boundaries
+## 13. Test Support Boundaries
 
 Test-only behavior must remain outside production ownership boundaries.
 
@@ -303,7 +378,7 @@ Reducing duplication is secondary to preserving ownership boundaries.
 
 ---
 
-## 13. Review Principles
+## 14. Review Principles
 
 Prefer:
 
@@ -319,7 +394,7 @@ Question any implementation that weakens repository invariants for local conveni
 
 ---
 
-## 14. AI Agent Behavior
+## 15. AI Agent Behavior
 
 Do not:
 

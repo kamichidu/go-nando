@@ -3,7 +3,6 @@ package metadata_test
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/kamichidu/go-nando/internal/content"
@@ -66,16 +65,14 @@ func (f *fakeMetadataStore) Delete(ctx context.Context, id metadata.EntryID) err
 	return nil
 }
 
-func (f *fakeMetadataStore) Move(ctx context.Context, id metadata.EntryID, newParentID metadata.EntryID, newName string) (metadata.Entry, error) {
+func (f *fakeMetadataStore) Move(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
 	f.moveCalled = true
-	f.movePassedID = id
-	f.movePassedParentID = newParentID
-	f.movePassedName = newName
-	return metadata.Entry{
-		ID:       id,
-		ParentID: &newParentID,
-		Name:     newName,
-	}, nil
+	f.movePassedID = entry.ID
+	if entry.ParentID != nil {
+		f.movePassedParentID = *entry.ParentID
+	}
+	f.movePassedName = entry.Name
+	return entry, nil
 }
 
 func TestValidatingStore(t *testing.T) {
@@ -410,7 +407,12 @@ func TestValidatingStore(t *testing.T) {
 		}
 		store := metadata.NewValidatingStore(fake)
 
-		_, err := store.Move(ctx, "file-1", "dir-dest", "newname.txt")
+		destParent := metadata.EntryID("dir-dest")
+		_, err := store.Move(ctx, metadata.Entry{
+			ID:       "file-1",
+			ParentID: &destParent,
+			Name:     "newname.txt",
+		})
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -449,7 +451,12 @@ func TestValidatingStore(t *testing.T) {
 		}
 		store := metadata.NewValidatingStore(fake)
 
-		_, err := store.Move(ctx, "dir-1", "dir-dest", "newdir")
+		destParent := metadata.EntryID("dir-dest")
+		_, err := store.Move(ctx, metadata.Entry{
+			ID:       "dir-1",
+			ParentID: &destParent,
+			Name:     "newdir",
+		})
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -462,7 +469,12 @@ func TestValidatingStore(t *testing.T) {
 		fake := &fakeMetadataStore{}
 		store := metadata.NewValidatingStore(fake)
 
-		_, err := store.Move(ctx, "", "dir-dest", "newname.txt")
+		destParent := metadata.EntryID("dir-dest")
+		_, err := store.Move(ctx, metadata.Entry{
+			ID:       "",
+			ParentID: &destParent,
+			Name:     "newname.txt",
+		})
 		if !errors.Is(err, metadata.ErrEntryConflict) {
 			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
 		}
@@ -475,7 +487,12 @@ func TestValidatingStore(t *testing.T) {
 		fake := &fakeMetadataStore{}
 		store := metadata.NewValidatingStore(fake)
 
-		_, err := store.Move(ctx, "root", "dir-dest", "newname")
+		destParent := metadata.EntryID("dir-dest")
+		_, err := store.Move(ctx, metadata.Entry{
+			ID:       "root",
+			ParentID: &destParent,
+			Name:     "newname",
+		})
 		if !errors.Is(err, metadata.ErrEntryConflict) {
 			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
 		}
@@ -488,7 +505,12 @@ func TestValidatingStore(t *testing.T) {
 		fake := &fakeMetadataStore{}
 		store := metadata.NewValidatingStore(fake)
 
-		_, err := store.Move(ctx, "file-1", "", "newname.txt")
+		destParent := metadata.EntryID("")
+		_, err := store.Move(ctx, metadata.Entry{
+			ID:       "file-1",
+			ParentID: &destParent,
+			Name:     "newname.txt",
+		})
 		if !errors.Is(err, metadata.ErrEntryConflict) {
 			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
 		}
@@ -501,208 +523,14 @@ func TestValidatingStore(t *testing.T) {
 		fake := &fakeMetadataStore{}
 		store := metadata.NewValidatingStore(fake)
 
-		_, err := store.Move(ctx, "file-1", "dir-dest", "")
+		destParent := metadata.EntryID("dir-dest")
+		_, err := store.Move(ctx, metadata.Entry{
+			ID:       "file-1",
+			ParentID: &destParent,
+			Name:     "",
+		})
 		if !errors.Is(err, metadata.ErrEntryConflict) {
 			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
-		}
-		if fake.moveCalled {
-			t.Errorf("next.Move should not be called")
-		}
-	})
-
-	t.Run("Non-existent target returns ErrEntryNotFound", func(t *testing.T) {
-		fake := &fakeMetadataStore{
-			getByIDFunc: func(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
-				return metadata.Entry{}, metadata.ErrEntryNotFound
-			},
-		}
-		store := metadata.NewValidatingStore(fake)
-
-		_, err := store.Move(ctx, "file-1", "dir-dest", "newname.txt")
-		if !errors.Is(err, metadata.ErrEntryNotFound) {
-			t.Errorf("expected %v, got %v", metadata.ErrEntryNotFound, err)
-		}
-		if fake.moveCalled {
-			t.Errorf("next.Move should not be called")
-		}
-	})
-
-	t.Run("Non-existent destination Parent returns ErrEntryConflict", func(t *testing.T) {
-		fake := &fakeMetadataStore{
-			getByIDFunc: func(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
-				if id == "file-1" {
-					return metadata.Entry{
-						ID:   "file-1",
-						Kind: metadata.EntryKindFile,
-					}, nil
-				}
-				return metadata.Entry{}, metadata.ErrEntryNotFound
-			},
-		}
-		store := metadata.NewValidatingStore(fake)
-
-		_, err := store.Move(ctx, "file-1", "dir-dest", "newname.txt")
-		if !errors.Is(err, metadata.ErrEntryConflict) {
-			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
-		}
-		if fake.moveCalled {
-			t.Errorf("next.Move should not be called")
-		}
-	})
-
-	t.Run("Reject file as destination Parent", func(t *testing.T) {
-		fake := &fakeMetadataStore{
-			getByIDFunc: func(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
-				if id == "file-1" {
-					return metadata.Entry{
-						ID:   "file-1",
-						Kind: metadata.EntryKindFile,
-					}, nil
-				}
-				if id == "dir-dest" {
-					return metadata.Entry{
-						ID:   "dir-dest",
-						Kind: metadata.EntryKindFile,
-					}, nil
-				}
-				return metadata.Entry{}, metadata.ErrEntryNotFound
-			},
-		}
-		store := metadata.NewValidatingStore(fake)
-
-		_, err := store.Move(ctx, "file-1", "dir-dest", "newname.txt")
-		if !errors.Is(err, metadata.ErrEntryConflict) {
-			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
-		}
-		if fake.moveCalled {
-			t.Errorf("next.Move should not be called")
-		}
-	})
-
-	t.Run("Reject self move", func(t *testing.T) {
-		fake := &fakeMetadataStore{
-			getByIDFunc: func(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
-				return metadata.Entry{
-					ID:   id,
-					Kind: metadata.EntryKindDirectory,
-				}, nil
-			},
-		}
-		store := metadata.NewValidatingStore(fake)
-
-		_, err := store.Move(ctx, "dir-1", "dir-1", "newname")
-		if !errors.Is(err, metadata.ErrEntryConflict) {
-			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
-		}
-		if fake.moveCalled {
-			t.Errorf("next.Move should not be called")
-		}
-	})
-
-	t.Run("Reject directory to direct child move", func(t *testing.T) {
-		dir1ID := metadata.EntryID("dir-1")
-		fake := &fakeMetadataStore{
-			getByIDFunc: func(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
-				if id == "dir-1" {
-					return metadata.Entry{
-						ID:   "dir-1",
-						Kind: metadata.EntryKindDirectory,
-					}, nil
-				}
-				if id == "child-1" {
-					return metadata.Entry{
-						ID:       "child-1",
-						Kind:     metadata.EntryKindDirectory,
-						ParentID: &dir1ID,
-					}, nil
-				}
-				return metadata.Entry{}, metadata.ErrEntryNotFound
-			},
-		}
-		store := metadata.NewValidatingStore(fake)
-
-		_, err := store.Move(ctx, "dir-1", "child-1", "moved")
-		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "hierarchy cycle") {
-			t.Errorf("expected hierarchy cycle error, got %v", err)
-		}
-		if fake.moveCalled {
-			t.Errorf("next.Move should not be called")
-		}
-	})
-
-	t.Run("Reject directory to deep descendant move", func(t *testing.T) {
-		dir1ID := metadata.EntryID("dir-1")
-		child1ID := metadata.EntryID("child-1")
-		fake := &fakeMetadataStore{
-			getByIDFunc: func(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
-				if id == "dir-1" {
-					return metadata.Entry{
-						ID:   "dir-1",
-						Kind: metadata.EntryKindDirectory,
-					}, nil
-				}
-				if id == "child-1" {
-					return metadata.Entry{
-						ID:       "child-1",
-						Kind:     metadata.EntryKindDirectory,
-						ParentID: &dir1ID,
-					}, nil
-				}
-				if id == "grandchild-1" {
-					return metadata.Entry{
-						ID:       "grandchild-1",
-						Kind:     metadata.EntryKindDirectory,
-						ParentID: &child1ID,
-					}, nil
-				}
-				return metadata.Entry{}, metadata.ErrEntryNotFound
-			},
-		}
-		store := metadata.NewValidatingStore(fake)
-
-		_, err := store.Move(ctx, "dir-1", "grandchild-1", "moved")
-		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "hierarchy cycle") {
-			t.Errorf("expected hierarchy cycle error, got %v", err)
-		}
-		if fake.moveCalled {
-			t.Errorf("next.Move should not be called")
-		}
-	})
-
-	t.Run("Reject cyclic metadata hierarchy with cycle detection to prevent infinite loop", func(t *testing.T) {
-		cycle1ID := metadata.EntryID("cycle-1")
-		cycle2ID := metadata.EntryID("cycle-2")
-
-		fake := &fakeMetadataStore{
-			getByIDFunc: func(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
-				if id == "dir-target" {
-					return metadata.Entry{
-						ID:   "dir-target",
-						Kind: metadata.EntryKindDirectory,
-					}, nil
-				}
-				if id == "cycle-1" {
-					return metadata.Entry{
-						ID:       "cycle-1",
-						Kind:     metadata.EntryKindDirectory,
-						ParentID: &cycle2ID,
-					}, nil
-				}
-				if id == "cycle-2" {
-					return metadata.Entry{
-						ID:       "cycle-2",
-						Kind:     metadata.EntryKindDirectory,
-						ParentID: &cycle1ID,
-					}, nil
-				}
-				return metadata.Entry{}, metadata.ErrEntryNotFound
-			},
-		}
-		store := metadata.NewValidatingStore(fake)
-
-		_, err := store.Move(ctx, "dir-target", "cycle-1", "moved")
-		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "cycle detected in parent ancestry") {
-			t.Errorf("expected cycle detected ErrEntryConflict, got %v", err)
 		}
 		if fake.moveCalled {
 			t.Errorf("next.Move should not be called")

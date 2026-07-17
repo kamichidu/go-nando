@@ -55,7 +55,13 @@ func (r *Repository) Move(ctx context.Context, srcPath, dstPath string) error {
 	}
 
 	// 5. Perform the move
-	_, err = r.metaStore.Move(ctx, srcEntry.ID, dstParentEntry.ID, dstBaseName)
+	moveEntry := metadata.Entry{
+		ID:       srcEntry.ID,
+		ParentID: &dstParentEntry.ID,
+		Name:     dstBaseName,
+		Revision: srcEntry.Revision,
+	}
+	_, err = r.metaStore.Move(ctx, moveEntry)
 	if err != nil {
 		return fmt.Errorf("failed to move entry: %w", err)
 	}

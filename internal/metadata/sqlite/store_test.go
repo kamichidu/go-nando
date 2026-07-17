@@ -429,7 +429,12 @@ func TestSQLiteStore(t *testing.T) {
 		}
 
 		// Move file under subdir with new name
-		moved, err := store.Move(ctx, fileID, subID, "moved_file.txt")
+		moved, err := store.Move(ctx, metadata.Entry{
+			ID:       fileID,
+			ParentID: &subID,
+			Name:     "moved_file.txt",
+			Revision: 1,
+		})
 		if err != nil {
 			t.Fatalf("failed to move: %v", err)
 		}
@@ -906,14 +911,26 @@ func TestSQLiteStore(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			_, err := store.Move(ctx, "dir-A", "dir-B", "dirA")
+			destB := metadata.EntryID("dir-B")
+			_, err := store.Move(ctx, metadata.Entry{
+				ID:       "dir-A",
+				ParentID: &destB,
+				Name:     "dirA",
+				Revision: 1,
+			})
 			if err != nil {
 				errs <- err
 			}
 		}()
 		go func() {
 			defer wg.Done()
-			_, err := store.Move(ctx, "dir-B", "dir-A", "dirB")
+			destA := metadata.EntryID("dir-A")
+			_, err := store.Move(ctx, metadata.Entry{
+				ID:       "dir-B",
+				ParentID: &destA,
+				Name:     "dirB",
+				Revision: 1,
+			})
 			if err != nil {
 				errs <- err
 			}
@@ -1667,7 +1684,12 @@ func TestSQLiteStore(t *testing.T) {
 		}
 
 		nonExistentParent := metadata.EntryID("non-existent")
-		_, err = store.Move(ctx, fileID, nonExistentParent, "moved.txt")
+		_, err = store.Move(ctx, metadata.Entry{
+			ID:       fileID,
+			ParentID: &nonExistentParent,
+			Name:     "moved.txt",
+			Revision: 1,
+		})
 		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "does not exist") {
 			t.Errorf("expected ErrEntryConflict for non-existent parent, got: %v", err)
 		}
@@ -1727,7 +1749,12 @@ func TestSQLiteStore(t *testing.T) {
 		}
 
 		// Try to move file-2 under file-1 as its parent
-		_, err = store.Move(ctx, fileID2, fileID1, "moved.txt")
+		_, err = store.Move(ctx, metadata.Entry{
+			ID:       fileID2,
+			ParentID: &fileID1,
+			Name:     "moved.txt",
+			Revision: 1,
+		})
 		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "must be a directory") {
 			t.Errorf("expected ErrEntryConflict for file as parent, got: %v", err)
 		}
@@ -1778,7 +1805,12 @@ func TestSQLiteStore(t *testing.T) {
 		}
 
 		// Try to move dir-A under dir-B (its own child/descendant!)
-		_, err = store.Move(ctx, dirAID, dirBID, "dirA")
+		_, err = store.Move(ctx, metadata.Entry{
+			ID:       dirAID,
+			ParentID: &dirBID,
+			Name:     "dirA",
+			Revision: 1,
+		})
 		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "hierarchy cycle") {
 			t.Errorf("expected cycle detection ErrEntryConflict, got: %v", err)
 		}
@@ -1835,7 +1867,12 @@ func TestSQLiteStore(t *testing.T) {
 		}
 
 		// Try to rename file-2 to "file1.txt" (name of file-1 under root!)
-		_, err = store.Move(ctx, fileID2, parentID, "file1.txt")
+		_, err = store.Move(ctx, metadata.Entry{
+			ID:       fileID2,
+			ParentID: &parentID,
+			Name:     "file1.txt",
+			Revision: 1,
+		})
 		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "already exists under parent") {
 			t.Errorf("expected ErrEntryConflict due to name collision, got: %v", err)
 		}
@@ -1850,7 +1887,7 @@ func TestSQLiteStore(t *testing.T) {
 		}
 	})
 
-	t.Run("Move: successful move renames and increments revision", func(t *testing.T) {
+	t.Run("Move: successful, mismatched and stale moves, revision increments, and other fields ignored", func(t *testing.T) {
 		store, _ := setupStore(t)
 		defer store.Close()
 
@@ -1868,6 +1905,7 @@ func TestSQLiteStore(t *testing.T) {
 			Name:      "file.txt",
 			Kind:      metadata.EntryKindFile,
 			ObjectID:  &oid,
+			Size:      10,
 			Revision:  1,
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -1876,7 +1914,47 @@ func TestSQLiteStore(t *testing.T) {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		moved, err := store.Move(ctx, fileID, parentID, "renamed.txt")
+		// 1. mismatched revision should return ErrEntryConflict and maintain original state
+		invalidOid, err := content.ParseID("1111111111111111111111111111111111111111")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+		_, err = store.Move(ctx, metadata.Entry{
+			ID:       fileID,
+			ParentID: &parentID,
+			Name:     "renamed_mismatched.txt",
+			Revision: 999,         // mismatched revision!
+			Size:     9999,        // try to alter Size
+			ObjectID: &invalidOid, // try to alter ObjectID
+		})
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected ErrEntryConflict for mismatched revision, got: %v", err)
+		}
+
+		// Verify state is unmodified
+		dbEntry, err := store.GetByID(ctx, fileID)
+		if err != nil {
+			t.Fatalf("failed to get: %v", err)
+		}
+		if dbEntry.Name != "file.txt" {
+			t.Errorf("expected Name 'file.txt', got %q", dbEntry.Name)
+		}
+		if dbEntry.Size != 10 {
+			t.Errorf("expected Size 10, got %d", dbEntry.Size)
+		}
+		if *dbEntry.ObjectID != oid {
+			t.Errorf("expected original ObjectID, got %s", dbEntry.ObjectID)
+		}
+
+		// 2. successful Move increments revision by 1, renames, and ignores other fields
+		moved, err := store.Move(ctx, metadata.Entry{
+			ID:       fileID,
+			ParentID: &parentID,
+			Name:     "renamed.txt",
+			Revision: 1,           // correct revision
+			Size:     9999,        // attempt to alter size during move
+			ObjectID: &invalidOid, // attempt to alter object ID during move
+		})
 		if err != nil {
 			t.Fatalf("expected Move to succeed, got %v", err)
 		}
@@ -1888,15 +1966,45 @@ func TestSQLiteStore(t *testing.T) {
 			t.Errorf("expected Revision 2, got %d", moved.Revision)
 		}
 
-		dbEntry, err := store.GetByID(ctx, fileID)
+		// Verify database state: fields like Size and ObjectID remain unchanged
+		dbEntry, err = store.GetByID(ctx, fileID)
 		if err != nil {
-			t.Fatalf("failed to get from DB: %v", err)
+			t.Fatalf("failed to get: %v", err)
 		}
 		if dbEntry.Name != "renamed.txt" {
 			t.Errorf("expected renamed.txt in DB, got %q", dbEntry.Name)
 		}
 		if dbEntry.Revision != 2 {
 			t.Errorf("expected Revision 2 in DB, got %d", dbEntry.Revision)
+		}
+		if dbEntry.Size != 10 {
+			t.Errorf("expected Size to remain 10, got %d", dbEntry.Size)
+		}
+		if *dbEntry.ObjectID != oid {
+			t.Errorf("expected ObjectID to remain original, got %s", dbEntry.ObjectID)
+		}
+
+		// 3. stale revision (Revision 1 after we already advanced it to 2) should return ErrEntryConflict
+		_, err = store.Move(ctx, metadata.Entry{
+			ID:       fileID,
+			ParentID: &parentID,
+			Name:     "renamed_stale.txt",
+			Revision: 1, // stale revision! (the DB has Revision 2 now)
+		})
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected ErrEntryConflict for stale revision, got: %v", err)
+		}
+
+		// Verify state is unmodified (still has values from the successful move)
+		dbEntryStale, err := store.GetByID(ctx, fileID)
+		if err != nil {
+			t.Fatalf("failed to get: %v", err)
+		}
+		if dbEntryStale.Name != "renamed.txt" {
+			t.Errorf("expected Name to remain 'renamed.txt', got %q", dbEntryStale.Name)
+		}
+		if dbEntryStale.Revision != 2 {
+			t.Errorf("expected Revision to remain 2, got %d", dbEntryStale.Revision)
 		}
 	})
 
@@ -1956,7 +2064,13 @@ func TestSQLiteStore(t *testing.T) {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
-				_, moveErr := store.Move(ctx, fileID, subIDs[idx], fmt.Sprintf("renamed-%d.txt", idx))
+				destSub := subIDs[idx]
+				_, moveErr := store.Move(ctx, metadata.Entry{
+					ID:       fileID,
+					ParentID: &destSub,
+					Name:     fmt.Sprintf("renamed-%d.txt", idx),
+					Revision: 1, // all of them use expected original revision 1
+				})
 				if moveErr != nil {
 					errs <- moveErr
 				}
@@ -2052,7 +2166,12 @@ func TestSQLiteStore(t *testing.T) {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
-				_, moveErr := store.Move(ctx, fileIDs[idx], destID, targetName)
+				_, moveErr := store.Move(ctx, metadata.Entry{
+					ID:       fileIDs[idx],
+					ParentID: &destID,
+					Name:     targetName,
+					Revision: 1, // all of them use expected original revision 1
+				})
 				if moveErr != nil {
 					errs <- moveErr
 				}

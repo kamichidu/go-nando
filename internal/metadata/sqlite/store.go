@@ -533,8 +533,14 @@ func (s *Store) ensureMoveDoesNotCreateCycle(
 }
 
 // Move moves/renames an entry in SQLite.
-func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metadata.EntryID, newName string) (metadata.Entry, error) {
-	if id == newParentID {
+func (s *Store) Move(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
+	if entry.ParentID == nil {
+		return metadata.Entry{}, fmt.Errorf("%w: parent ID cannot be empty", metadata.ErrEntryConflict)
+	}
+
+	copiedParentID := *entry.ParentID
+
+	if entry.ID == copiedParentID {
 		return metadata.Entry{}, fmt.Errorf("%w: entry cannot be moved to itself", metadata.ErrEntryConflict)
 	}
 
@@ -544,7 +550,7 @@ func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metad
 	}
 	defer tx.Rollback()
 
-	current, err := s.getByID(ctx, tx, id)
+	current, err := s.getByID(ctx, tx, entry.ID)
 	if err != nil {
 		if errors.Is(err, metadata.ErrEntryNotFound) {
 			return metadata.Entry{}, err
@@ -552,11 +558,15 @@ func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metad
 		return metadata.Entry{}, fmt.Errorf("failed to get entry inside transaction: %w", err)
 	}
 
-	if err := s.validateMoveInvariants(ctx, tx, current, newParentID, newName); err != nil {
+	if current.Revision != entry.Revision {
+		return metadata.Entry{}, fmt.Errorf("%w: expected revision %d, got %d", metadata.ErrEntryConflict, entry.Revision, current.Revision)
+	}
+
+	if err := s.validateMoveInvariants(ctx, tx, current, copiedParentID, entry.Name); err != nil {
 		return metadata.Entry{}, err
 	}
 
-	newRevision := current.Revision + 1
+	newRevision := entry.Revision + 1
 	now := time.Now().UTC()
 
 	res, err := tx.ExecContext(ctx, `
@@ -567,16 +577,16 @@ func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metad
 			updated_at = ?
 		WHERE entry_id = ? AND revision = ?
 	`,
-		newParentID.String(),
-		newName,
+		copiedParentID.String(),
+		entry.Name,
 		newRevision,
 		now.Format(time.RFC3339),
-		id.String(),
-		current.Revision,
+		entry.ID.String(),
+		entry.Revision,
 	)
 	if err != nil {
 		if isNamespaceUniqueConstraintError(err) {
-			return metadata.Entry{}, fmt.Errorf("%w: entry %q already exists under parent %s", metadata.ErrEntryConflict, newName, newParentID)
+			return metadata.Entry{}, fmt.Errorf("%w: entry %q already exists under parent %s", metadata.ErrEntryConflict, entry.Name, copiedParentID)
 		}
 		return metadata.Entry{}, fmt.Errorf("%w: failed to move entry: %w", metadata.ErrEntryConflict, err)
 	}
@@ -593,8 +603,10 @@ func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metad
 		return metadata.Entry{}, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	current.ParentID = &newParentID
-	current.Name = newName
+	// Use the persisted entry as the return-value base.
+	// Move only applies ParentID and Name from the requested entry.
+	current.ParentID = &copiedParentID
+	current.Name = entry.Name
 	current.Revision = newRevision
 	current.UpdatedAt = now
 
