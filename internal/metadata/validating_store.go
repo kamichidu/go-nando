@@ -106,8 +106,49 @@ func (s *ValidatingStore) Create(ctx context.Context, entry Entry) (Entry, error
 	return s.next.Create(ctx, entry)
 }
 
-// Update delegates to the next store.
+// Update validates the entry before delegating to the next store.
 func (s *ValidatingStore) Update(ctx context.Context, entry Entry) (Entry, error) {
+	if entry.ID == "" {
+		return Entry{}, fmt.Errorf("%w: entry ID cannot be empty", ErrEntryConflict)
+	}
+
+	// Forbid modifying the root entry via normal Update
+	if entry.ID == "root" {
+		return Entry{}, fmt.Errorf("%w: operation on root entry is forbidden", ErrEntryConflict)
+	}
+
+	// 1. Kind validation: Kind must be "file" or "directory"
+	if entry.Kind != EntryKindFile && entry.Kind != EntryKindDirectory {
+		return Entry{}, fmt.Errorf("%w: invalid entry kind %q", ErrEntryConflict, entry.Kind)
+	}
+
+	// 2. Revision validation: Revision >= 1
+	if entry.Revision < 1 {
+		return Entry{}, fmt.Errorf("%w: invalid revision %d (must be >= 1)", ErrEntryConflict, entry.Revision)
+	}
+
+	// 3. ParentID and Name validation
+	if entry.ParentID == nil {
+		return Entry{}, fmt.Errorf("%w: non-root entry must have a parent ID", ErrEntryConflict)
+	}
+	if *entry.ParentID == "" {
+		return Entry{}, fmt.Errorf("%w: parent ID cannot be empty", ErrEntryConflict)
+	}
+	if entry.Name == "" {
+		return Entry{}, fmt.Errorf("%w: non-root entry must have a non-empty name", ErrEntryConflict)
+	}
+
+	// 4. File-specific & Directory-specific ObjectID validation
+	if entry.Kind == EntryKindFile {
+		if entry.ObjectID == nil {
+			return Entry{}, fmt.Errorf("%w: file entry must have an associated object ID", ErrEntryConflict)
+		}
+	} else {
+		if entry.ObjectID != nil {
+			return Entry{}, fmt.Errorf("%w: directory entry must not have an associated object ID", ErrEntryConflict)
+		}
+	}
+
 	return s.next.Update(ctx, entry)
 }
 
@@ -172,8 +213,14 @@ func (s *ValidatingStore) Move(ctx context.Context, id EntryID, newParentID Entr
 	return s.next.Move(ctx, id, newParentID, newName)
 }
 
-// Delete delegates to the next store.
+// Delete validates the deletion before delegating to the next store.
 func (s *ValidatingStore) Delete(ctx context.Context, id EntryID) error {
+	if id == "" {
+		return fmt.Errorf("%w: entry ID cannot be empty", ErrEntryConflict)
+	}
+	if id == "root" {
+		return fmt.Errorf("%w: operation on root entry is forbidden", ErrEntryConflict)
+	}
 	return s.next.Delete(ctx, id)
 }
 

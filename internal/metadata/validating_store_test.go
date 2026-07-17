@@ -20,6 +20,12 @@ type fakeMetadataStore struct {
 	movePassedID       metadata.EntryID
 	movePassedParentID metadata.EntryID
 	movePassedName     string
+
+	updateCalled bool
+	updateFunc   func(ctx context.Context, entry metadata.Entry) (metadata.Entry, error)
+
+	deleteCalled bool
+	deleteFunc   func(ctx context.Context, id metadata.EntryID) error
 }
 
 func (f *fakeMetadataStore) GetByID(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
@@ -42,6 +48,22 @@ func (f *fakeMetadataStore) Create(ctx context.Context, entry metadata.Entry) (m
 		return f.createFunc(ctx, entry)
 	}
 	return entry, nil
+}
+
+func (f *fakeMetadataStore) Update(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
+	f.updateCalled = true
+	if f.updateFunc != nil {
+		return f.updateFunc(ctx, entry)
+	}
+	return entry, nil
+}
+
+func (f *fakeMetadataStore) Delete(ctx context.Context, id metadata.EntryID) error {
+	f.deleteCalled = true
+	if f.deleteFunc != nil {
+		return f.deleteFunc(ctx, id)
+	}
+	return nil
 }
 
 func (f *fakeMetadataStore) Move(ctx context.Context, id metadata.EntryID, newParentID metadata.EntryID, newName string) (metadata.Entry, error) {
@@ -684,6 +706,268 @@ func TestValidatingStore(t *testing.T) {
 		}
 		if fake.moveCalled {
 			t.Errorf("next.Move should not be called")
+		}
+	})
+
+	t.Run("Update normal file successfully", func(t *testing.T) {
+		fake := &fakeMetadataStore{}
+		store := metadata.NewValidatingStore(fake)
+
+		entry := metadata.Entry{
+			ID:       "file-1",
+			ParentID: &parentRoot,
+			Name:     "doc.txt",
+			Kind:     metadata.EntryKindFile,
+			ObjectID: &dummyObjectID,
+			Revision: 1,
+		}
+
+		res, err := store.Update(ctx, entry)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if !fake.updateCalled {
+			t.Errorf("expected next.Update to be called")
+		}
+		if res.ID != entry.ID {
+			t.Errorf("expected returned entry ID %s, got %s", entry.ID, res.ID)
+		}
+	})
+
+	t.Run("Reject empty EntryID on Update", func(t *testing.T) {
+		fake := &fakeMetadataStore{}
+		store := metadata.NewValidatingStore(fake)
+
+		entry := metadata.Entry{
+			ID:       "",
+			ParentID: &parentRoot,
+			Name:     "doc.txt",
+			Kind:     metadata.EntryKindFile,
+			ObjectID: &dummyObjectID,
+			Revision: 1,
+		}
+
+		_, err := store.Update(ctx, entry)
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
+		}
+		if fake.updateCalled {
+			t.Errorf("next.Update should not be called")
+		}
+	})
+
+	t.Run("Reject root modification via Update", func(t *testing.T) {
+		fake := &fakeMetadataStore{}
+		store := metadata.NewValidatingStore(fake)
+
+		entry := metadata.Entry{
+			ID:       "root",
+			ParentID: nil,
+			Name:     "",
+			Kind:     metadata.EntryKindDirectory,
+			Revision: 1,
+		}
+
+		_, err := store.Update(ctx, entry)
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
+		}
+		if fake.updateCalled {
+			t.Errorf("next.Update should not be called")
+		}
+	})
+
+	t.Run("Reject missing ParentID on Update", func(t *testing.T) {
+		fake := &fakeMetadataStore{}
+		store := metadata.NewValidatingStore(fake)
+
+		entry := metadata.Entry{
+			ID:       "file-1",
+			ParentID: nil,
+			Name:     "doc.txt",
+			Kind:     metadata.EntryKindFile,
+			ObjectID: &dummyObjectID,
+			Revision: 1,
+		}
+
+		_, err := store.Update(ctx, entry)
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
+		}
+		if fake.updateCalled {
+			t.Errorf("next.Update should not be called")
+		}
+	})
+
+	t.Run("Reject empty parent ID on Update", func(t *testing.T) {
+		fake := &fakeMetadataStore{}
+		store := metadata.NewValidatingStore(fake)
+
+		emptyParent := metadata.EntryID("")
+		entry := metadata.Entry{
+			ID:       "file-1",
+			ParentID: &emptyParent,
+			Name:     "doc.txt",
+			Kind:     metadata.EntryKindFile,
+			ObjectID: &dummyObjectID,
+			Revision: 1,
+		}
+
+		_, err := store.Update(ctx, entry)
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
+		}
+		if fake.updateCalled {
+			t.Errorf("next.Update should not be called")
+		}
+	})
+
+	t.Run("Reject empty Name on Update", func(t *testing.T) {
+		fake := &fakeMetadataStore{}
+		store := metadata.NewValidatingStore(fake)
+
+		entry := metadata.Entry{
+			ID:       "file-1",
+			ParentID: &parentRoot,
+			Name:     "",
+			Kind:     metadata.EntryKindFile,
+			ObjectID: &dummyObjectID,
+			Revision: 1,
+		}
+
+		_, err := store.Update(ctx, entry)
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
+		}
+		if fake.updateCalled {
+			t.Errorf("next.Update should not be called")
+		}
+	})
+
+	t.Run("Reject unknown Kind on Update", func(t *testing.T) {
+		fake := &fakeMetadataStore{}
+		store := metadata.NewValidatingStore(fake)
+
+		entry := metadata.Entry{
+			ID:       "file-1",
+			ParentID: &parentRoot,
+			Name:     "doc.txt",
+			Kind:     metadata.EntryKind("invalid"),
+			ObjectID: &dummyObjectID,
+			Revision: 1,
+		}
+
+		_, err := store.Update(ctx, entry)
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
+		}
+		if fake.updateCalled {
+			t.Errorf("next.Update should not be called")
+		}
+	})
+
+	t.Run("Reject file without ObjectID on Update", func(t *testing.T) {
+		fake := &fakeMetadataStore{}
+		store := metadata.NewValidatingStore(fake)
+
+		entry := metadata.Entry{
+			ID:       "file-1",
+			ParentID: &parentRoot,
+			Name:     "doc.txt",
+			Kind:     metadata.EntryKindFile,
+			ObjectID: nil,
+			Revision: 1,
+		}
+
+		_, err := store.Update(ctx, entry)
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
+		}
+		if fake.updateCalled {
+			t.Errorf("next.Update should not be called")
+		}
+	})
+
+	t.Run("Reject directory with ObjectID on Update", func(t *testing.T) {
+		fake := &fakeMetadataStore{}
+		store := metadata.NewValidatingStore(fake)
+
+		entry := metadata.Entry{
+			ID:       "dir-1",
+			ParentID: &parentRoot,
+			Name:     "documents",
+			Kind:     metadata.EntryKindDirectory,
+			ObjectID: &dummyObjectID,
+			Revision: 1,
+		}
+
+		_, err := store.Update(ctx, entry)
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
+		}
+		if fake.updateCalled {
+			t.Errorf("next.Update should not be called")
+		}
+	})
+
+	t.Run("Reject Revision 0 on Update", func(t *testing.T) {
+		fake := &fakeMetadataStore{}
+		store := metadata.NewValidatingStore(fake)
+
+		entry := metadata.Entry{
+			ID:       "file-1",
+			ParentID: &parentRoot,
+			Name:     "doc.txt",
+			Kind:     metadata.EntryKindFile,
+			ObjectID: &dummyObjectID,
+			Revision: 0,
+		}
+
+		_, err := store.Update(ctx, entry)
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
+		}
+		if fake.updateCalled {
+			t.Errorf("next.Update should not be called")
+		}
+	})
+
+	t.Run("Delete normal entry successfully", func(t *testing.T) {
+		fake := &fakeMetadataStore{}
+		store := metadata.NewValidatingStore(fake)
+
+		err := store.Delete(ctx, "file-1")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if !fake.deleteCalled {
+			t.Errorf("expected next.Delete to be called")
+		}
+	})
+
+	t.Run("Reject empty EntryID on Delete", func(t *testing.T) {
+		fake := &fakeMetadataStore{}
+		store := metadata.NewValidatingStore(fake)
+
+		err := store.Delete(ctx, "")
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
+		}
+		if fake.deleteCalled {
+			t.Errorf("next.Delete should not be called")
+		}
+	})
+
+	t.Run("Reject root deletion via Delete", func(t *testing.T) {
+		fake := &fakeMetadataStore{}
+		store := metadata.NewValidatingStore(fake)
+
+		err := store.Delete(ctx, "root")
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
+		}
+		if fake.deleteCalled {
+			t.Errorf("next.Delete should not be called")
 		}
 	})
 }

@@ -249,6 +249,143 @@ func TestSQLiteStore(t *testing.T) {
 		}
 	})
 
+	t.Run("Update rejects non-existent parent", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		id := metadata.EntryID("file-id")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		entry, err := store.Create(ctx, metadata.Entry{
+			ID:        id,
+			ParentID:  &parentID,
+			Name:      "file.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Size:      10,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		// Update to a non-existent parent
+		nonExistentParent := metadata.EntryID("non-existent")
+		entry.ParentID = &nonExistentParent
+
+		_, err = store.Update(ctx, entry)
+		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "does not exist") {
+			t.Errorf("expected ErrEntryConflict for non-existent parent, got: %v", err)
+		}
+	})
+
+	t.Run("Update rejects file as parent", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		id1 := metadata.EntryID("file-id-1")
+		id2 := metadata.EntryID("file-id-2")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		// Create file 1
+		file1, err := store.Create(ctx, metadata.Entry{
+			ID:        id1,
+			ParentID:  &parentID,
+			Name:      "file1.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Size:      10,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create file 1: %v", err)
+		}
+
+		// Create file 2
+		file2, err := store.Create(ctx, metadata.Entry{
+			ID:        id2,
+			ParentID:  &parentID,
+			Name:      "file2.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Size:      10,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create file 2: %v", err)
+		}
+
+		// Update file 2 to have file 1 as its parent
+		file2.ParentID = &file1.ID
+
+		_, err = store.Update(ctx, file2)
+		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "must be a directory") {
+			t.Errorf("expected ErrEntryConflict for file as parent, got: %v", err)
+		}
+	})
+
+	t.Run("Update rejects directory hierarchy cycle", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		dirAID := metadata.EntryID("dir-A")
+		dirBID := metadata.EntryID("dir-B")
+		now := time.Now().UTC()
+
+		// Create dir-A
+		dirA, err := store.Create(ctx, metadata.Entry{
+			ID:        dirAID,
+			ParentID:  &parentID,
+			Name:      "dirA",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create dir-A: %v", err)
+		}
+
+		// Create dir-B under dir-A
+		dirB, err := store.Create(ctx, metadata.Entry{
+			ID:        dirBID,
+			ParentID:  &dirAID,
+			Name:      "dirB",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create dir-B: %v", err)
+		}
+
+		// Update dir-A to have dir-B as parent (forming a cycle)
+		dirA.ParentID = &dirB.ID
+
+		_, err = store.Update(ctx, dirA)
+		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "hierarchy cycle detected") {
+			t.Errorf("expected ErrEntryConflict for hierarchy cycle, got: %v", err)
+		}
+	})
+
 	t.Run("Move entry updates parent and/or name", func(t *testing.T) {
 		store, _ := setupStore(t)
 		defer store.Close()

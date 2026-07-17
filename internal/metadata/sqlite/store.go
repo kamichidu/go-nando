@@ -114,57 +114,22 @@ func (s *Store) CheckSchemaCompatibility(ctx context.Context) error {
 }
 
 func (s *Store) validateEntry(ctx context.Context, entry metadata.Entry, isUpdate bool) error {
-	// Root creation/update validation rules
-	if entry.ID == "root" {
-		return fmt.Errorf("%w: operation on root entry is forbidden", metadata.ErrEntryConflict)
-	}
-
-	// 1. Kind validation: Kind must be "file" or "directory"
-	if entry.Kind != metadata.EntryKindFile && entry.Kind != metadata.EntryKindDirectory {
-		return fmt.Errorf("%w: invalid entry kind %q", metadata.ErrEntryConflict, entry.Kind)
-	}
-
-	// 2. Revision validation: Revision >= 1
-	if entry.Revision < 1 {
-		return fmt.Errorf("%w: invalid revision %d (must be >= 1)", metadata.ErrEntryConflict, entry.Revision)
-	}
-
-	// 3. ParentID and Name validation
-	if entry.ParentID == nil {
-		return fmt.Errorf("%w: non-root entry must have a parent ID", metadata.ErrEntryConflict)
-	}
-	if *entry.ParentID == "" {
-		return fmt.Errorf("%w: parent ID cannot be empty", metadata.ErrEntryConflict)
-	}
-	if entry.Name == "" {
-		return fmt.Errorf("%w: non-root entry must have a non-empty name", metadata.ErrEntryConflict)
-	}
-
-	// 4. File-specific & Directory-specific ObjectID validation
-	if entry.Kind == metadata.EntryKindFile {
-		if entry.ObjectID == nil {
-			return fmt.Errorf("%w: file entry must have an associated object ID", metadata.ErrEntryConflict)
-		}
-	} else {
-		if entry.ObjectID != nil {
-			return fmt.Errorf("%w: directory entry must not have an associated object ID", metadata.ErrEntryConflict)
-		}
-	}
-
 	// 5. Parent existence and parent kind validation
-	parent, err := s.GetByID(ctx, *entry.ParentID)
-	if err != nil {
-		if errors.Is(err, metadata.ErrEntryNotFound) {
-			return fmt.Errorf("%w: parent entry %s does not exist", metadata.ErrEntryConflict, *entry.ParentID)
+	if entry.ParentID != nil {
+		parent, err := s.GetByID(ctx, *entry.ParentID)
+		if err != nil {
+			if errors.Is(err, metadata.ErrEntryNotFound) {
+				return fmt.Errorf("%w: parent entry %s does not exist", metadata.ErrEntryConflict, *entry.ParentID)
+			}
+			return fmt.Errorf("failed to verify parent existence: %w", err)
 		}
-		return fmt.Errorf("failed to verify parent existence: %w", err)
-	}
-	if parent.Kind != metadata.EntryKindDirectory {
-		return fmt.Errorf("%w: parent entry %s must be a directory, but got %s", metadata.ErrEntryConflict, *entry.ParentID, parent.Kind)
+		if parent.Kind != metadata.EntryKindDirectory {
+			return fmt.Errorf("%w: parent entry %s must be a directory, but got %s", metadata.ErrEntryConflict, *entry.ParentID, parent.Kind)
+		}
 	}
 
 	// 6. Ancestor / hierarchy cycle check for directory
-	if entry.Kind == metadata.EntryKindDirectory {
+	if entry.Kind == metadata.EntryKindDirectory && entry.ParentID != nil {
 		currentParentID := *entry.ParentID
 		visited := make(map[metadata.EntryID]bool)
 		for currentParentID != "root" {
