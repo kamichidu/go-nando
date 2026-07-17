@@ -36,6 +36,10 @@ func InitRepository(ctx context.Context, repoDir string) error {
 	}
 	defer store.Close()
 
+	if err := store.CheckSchemaCompatibility(ctx); err != nil {
+		return fmt.Errorf("failed schema validation: %w", err)
+	}
+
 	if err := store.Initialize(ctx); err != nil {
 		return fmt.Errorf("failed to initialize metadata schema: %w", err)
 	}

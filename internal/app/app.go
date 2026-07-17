@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"errors"
 
+	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/repository"
 )
 
@@ -17,4 +19,9 @@ type App struct {
 // NewApp creates a new App instance.
 func NewApp(repo *repository.Repository) *App {
 	return &App{repo: repo}
+}
+
+// DeriveCanonicalPath reconstructs the logical path of an entry by walking up its ancestry.
+func (a *App) DeriveCanonicalPath(ctx context.Context, entry metadata.Entry) (string, error) {
+	return a.repo.DeriveCanonicalPath(ctx, entry)
 }

@@ -1,7 +1,9 @@
 package local_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha1"
 	"errors"
 	"io"
 	"os"
@@ -31,18 +33,27 @@ func TestLocalStore(t *testing.T) {
 		return store, tempDir
 	}
 
-	t.Run("Put and Open successful", func(t *testing.T) {
+	t.Run("Commit and Open successful", func(t *testing.T) {
 		store, _ := setupStore(t)
 		contentStr := "test object content"
-		digest, _ := hasher.Sum(ctx, strings.NewReader(contentStr))
 
-		err := store.Put(ctx, digest.String(), strings.NewReader(contentStr))
+		res, err := store.Commit(ctx, strings.NewReader(contentStr))
 		if err != nil {
-			t.Fatalf("failed to put object: %v", err)
+			t.Fatalf("failed to commit: %v", err)
 		}
 
-		// Open and verify content
-		rc, err := store.Open(ctx, digest.String())
+		expectedID, err := content.ParseID("7dbfef13e56908a5df3983234269d73489e97e52")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+		if !res.ID.Equal(expectedID) {
+			t.Errorf("expected ID %s, got %s", expectedID.String(), res.ID.String())
+		}
+		if res.Size != int64(len(contentStr)) {
+			t.Errorf("expected size %d, got %d", len(contentStr), res.Size)
+		}
+
+		rc, err := store.Open(ctx, res.ID)
 		if err != nil {
 			t.Fatalf("failed to open object: %v", err)
 		}
@@ -50,51 +61,52 @@ func TestLocalStore(t *testing.T) {
 
 		data, err := io.ReadAll(rc)
 		if err != nil {
-			t.Fatalf("failed to read object content: %v", err)
+			t.Fatalf("failed to read: %v", err)
 		}
-
 		if string(data) != contentStr {
-			t.Errorf("expected %q, got %q", contentStr, string(data))
+			t.Errorf("expected content %q, got %q", contentStr, string(data))
 		}
 	})
 
-	t.Run("Put multiple times does not break", func(t *testing.T) {
+	t.Run("Commit identical content multiple times does not break and reuses", func(t *testing.T) {
 		store, _ := setupStore(t)
-		contentStr := "stable content"
-		digest, _ := hasher.Sum(ctx, strings.NewReader(contentStr))
+		contentStr := "reused content"
 
-		err := store.Put(ctx, digest.String(), strings.NewReader(contentStr))
+		res1, err := store.Commit(ctx, strings.NewReader(contentStr))
 		if err != nil {
-			t.Fatalf("first put failed: %v", err)
+			t.Fatalf("first commit failed: %v", err)
 		}
 
-		// Second put (same content) should return nil and succeed gracefully
-		err = store.Put(ctx, digest.String(), strings.NewReader(contentStr))
+		res2, err := store.Commit(ctx, strings.NewReader(contentStr))
 		if err != nil {
-			t.Fatalf("second put failed: %v", err)
+			t.Fatalf("second commit failed: %v", err)
 		}
 
-		// Content is still there
-		rc, err := store.Open(ctx, digest.String())
-		if err != nil {
-			t.Fatalf("open after second put failed: %v", err)
+		if !res1.ID.Equal(res2.ID) {
+			t.Errorf("expected identical ID, got %s and %s", res1.ID.String(), res2.ID.String())
 		}
-		defer rc.Close()
 	})
 
-	t.Run("Detect mismatching hash", func(t *testing.T) {
-		store, _ := setupStore(t)
-		contentStr := "actual content"
-		wrongHash := "da39a3ee5e6b4b0d3255bfef95601890afd80709" // hash of empty string
+	t.Run("Commit detects corrupt existing object", func(t *testing.T) {
+		store, rootDir := setupStore(t)
+		contentStr := "test content"
 
-		// Put with wrong hash
-		err := store.Put(ctx, wrongHash, strings.NewReader(contentStr))
+		// Precompute the true hash: sha1 for "test content" is 1eebdf4fdc9fc7bf283031b93f9aef3338de9052
+		trueID, err := content.ParseID("1eebdf4fdc9fc7bf283031b93f9aef3338de9052")
 		if err != nil {
-			t.Fatalf("failed to put: %v", err)
+			t.Fatalf("failed to parse: %v", err)
 		}
 
-		// Verify should fail
-		err = store.Verify(ctx, wrongHash)
+		// Write corrupt bytes directly to the true destination path
+		destPath := filepath.Join(rootDir, "objects", trueID.String())
+		err = os.WriteFile(destPath, []byte("corrupted data"), 0644)
+		if err != nil {
+			t.Fatalf("failed to write corrupt file: %v", err)
+		}
+
+		// Committing the true content now should fail with corruption / hash mismatch error during verify
+		res, err := store.Commit(ctx, strings.NewReader(contentStr))
+		t.Logf("Commit returned res: %v, err: %v", res, err)
 		if !errors.Is(err, objectstore.ErrHashMismatch) {
 			t.Errorf("expected %v, got %v", objectstore.ErrHashMismatch, err)
 		}
@@ -102,33 +114,96 @@ func TestLocalStore(t *testing.T) {
 
 	t.Run("Return NotFound for non-existent objects", func(t *testing.T) {
 		store, _ := setupStore(t)
-		fakeHash := "1234567890abcdef1234567890abcdef12345678"
+		fakeID, err := content.ParseID("1234567890abcdef1234567890abcdef12345678")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
 
-		_, err := store.Open(ctx, fakeHash)
+		_, err = store.Open(ctx, fakeID)
 		if !errors.Is(err, objectstore.ErrObjectNotFound) {
 			t.Errorf("expected %v, got %v", objectstore.ErrObjectNotFound, err)
 		}
 
-		err = store.Delete(ctx, fakeHash)
+		err = store.Delete(ctx, fakeID)
 		if !errors.Is(err, objectstore.ErrObjectNotFound) {
-			t.Errorf("expected %v on delete, got %v", objectstore.ErrObjectNotFound, err)
+			t.Errorf("expected %v, got %v", objectstore.ErrObjectNotFound, err)
 		}
 	})
 
-	t.Run("Do not treat temporary files as completed objects", func(t *testing.T) {
+	t.Run("Invalid filenames in object namespace are skipped/ignored during List", func(t *testing.T) {
 		store, rootDir := setupStore(t)
 
-		// Create a fake temporary file in the temp directory
-		tempFile, err := os.CreateTemp(filepath.Join(rootDir, "temp"), "nando-obj-*")
+		// Create a file with an invalid name in objects/
+		invalidPath := filepath.Join(rootDir, "objects", "not_a_valid_hex_id.txt")
+		err := os.WriteFile(invalidPath, []byte("data"), 0644)
 		if err != nil {
-			t.Fatalf("failed to create dummy temp file: %v", err)
+			t.Fatalf("failed to write invalid file: %v", err)
 		}
-		_ = tempFile.Close()
 
-		// Attempting to Open it via store with its filename should fail as NotFound
-		_, err = store.Open(ctx, filepath.Base(tempFile.Name()))
-		if !errors.Is(err, objectstore.ErrObjectNotFound) {
-			t.Errorf("expected %v when opening temp file, got %v", objectstore.ErrObjectNotFound, err)
+		// Also create a valid one
+		_, err = store.Commit(ctx, strings.NewReader("valid content"))
+		if err != nil {
+			t.Fatalf("failed to commit: %v", err)
+		}
+
+		list, err := store.List(ctx)
+		if err != nil {
+			t.Fatalf("failed to list: %v", err)
+		}
+
+		if len(list) != 1 {
+			t.Fatalf("expected exactly 1 valid ID, got %d", len(list))
+		}
+	})
+
+	t.Run("Object Commit Golden Test", func(t *testing.T) {
+		store, _ := setupStore(t)
+
+		// Empty
+		resEmpty, err := store.Commit(ctx, strings.NewReader(""))
+		if err != nil {
+			t.Fatalf("failed to commit empty: %v", err)
+		}
+
+		// Hello nando
+		resHello, err := store.Commit(ctx, strings.NewReader("hello nando\n"))
+		if err != nil {
+			t.Fatalf("failed to commit hello: %v", err)
+		}
+
+		// Binary zeros
+		resZeros, err := store.Commit(ctx, bytes.NewReader([]byte{0, 0, 0, 0}))
+		if err != nil {
+			t.Fatalf("failed to commit zeros: %v", err)
+		}
+
+		directHash := sha1.Sum([]byte{0, 0, 0, 0})
+		t.Logf("Golden Test empty: %s, hello: %s, zeros: %s, directHash: %x", resEmpty.ID.String(), resHello.ID.String(), resZeros.ID.String(), directHash)
+
+		// Load and verify golden file content
+		goldenPath := filepath.Join("testdata", "object_commit.golden")
+		data, err := os.ReadFile(goldenPath)
+		if err != nil {
+			t.Fatalf("failed to read golden file: %v", err)
+		}
+
+		contentStr := string(data)
+
+		// Hardcoded expectations check to satisfy: "Expected digests must be hard-coded independently."
+		if resEmpty.ID.String() != "da39a3ee5e6b4b0d3255bfef95601890afd80709" {
+			t.Errorf("empty sha1 mismatch")
+		}
+		if resHello.ID.String() != "6640ec4d43fe9d18fcfee38caab6c91e3f231e17" {
+			t.Errorf("hello sha1 mismatch")
+		}
+		if resZeros.ID.String() != "9069ca78e7450a285173431b3e52c5c25299e473" {
+			t.Errorf("zeros sha1 mismatch")
+		}
+
+		// Ensure final path check
+		expectedEmptyPath := "objects/da39a3ee5e6b4b0d3255bfef95601890afd80709"
+		if !strings.Contains(contentStr, expectedEmptyPath) {
+			t.Errorf("golden file must contain path %q", expectedEmptyPath)
 		}
 	})
 }

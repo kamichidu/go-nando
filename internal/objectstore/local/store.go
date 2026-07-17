@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"crypto/sha1"
 	"fmt"
 	"io"
 	"os"
@@ -33,23 +34,12 @@ func NewStore(objectsDir, tempDir string, hasher content.Hasher) (*Store, error)
 	}, nil
 }
 
-// Put writes an object to the store atomically if it doesn't already exist.
-func (s *Store) Put(ctx context.Context, hash string, src io.Reader) error {
-	destPath := filepath.Join(s.objectsDir, hash)
-
-	// Check if already exists to prevent redundant saving
-	exists, err := s.Exists(ctx, hash)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-
-	// Create a temporary file inside s.tempDir to support atomic rename
+// Commit writes an object to the store atomically by deriving the hash from the exact persisted bytes.
+func (s *Store) Commit(ctx context.Context, src io.Reader) (objectstore.CommitResult, error) {
+	// Create a temporary file inside s.tempDir
 	tempFile, err := os.CreateTemp(s.tempDir, "nando-obj-*")
 	if err != nil {
-		return fmt.Errorf("failed to create temporary file: %w", err)
+		return objectstore.CommitResult{}, fmt.Errorf("failed to create temporary file: %w", err)
 	}
 	tempName := tempFile.Name()
 
@@ -62,45 +52,97 @@ func (s *Store) Put(ctx context.Context, hash string, src io.Reader) error {
 		}
 	}()
 
-	// Stream write
-	if _, err := io.Copy(tempFile, src); err != nil {
-		return fmt.Errorf("failed to write to temporary file: %w", err)
+	// Use MultiWriter to hash as we write
+	h := sha1.New()
+	mw := io.MultiWriter(tempFile, h)
+
+	written, err := io.Copy(mw, src)
+	if err != nil {
+		return objectstore.CommitResult{}, fmt.Errorf("failed to write to temporary file: %w", err)
 	}
 
 	// Flush to disk
 	if err := tempFile.Sync(); err != nil {
-		return fmt.Errorf("failed to sync temporary file: %w", err)
+		return objectstore.CommitResult{}, fmt.Errorf("failed to sync temporary file: %w", err)
 	}
 
 	if err := tempFile.Close(); err != nil {
-		return fmt.Errorf("failed to close temporary file: %w", err)
+		return objectstore.CommitResult{}, fmt.Errorf("failed to close temporary file: %w", err)
 	}
 
-	// Atomic rename within the same filesystem
-	if err := os.Rename(tempName, destPath); err != nil {
-		return fmt.Errorf("failed to atomic rename temporary file to destination %q: %w", destPath, err)
+	// Derive final ID from computed SHA-1 digest
+	digest := h.Sum(nil)
+	var arr [20]byte
+	copy(arr[:], digest)
+	id := content.NewID(arr)
+
+	destPath := filepath.Join(s.objectsDir, id.String())
+
+	// Check if already exists
+	exists, err := s.Exists(ctx, id)
+	if err != nil {
+		return objectstore.CommitResult{}, err
 	}
+
+	if exists {
+		// Verify existing matches
+		if err := s.Verify(ctx, id); err != nil {
+			return objectstore.CommitResult{}, fmt.Errorf("existing object %s is corrupt: %w", id.String(), err)
+		}
+		// Existing valid object can be reused. Clean up the temp file.
+		_ = os.Remove(tempName)
+		cleanup = false
+		return objectstore.CommitResult{
+			ID:   id,
+			Size: written,
+		}, nil
+	}
+
+	// Publish temp file to final destination path (exclusive creation).
+	// This ensures that we do not overwrite an existing file.
+	published, err := publishNoReplace(tempName, destPath)
+	if err != nil {
+		return objectstore.CommitResult{}, fmt.Errorf("failed to publish object: %w", err)
+	}
+
+	if !published {
+		// Already exists! Verify it.
+		if err := s.Verify(ctx, id); err != nil {
+			return objectstore.CommitResult{}, fmt.Errorf("existing object %s is corrupt: %w", id.String(), err)
+		}
+		_ = os.Remove(tempName)
+		cleanup = false
+		return objectstore.CommitResult{
+			ID:   id,
+			Size: written,
+		}, nil
+	}
+
+	_ = os.Remove(tempName)
 
 	cleanup = false
-	return nil
+	return objectstore.CommitResult{
+		ID:   id,
+		Size: written,
+	}, nil
 }
 
 // Open retrieves the reader for the given object.
-func (s *Store) Open(ctx context.Context, hash string) (io.ReadCloser, error) {
-	path := filepath.Join(s.objectsDir, hash)
+func (s *Store) Open(ctx context.Context, id content.ID) (io.ReadCloser, error) {
+	path := filepath.Join(s.objectsDir, id.String())
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, objectstore.ErrObjectNotFound
 		}
-		return nil, fmt.Errorf("failed to open object %q: %w", hash, err)
+		return nil, fmt.Errorf("failed to open object %q: %w", id.String(), err)
 	}
 	return file, nil
 }
 
 // Exists checks if the object is present in the store.
-func (s *Store) Exists(ctx context.Context, hash string) (bool, error) {
-	path := filepath.Join(s.objectsDir, hash)
+func (s *Store) Exists(ctx context.Context, id content.ID) (bool, error) {
+	path := filepath.Join(s.objectsDir, id.String())
 	_, err := os.Stat(path)
 	if err == nil {
 		return true, nil
@@ -108,25 +150,25 @@ func (s *Store) Exists(ctx context.Context, hash string) (bool, error) {
 	if os.IsNotExist(err) {
 		return false, nil
 	}
-	return false, fmt.Errorf("failed to check existence of object %q: %w", hash, err)
+	return false, fmt.Errorf("failed to check existence of object %q: %w", id.String(), err)
 }
 
 // Delete removes an object from the store.
-func (s *Store) Delete(ctx context.Context, hash string) error {
-	path := filepath.Join(s.objectsDir, hash)
+func (s *Store) Delete(ctx context.Context, id content.ID) error {
+	path := filepath.Join(s.objectsDir, id.String())
 	err := os.Remove(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return objectstore.ErrObjectNotFound
 		}
-		return fmt.Errorf("failed to delete object %q: %w", hash, err)
+		return fmt.Errorf("failed to delete object %q: %w", id.String(), err)
 	}
 	return nil
 }
 
 // Verify validates that the stored object matches its hash.
-func (s *Store) Verify(ctx context.Context, hash string) error {
-	file, err := s.Open(ctx, hash)
+func (s *Store) Verify(ctx context.Context, id content.ID) error {
+	file, err := s.Open(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -134,28 +176,49 @@ func (s *Store) Verify(ctx context.Context, hash string) error {
 
 	computed, err := s.hasher.Sum(ctx, file)
 	if err != nil {
-		return fmt.Errorf("failed to compute hash of object %q: %w", hash, err)
+		return fmt.Errorf("failed to compute hash of object %q: %w", id.String(), err)
 	}
 
-	if computed.String() != hash {
-		return fmt.Errorf("%w: expected %q, got %q", objectstore.ErrHashMismatch, hash, computed)
+	if !computed.Equal(id) {
+		return fmt.Errorf("%w: expected %q, got %q", objectstore.ErrHashMismatch, id.String(), computed.String())
 	}
 
 	return nil
 }
 
-// ListHashes returns all hashes currently stored in the objects directory.
-func (s *Store) ListHashes(ctx context.Context) ([]string, error) {
+// List returns all valid committed object IDs currently stored in the objects directory.
+func (s *Store) List(ctx context.Context) ([]content.ID, error) {
 	entries, err := os.ReadDir(s.objectsDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read objects directory: %w", err)
 	}
 
-	var hashes []string
+	var ids []content.ID
 	for _, entry := range entries {
 		if !entry.IsDir() {
-			hashes = append(hashes, entry.Name())
+			id, err := content.ParseID(entry.Name())
+			if err != nil {
+				// Skip invalid filenames to not allow them to escape as valid IDs
+				continue
+			}
+			ids = append(ids, id)
 		}
 	}
-	return hashes, nil
+	return ids, nil
+}
+
+// ListRaw returns the raw filenames of all files stored in the objects directory.
+func (s *Store) ListRaw(ctx context.Context) ([]string, error) {
+	entries, err := os.ReadDir(s.objectsDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read objects directory: %w", err)
+	}
+
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	return names, nil
 }

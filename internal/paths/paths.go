@@ -38,6 +38,23 @@ func NormalizeLogicalPath(p string) (string, error) {
 		normalized = "/" + normalized
 	}
 
+	// Reject any attempt to escape above repository root
+	parts := strings.Split(normalized, "/")
+	depth := 0
+	for _, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			depth--
+			if depth < 0 {
+				return "", ErrInvalidPath
+			}
+		} else {
+			depth++
+		}
+	}
+
 	// 4. Resolve dot-notation . and .. recursively
 	cleaned := path.Clean(normalized)
 

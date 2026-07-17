@@ -1,0 +1,29 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+      exclude-functions:
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Printf
+        - fmt.Println
+        - os.Remove
+        - (*database/sql.Tx).Rollback
+        - (*database/sql.Rows).Close
+        - (*database/sql.DB).Close
+        - (*os.File).Close
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*github.com/kamichidu/go-nando/internal/metadata/sqlite.Store).Close
+
+formatters:
+  enable:
+    - gofmt

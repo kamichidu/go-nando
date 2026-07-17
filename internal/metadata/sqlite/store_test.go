@@ -1,24 +1,28 @@
-package sqlite_test
+package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/kamichidu/go-nando/internal/content"
 	"github.com/kamichidu/go-nando/internal/metadata"
-	"github.com/kamichidu/go-nando/internal/metadata/sqlite"
 )
 
 func TestSQLiteStore(t *testing.T) {
 	ctx := context.Background()
 
-	setupStore := func(t *testing.T) (*sqlite.Store, string) {
+	setupStore := func(t *testing.T) (*Store, string) {
 		t.Helper()
 		tempDir := t.TempDir()
 		dbPath := filepath.Join(tempDir, "metadata.sqlite")
-		store, err := sqlite.NewStore(dbPath)
+		store, err := NewStore(dbPath)
 		if err != nil {
 			t.Fatalf("failed to create store: %v", err)
 		}
@@ -31,201 +35,755 @@ func TestSQLiteStore(t *testing.T) {
 		return store, dbPath
 	}
 
-	t.Run("Initialize schema and put/get entry successfully", func(t *testing.T) {
+	t.Run("Initialize schema and Root entry successfully", func(t *testing.T) {
 		store, _ := setupStore(t)
 		defer store.Close()
 
+		root, err := store.Root(ctx)
+		if err != nil {
+			t.Fatalf("failed to get root: %v", err)
+		}
+
+		if root.ID != "root" {
+			t.Errorf("expected root ID 'root', got %q", root.ID)
+		}
+		if root.ParentID != nil {
+			t.Errorf("expected root parent ID to be nil")
+		}
+		if root.Kind != metadata.EntryKindDirectory {
+			t.Errorf("expected root kind 'directory', got %q", root.Kind)
+		}
+	})
+
+	t.Run("Create and Get child successfully", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		childID := metadata.EntryID("child-1")
+		now := time.Now().UTC().Truncate(time.Second)
+
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
 		entry := metadata.Entry{
-			Path:        "/docs/report.pdf",
-			Hash:        "abcde1234567890fghij",
-			Size:        12345,
-			Mtime:       time.Now().UTC().Truncate(time.Second),
+			ID:          childID,
+			ParentID:    &parentID,
+			Name:        "report.pdf",
+			Kind:        metadata.EntryKindFile,
+			ObjectID:    &oid,
+			Size:        100,
+			Mtime:       now,
 			Mode:        0644,
 			ContentType: "application/pdf",
-			State:       metadata.StateReady,
-			IsDir:       false,
-			CreatedAt:   time.Now().UTC().Truncate(time.Second),
-			UpdatedAt:   time.Now().UTC().Truncate(time.Second),
+			Revision:    1,
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		}
 
-		err := store.PutEntry(ctx, entry)
+		_, err = store.Create(ctx, entry)
 		if err != nil {
-			t.Fatalf("failed to put entry: %v", err)
+			t.Fatalf("failed to create entry: %v", err)
 		}
 
-		retrieved, err := store.GetEntry(ctx, "/docs/report.pdf")
+		// Retrieve by ID
+		retrieved, err := store.GetByID(ctx, childID)
 		if err != nil {
-			t.Fatalf("failed to get entry: %v", err)
+			t.Fatalf("failed to get by ID: %v", err)
+		}
+		if retrieved.Name != "report.pdf" || !retrieved.ObjectID.Equal(oid) {
+			t.Errorf("mismatched retrieved entry")
 		}
 
-		if retrieved.Path != entry.Path || retrieved.Hash != entry.Hash || retrieved.Size != entry.Size {
-			t.Errorf("mismatched entry field values")
+		// Retrieve child by parent and name
+		child, err := store.GetChild(ctx, parentID, "report.pdf")
+		if err != nil {
+			t.Fatalf("failed to get child: %v", err)
 		}
-		if !retrieved.Mtime.Equal(entry.Mtime) {
-			t.Errorf("expected mtime %v, got %v", entry.Mtime, retrieved.Mtime)
+		if child.ID != childID {
+			t.Errorf("expected ID %s, got %s", childID.String(), child.ID.String())
 		}
 	})
 
-	t.Run("Updating an existing path updates metadata", func(t *testing.T) {
+	t.Run("Duplicate child name conflict", func(t *testing.T) {
 		store, _ := setupStore(t)
 		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
 
 		entry1 := metadata.Entry{
-			Path:      "/docs/report.pdf",
-			Hash:      "hash1",
-			Size:      100,
-			Mtime:     time.Now().UTC().Truncate(time.Second),
-			State:     metadata.StateReady,
-			CreatedAt: time.Now().UTC().Truncate(time.Second),
-			UpdatedAt: time.Now().UTC().Truncate(time.Second),
+			ID:        "id1",
+			ParentID:  &parentID,
+			Name:      "dup.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
 		}
-		_ = store.PutEntry(ctx, entry1)
 
-		entry2 := entry1
-		entry2.Hash = "hash2"
-		entry2.Size = 200
+		entry2 := metadata.Entry{
+			ID:        "id2",
+			ParentID:  &parentID,
+			Name:      "dup.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
 
-		err := store.PutEntry(ctx, entry2)
+		_, err = store.Create(ctx, entry1)
 		if err != nil {
-			t.Fatalf("failed to update entry: %v", err)
+			t.Fatalf("failed to create entry1: %v", err)
 		}
 
-		retrieved, _ := store.GetEntry(ctx, "/docs/report.pdf")
-		if retrieved.Hash != "hash2" || retrieved.Size != 200 {
-			t.Errorf("entry was not updated correctly, got hash %q, size %d", retrieved.Hash, retrieved.Size)
+		_, err = store.Create(ctx, entry2)
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected conflict error, got: %v", err)
 		}
 	})
 
-	t.Run("Rename/Move entry updates path but not hash", func(t *testing.T) {
+	t.Run("Same name under different parents is allowed", func(t *testing.T) {
 		store, _ := setupStore(t)
 		defer store.Close()
 
-		entry := metadata.Entry{
-			Path:      "/docs/report.pdf",
-			Hash:      "myhash",
-			State:     metadata.StateReady,
-			Mtime:     time.Now().UTC().Truncate(time.Second),
-			CreatedAt: time.Now().UTC(),
-			UpdatedAt: time.Now().UTC(),
-		}
-		_ = store.PutEntry(ctx, entry)
-
-		err := store.MoveEntry(ctx, "/docs/report.pdf", "/docs/final_report.pdf")
+		now := time.Now().UTC()
+		rootID := metadata.EntryID("root")
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
-			t.Fatalf("failed to move entry: %v", err)
+			t.Fatalf("failed to parse: %v", err)
 		}
 
-		// Old path should not exist (since state is ready, old path was completely updated)
-		_, err = store.GetEntry(ctx, "/docs/report.pdf")
+		// Create parent dir
+		pID := metadata.EntryID("parent-dir")
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        pID,
+			ParentID:  &rootID,
+			Name:      "subdir",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create parent dir: %v", err)
+		}
+
+		// Create under root
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        "child-under-root",
+			ParentID:  &rootID,
+			Name:      "test.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create under root: %v", err)
+		}
+
+		// Create under subdir
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        "child-under-subdir",
+			ParentID:  &pID,
+			Name:      "test.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create under subdir: %v", err)
+		}
+	})
+
+	t.Run("Update entry increments revision and changes attributes", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		id := metadata.EntryID("file-id")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		entry, err := store.Create(ctx, metadata.Entry{
+			ID:        id,
+			ParentID:  &parentID,
+			Name:      "file.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Size:      10,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		entry.Size = 20
+		updated, err := store.Update(ctx, entry)
+		if err != nil {
+			t.Fatalf("failed to update: %v", err)
+		}
+
+		if updated.Revision != 2 {
+			t.Errorf("expected revision 2, got %d", updated.Revision)
+		}
+		if updated.Size != 20 {
+			t.Errorf("expected size 20, got %d", updated.Size)
+		}
+	})
+
+	t.Run("Move entry updates parent and/or name", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		rootID := metadata.EntryID("root")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		// Create subdir
+		subID := metadata.EntryID("subdir")
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        subID,
+			ParentID:  &rootID,
+			Name:      "sub",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create subdir: %v", err)
+		}
+
+		// Create file under root
+		fileID := metadata.EntryID("file-id")
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        fileID,
+			ParentID:  &rootID,
+			Name:      "file.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+
+		// Move file under subdir with new name
+		moved, err := store.Move(ctx, fileID, subID, "moved_file.txt")
+		if err != nil {
+			t.Fatalf("failed to move: %v", err)
+		}
+
+		if *moved.ParentID != subID {
+			t.Errorf("expected parent ID %s, got %s", subID.String(), moved.ParentID.String())
+		}
+		if moved.Name != "moved_file.txt" {
+			t.Errorf("expected name moved_file.txt, got %q", moved.Name)
+		}
+		if moved.Revision != 2 {
+			t.Errorf("expected revision 2, got %d", moved.Revision)
+		}
+
+		// Verifying original parent has no child with the old name
+		_, err = store.GetChild(ctx, rootID, "file.txt")
 		if !errors.Is(err, metadata.ErrEntryNotFound) {
-			t.Errorf("expected %v for old path, got %v", metadata.ErrEntryNotFound, err)
+			t.Errorf("expected not found for old parent name, got: %v", err)
 		}
 
-		// New path should have the same hash
-		retrieved, err := store.GetEntry(ctx, "/docs/final_report.pdf")
+		// Check new parent has the child
+		child, err := store.GetChild(ctx, subID, "moved_file.txt")
 		if err != nil {
-			t.Fatalf("failed to get entry at new path: %v", err)
+			t.Fatalf("failed to get child at new parent: %v", err)
 		}
-		if retrieved.Hash != "myhash" {
-			t.Errorf("expected hash 'myhash', got %q", retrieved.Hash)
+		if child.ID != fileID {
+			t.Errorf("mismatched child ID")
 		}
 	})
 
-	t.Run("Delete entry removes hash from ReferencedHashes", func(t *testing.T) {
+	t.Run("Delete entry removes it from parent", func(t *testing.T) {
 		store, _ := setupStore(t)
 		defer store.Close()
 
-		entry := metadata.Entry{
-			Path:      "/docs/report.pdf",
-			Hash:      "unique_hash",
-			State:     metadata.StateReady,
-			Mtime:     time.Now().UTC().Truncate(time.Second),
-			CreatedAt: time.Now().UTC(),
-			UpdatedAt: time.Now().UTC(),
-		}
-		_ = store.PutEntry(ctx, entry)
-
-		hashes, _ := store.ReferencedHashes(ctx)
-		if len(hashes) != 1 || hashes[0] != "unique_hash" {
-			t.Fatalf("expected 1 referenced hash, got %v", hashes)
-		}
-
-		err := store.DeleteEntry(ctx, "/docs/report.pdf")
+		rootID := metadata.EntryID("root")
+		id := metadata.EntryID("del-id")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
-			t.Fatalf("failed to delete entry: %v", err)
+			t.Fatalf("failed to parse: %v", err)
 		}
 
-		// Should not be retrievable
-		_, err = store.GetEntry(ctx, "/docs/report.pdf")
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        id,
+			ParentID:  &rootID,
+			Name:      "delete_me.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		err = store.Delete(ctx, id)
+		if err != nil {
+			t.Fatalf("failed to delete: %v", err)
+		}
+
+		// Ensure no longer resolvable
+		_, err = store.GetByID(ctx, id)
 		if !errors.Is(err, metadata.ErrEntryNotFound) {
-			t.Errorf("expected %v, got %v", metadata.ErrEntryNotFound, err)
+			t.Errorf("expected not found, got %v", err)
 		}
 
-		// Hash should be removed from ReferencedHashes
-		hashes, _ = store.ReferencedHashes(ctx)
-		if len(hashes) != 0 {
-			t.Errorf("expected 0 referenced hashes after delete, got %v", hashes)
+		// Ensure name is reusable
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        "new-id-same-name",
+			ParentID:  &rootID,
+			Name:      "delete_me.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Errorf("failed to reuse deleted name: %v", err)
 		}
 	})
 
-	t.Run("Move directory renames children recursively", func(t *testing.T) {
-		store, _ := setupStore(t)
+	t.Run("Metadata Schema Golden Test", func(t *testing.T) {
+		store, dbPath := setupStore(t)
 		defer store.Close()
 
-		// Create a directory entry and two child entries
-		now := time.Now().UTC().Truncate(time.Second)
-		_ = store.PutEntry(ctx, metadata.Entry{Path: "/docs", IsDir: true, State: metadata.StateReady, Mtime: now, CreatedAt: now, UpdatedAt: now})
-		_ = store.PutEntry(ctx, metadata.Entry{Path: "/docs/a.txt", Hash: "hash_a", State: metadata.StateReady, Mtime: now, CreatedAt: now, UpdatedAt: now})
-		_ = store.PutEntry(ctx, metadata.Entry{Path: "/docs/b.txt", Hash: "hash_b", State: metadata.StateReady, Mtime: now, CreatedAt: now, UpdatedAt: now})
-
-		err := store.MoveEntry(ctx, "/docs", "/documents")
+		db, err := sql.Open("sqlite", dbPath)
 		if err != nil {
-			t.Fatalf("failed to move directory: %v", err)
+			t.Fatalf("failed to open database directly: %v", err)
 		}
+		defer db.Close()
 
-		// Check new paths exist
-		_, err = store.GetEntry(ctx, "/documents")
+		// 1. Introspect table info
+		rows, err := db.Query("PRAGMA table_info(entries)")
 		if err != nil {
-			t.Errorf("new dir path not found: %v", err)
+			t.Fatalf("table info query failed: %v", err)
 		}
-		entryA, err := store.GetEntry(ctx, "/documents/a.txt")
-		if err != nil || entryA.Hash != "hash_a" {
-			t.Errorf("child A not moved correctly: %v", err)
-		}
-		entryB, err := store.GetEntry(ctx, "/documents/b.txt")
-		if err != nil || entryB.Hash != "hash_b" {
-			t.Errorf("child B not moved correctly: %v", err)
-		}
+		defer rows.Close()
 
-		// Check old paths do not exist
-		_, err = store.GetEntry(ctx, "/docs/a.txt")
-		if !errors.Is(err, metadata.ErrEntryNotFound) {
-			t.Errorf("old child path should not exist")
-		}
-	})
-
-	t.Run("ListEntries returns immediate children only", func(t *testing.T) {
-		store, _ := setupStore(t)
-		defer store.Close()
-
-		now := time.Now().UTC().Truncate(time.Second)
-		_ = store.PutEntry(ctx, metadata.Entry{Path: "/docs/report.pdf", State: metadata.StateReady, Mtime: now, CreatedAt: now, UpdatedAt: now})
-		_ = store.PutEntry(ctx, metadata.Entry{Path: "/docs/image.png", State: metadata.StateReady, Mtime: now, CreatedAt: now, UpdatedAt: now})
-		_ = store.PutEntry(ctx, metadata.Entry{Path: "/docs/sub/nested.txt", State: metadata.StateReady, Mtime: now, CreatedAt: now, UpdatedAt: now})
-
-		entries, err := store.ListEntries(ctx, "/docs")
-		if err != nil {
-			t.Fatalf("failed to list entries: %v", err)
-		}
-
-		if len(entries) != 2 {
-			t.Fatalf("expected 2 immediate children, got %d", len(entries))
-		}
-
-		for _, e := range entries {
-			if e.Path == "/docs/sub/nested.txt" {
-				t.Errorf("listed nested child which is not immediate")
+		var columnsLines []string
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notnull, pk int
+			var dfltVal sql.NullString
+			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltVal, &pk); err != nil {
+				t.Fatalf("scan failed: %v", err)
 			}
+			columnsLines = append(columnsLines, fmt.Sprintf("- %s %s pk=%d null=%d", name, ctype, pk, 1-notnull))
+		}
+
+		// 2. Introspect foreign key info
+		fkRows, err := db.Query("PRAGMA foreign_key_list(entries)")
+		if err != nil {
+			t.Fatalf("fk list query failed: %v", err)
+		}
+		defer fkRows.Close()
+
+		var fkLines []string
+		for fkRows.Next() {
+			var id, seq int
+			var table, from, to string
+			var onUpdate, onDelete, match string
+			if err := fkRows.Scan(&id, &seq, &table, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+				t.Fatalf("fk scan failed: %v", err)
+			}
+			fkLines = append(fkLines, fmt.Sprintf("- %s -> %s(%s)", from, table, to))
+		}
+
+		// Build a stable description
+		var sb strings.Builder
+		sb.WriteString("Table: entries\n")
+		sb.WriteString("Columns:\n")
+		for _, line := range columnsLines {
+			sb.WriteString(line + "\n")
+		}
+		sb.WriteString("Foreign Keys:\n")
+		for _, line := range fkLines {
+			sb.WriteString(line + "\n")
+		}
+		sb.WriteString("Indexes:\n")
+		sb.WriteString("- UNIQUE keys: parent_id, name\n")
+
+		actual := sb.String()
+
+		// Read golden file
+		goldenPath := filepath.Join("testdata", "metadata_schema.golden")
+		expectedBytes, err := os.ReadFile(goldenPath)
+		if err != nil {
+			t.Fatalf("failed to read golden file: %v", err)
+		}
+
+		expected := string(expectedBytes)
+		if actual != expected {
+			t.Errorf("Metadata schema mismatch!\nActual:\n%s\nExpected:\n%s", actual, expected)
+		}
+	})
+
+	t.Run("Metadata Tree Golden Test", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		rootID := metadata.EntryID("root")
+		now := time.Now().UTC()
+
+		// /documents
+		dirDocs := metadata.Entry{
+			ID:        "dir-documents",
+			ParentID:  &rootID,
+			Name:      "documents",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		_, err := store.Create(ctx, dirDocs)
+		if err != nil {
+			t.Fatalf("failed to create documents: %v", err)
+		}
+
+		// /documents/hello.txt
+		oidHello, err := content.ParseID("6640ec4d43fe9d18fcfee38caab6c91e3f231e17")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+		fileHello := metadata.Entry{
+			ID:        "file-hello",
+			ParentID:  &dirDocs.ID,
+			Name:      "hello.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oidHello,
+			Revision:  3,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		_, err = store.Create(ctx, fileHello)
+		if err != nil {
+			t.Fatalf("failed to create hello: %v", err)
+		}
+
+		// /documents/archive
+		dirArchive := metadata.Entry{
+			ID:        "dir-archive",
+			ParentID:  &dirDocs.ID,
+			Name:      "archive",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		_, err = store.Create(ctx, dirArchive)
+		if err != nil {
+			t.Fatalf("failed to create archive: %v", err)
+		}
+
+		// /documents/archive/old.txt
+		oidOld, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+		fileOld := metadata.Entry{
+			ID:        "file-old",
+			ParentID:  &dirArchive.ID,
+			Name:      "old.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oidOld,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		_, err = store.Create(ctx, fileOld)
+		if err != nil {
+			t.Fatalf("failed to create old: %v", err)
+		}
+
+		// List all and check representation
+		all, err := store.ListAll(ctx)
+		if err != nil {
+			t.Fatalf("failed to list all entries: %v", err)
+		}
+
+		// Create deterministic sorting map based on hierarchy
+		// Root -> documents -> hello, archive -> old
+		allMap := make(map[metadata.EntryID]metadata.Entry)
+		for _, e := range all {
+			allMap[e.ID] = e
+		}
+
+		order := []metadata.EntryID{"root", "dir-documents", "file-hello", "dir-archive", "file-old"}
+
+		var sb strings.Builder
+		for _, id := range order {
+			e, ok := allMap[id]
+			if !ok {
+				t.Fatalf("missing entry in tree: %s", id.String())
+			}
+			pStr := "-"
+			if e.ParentID != nil {
+				pStr = e.ParentID.String()
+			}
+			objStr := ""
+			if e.ObjectID != nil {
+				objStr = " Object=" + e.ObjectID.String()
+			}
+			fmt.Fprintf(&sb, "ID=%s Parent=%s Kind=%s Name=%s Revision=%d%s\n", e.ID.String(), pStr, string(e.Kind), e.Name, e.Revision, objStr)
+		}
+
+		actual := sb.String()
+
+		// Compare to golden file
+		goldenPath := filepath.Join("testdata", "metadata_tree.golden")
+		expectedBytes, err := os.ReadFile(goldenPath)
+		if err != nil {
+			t.Fatalf("failed to read golden file: %v", err)
+		}
+
+		expected := string(expectedBytes)
+		if actual != expected {
+			t.Errorf("Metadata Tree mismatch!\nActual:\n%s\nExpected:\n%s", actual, expected)
+		}
+	})
+
+	t.Run("Obsolete schema detection", func(t *testing.T) {
+		tempDir := t.TempDir()
+		dbPath := filepath.Join(tempDir, "metadata.sqlite")
+		store, err := NewStore(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+		defer store.Close()
+
+		// Write old obsolete path-based schema manually
+		db, err := sql.Open("sqlite", dbPath)
+		if err != nil {
+			t.Fatalf("failed to open database directly: %v", err)
+		}
+		defer db.Close()
+
+		_, err = db.Exec(`
+			CREATE TABLE entries (
+				path TEXT PRIMARY KEY,
+				hash TEXT NOT NULL,
+				size INTEGER NOT NULL,
+				mtime TEXT NOT NULL,
+				mode INTEGER NOT NULL,
+				content_type TEXT NOT NULL,
+				state TEXT NOT NULL,
+				is_dir INTEGER NOT NULL DEFAULT 0,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+		`)
+		if err != nil {
+			t.Fatalf("failed to create old schema: %v", err)
+		}
+
+		// Schema check must fail indicating obsolete Phase 0 schema
+		err = store.CheckSchemaCompatibility(ctx)
+		if err == nil {
+			t.Errorf("expected incompatible schema error, got nil")
+		} else if !strings.Contains(err.Error(), "incompatible obsolete Phase 0 repository format") {
+			t.Errorf("expected incompatible schema error, got: %v", err)
+		}
+	})
+
+	t.Run("MetadataStore contract validation", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		rootID := metadata.EntryID("root")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		// 1. Creating an entry with a non-existent ParentID must fail in validation
+		invalidParentID := metadata.EntryID("non-existent-parent")
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        "file-orphan",
+			ParentID:  &invalidParentID,
+			Name:      "orphan.txt",
+			Kind:      metadata.EntryKindFile,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err == nil {
+			t.Errorf("expected Create to fail for non-existent parent, but succeeded")
+		} else if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected ErrEntryConflict, got %v", err)
+		}
+
+		// 2. Creating an entry whose parent is a file (not a directory) must fail in validation
+		fileID := metadata.EntryID("file-parent")
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        fileID,
+			ParentID:  &rootID,
+			Name:      "file_parent.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create file parent: %v", err)
+		}
+
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        "invalid-child",
+			ParentID:  &fileID,
+			Name:      "child_of_file.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err == nil {
+			t.Errorf("expected Create to fail when parent is a file, but succeeded")
+		} else if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected ErrEntryConflict, got %v", err)
+		}
+
+		// 3. Deleting a directory that has active children must fail in Go validation
+		dirID := metadata.EntryID("parent-dir")
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        dirID,
+			ParentID:  &rootID,
+			Name:      "subdir",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create directory: %v", err)
+		}
+
+		childID := metadata.EntryID("child-of-dir")
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        childID,
+			ParentID:  &dirID,
+			Name:      "child.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create child: %v", err)
+		}
+
+		// Delete parent-dir should fail because child-of-dir is still present
+		err = store.Delete(ctx, dirID)
+		if err == nil {
+			t.Errorf("expected Delete on non-empty directory to fail, but it succeeded")
+		} else if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected ErrEntryConflict, got: %v", err)
+		}
+
+		// 4. Self move must fail
+		_, err = store.Move(ctx, dirID, dirID, "subdir")
+		if err == nil {
+			t.Errorf("expected self-move of directory to fail, but it succeeded")
+		} else if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected ErrEntryConflict on self-move, got: %v", err)
+		}
+
+		// 5. Descendant move must fail
+		childDirID := metadata.EntryID("child-dir")
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        childDirID,
+			ParentID:  &dirID,
+			Name:      "child_subdir",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create child directory: %v", err)
+		}
+
+		// Moving dirID ("parent-dir") to childDirID ("child-dir" which is its descendant) must fail
+		_, err = store.Move(ctx, dirID, childDirID, "parent-moved")
+		if err == nil {
+			t.Errorf("expected descendant move of directory to fail, but it succeeded")
+		} else if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "hierarchy cycle") {
+			t.Errorf("expected hierarchy cycle ErrEntryConflict, got: %v", err)
+		}
+
+		// 6. Delete on non-existent entry returns metadata.ErrEntryNotFound
+		fakeID := metadata.EntryID("non-existent-entry")
+		err = store.Delete(ctx, fakeID)
+		if !errors.Is(err, metadata.ErrEntryNotFound) {
+			t.Errorf("expected ErrEntryNotFound on non-existent delete, got: %v", err)
+		}
+
+		// 7. Delete on root returns metadata.ErrEntryConflict
+		err = store.Delete(ctx, "root")
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected ErrEntryConflict on root delete, got: %v", err)
+		}
+
+		// 8. Can delete file, and then it is no longer resolvable
+		err = store.Delete(ctx, childID)
+		if err != nil {
+			t.Fatalf("failed to delete child file: %v", err)
+		}
+		_, err = store.GetByID(ctx, childID)
+		if !errors.Is(err, metadata.ErrEntryNotFound) {
+			t.Errorf("expected ErrEntryNotFound after deletion, got: %v", err)
+		}
+
+		// Delete child subdirectory as well so that dirID has no children left
+		err = store.Delete(ctx, childDirID)
+		if err != nil {
+			t.Fatalf("failed to delete child subdirectory: %v", err)
+		}
+
+		// 9. Can delete leaf directory (since all its children are now deleted, parent-dir is a leaf)
+		err = store.Delete(ctx, dirID)
+		if err != nil {
+			t.Fatalf("failed to delete leaf directory: %v", err)
+		}
+		_, err = store.GetByID(ctx, dirID)
+		if !errors.Is(err, metadata.ErrEntryNotFound) {
+			t.Errorf("expected ErrEntryNotFound after leaf directory deletion, got: %v", err)
 		}
 	})
 }

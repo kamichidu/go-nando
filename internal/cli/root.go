@@ -162,6 +162,11 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func(), error) {
 		return nil, "", nil, fmt.Errorf("failed to open metadata store: %w", err)
 	}
 
+	if err := metaStore.CheckSchemaCompatibility(ctx); err != nil {
+		_ = metaStore.Close()
+		return nil, "", nil, err
+	}
+
 	objectsDir := filepath.Join(repoDir, "objects")
 	tempDir := filepath.Join(repoDir, "temp")
 	hasher := content.NewHasher()
@@ -184,7 +189,10 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func(), error) {
 
 // LogVerbose prints debug/tracing details to stderr if verbose logging is enabled.
 func LogVerbose(ctx context.Context, format string, args ...any) {
-	_, verbose, _ := ResolveRepositoryAndVerbose(ctx)
+	_, verbose, err := ResolveRepositoryAndVerbose(ctx)
+	if err != nil {
+		return
+	}
 	if verbose {
 		stderr := flagshim.MustStderrFromContext(ctx)
 		_, _ = fmt.Fprintf(stderr, "[verbose] "+format+"\n", args...)

@@ -3,10 +3,10 @@ package commands
 import (
 	"context"
 	"fmt"
-	"path"
 
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/internal/cli"
+	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/paths"
 )
 
@@ -50,8 +50,8 @@ func (c *LsCommand) Run(ctx context.Context, args []string) error {
 
 	stdout := flagshim.MustStdoutFromContext(ctx)
 	for _, entry := range entries {
-		name := path.Base(entry.Path)
-		if entry.IsDir {
+		name := entry.Name
+		if entry.Kind == metadata.EntryKindDirectory {
 			name += "/"
 		}
 		fmt.Fprintln(stdout, name)

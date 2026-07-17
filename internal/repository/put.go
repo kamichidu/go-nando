@@ -2,93 +2,114 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"mime"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/kamichidu/go-nando/internal/metadata"
+	"github.com/kamichidu/go-nando/internal/paths"
 )
 
 // Put imports a local file into the repository under the specified logical repository path.
 func (r *Repository) Put(ctx context.Context, localPath string, repoPath string) error {
-	// 1. Open the input file
-	file1, err := os.Open(localPath)
+	// 1. Normalize and validate destination
+	normalized, err := paths.NormalizeLogicalPath(repoPath)
 	if err != nil {
-		return fmt.Errorf("failed to open local file for hashing: %w", err)
+		return fmt.Errorf("invalid logical destination path: %w", err)
 	}
-	defer file1.Close()
 
-	// 2. Obtain size, mtime, mode, etc.
-	stat, err := file1.Stat()
+	if normalized == "/" {
+		return fmt.Errorf("cannot put a file directly over the root directory")
+	}
+
+	// 2. Open the local file once
+	file, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to open local file: %w", err)
+	}
+	defer file.Close()
+
+	localStat, err := file.Stat()
 	if err != nil {
 		return fmt.Errorf("failed to stat local file: %w", err)
 	}
 
-	if stat.IsDir() {
+	if localStat.IsDir() {
 		return fmt.Errorf("local path %q is a directory, directories cannot be put", localPath)
 	}
 
-	// 3. Calculate Content Hash
-	digest, err := r.hasher.Sum(ctx, file1)
+	// 3. Resolve or create the destination parent directory
+	parentID, err := r.ResolveOrCreateParentDirectories(ctx, normalized)
 	if err != nil {
-		return fmt.Errorf("failed to calculate hash of local file: %w", err)
+		return err
 	}
-	file1.Close() // Close early
 
-	hashStr := digest.String()
+	baseName := path.Base(normalized)
 
-	// 4. Check if same hash exists in Object Store
-	exists, err := r.objectStore.Exists(ctx, hashStr)
+	// 4. Commit the exact source byte stream through Object Store
+	res, err := r.objectStore.Commit(ctx, file)
 	if err != nil {
-		return fmt.Errorf("failed to check if object exists: %w", err)
+		return fmt.Errorf("failed to commit object: %w", err)
 	}
 
-	if !exists {
-		// 5. Save Object (re-open file)
-		file2, err := os.Open(localPath)
-		if err != nil {
-			return fmt.Errorf("failed to reopen local file for storing: %w", err)
-		}
-		defer file2.Close()
-
-		err = r.objectStore.Put(ctx, hashStr, file2)
-		if err != nil {
-			return fmt.Errorf("failed to store object: %w", err)
-		}
-		file2.Close() // Close early
-
-		// 6. Verify Object
-		err = r.objectStore.Verify(ctx, hashStr)
-		if err != nil {
-			return fmt.Errorf("failed to verify stored object: %w", err)
-		}
-	}
-
-	// 7. Update Metadata
+	// 5. Publish or replace committed metadata
 	contentType := mime.TypeByExtension(filepath.Ext(localPath))
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
 
-	now := time.Now().UTC()
-	entry := metadata.Entry{
-		Path:        repoPath,
-		Hash:        hashStr,
-		Size:        stat.Size(),
-		Mtime:       stat.ModTime().UTC(),
-		Mode:        uint32(stat.Mode()),
-		ContentType: contentType,
-		State:       metadata.StateReady,
-		IsDir:       false,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
+	now := time.Now().UTC().Truncate(time.Second)
 
-	err = r.metaStore.PutEntry(ctx, entry)
-	if err != nil {
-		return fmt.Errorf("failed to save entry metadata: %w", err)
+	// Check if entry already exists
+	existing, err := r.metaStore.GetChild(ctx, parentID, baseName)
+	if err == nil {
+		// Entry already exists!
+		if existing.Kind == metadata.EntryKindDirectory {
+			return fmt.Errorf("cannot replace directory %s with a file: %w", repoPath, metadata.ErrEntryConflict)
+		}
+
+		// Update existing file:
+		// - retain its immutable EntryID
+		// - increment its Revision is done inside metaStore.Update
+		// - preserve CreatedAt, update UpdatedAt
+		existing.ObjectID = &res.ID
+		existing.Size = res.Size
+		existing.Mtime = localStat.ModTime().UTC().Truncate(time.Second)
+		existing.Mode = uint32(localStat.Mode())
+		existing.ContentType = contentType
+
+		_, err = r.metaStore.Update(ctx, existing)
+		if err != nil {
+			return fmt.Errorf("failed to update entry metadata: %w", err)
+		}
+	} else if errors.Is(err, metadata.ErrEntryNotFound) {
+		// Create new file entry
+		newEntry := metadata.Entry{
+			ID:          metadata.EntryID(uuid.New().String()),
+			ParentID:    &parentID,
+			Name:        baseName,
+			Kind:        metadata.EntryKindFile,
+			ObjectID:    &res.ID,
+			Size:        res.Size,
+			Mtime:       localStat.ModTime().UTC().Truncate(time.Second),
+			Mode:        uint32(localStat.Mode()),
+			ContentType: contentType,
+			Revision:    1,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+
+		_, err = r.metaStore.Create(ctx, newEntry)
+		if err != nil {
+			return fmt.Errorf("failed to create entry metadata: %w", err)
+		}
+	} else {
+		return fmt.Errorf("failed to check existing entry: %w", err)
 	}
 
 	return nil

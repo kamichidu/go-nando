@@ -7,22 +7,28 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/kamichidu/go-nando/internal/metadata"
 )
 
 // Get exports a file from the repository to the local filesystem.
 func (r *Repository) Get(ctx context.Context, repoPath string, localPath string) error {
 	// 1. Retrieve the metadata entry
-	entry, err := r.metaStore.GetEntry(ctx, repoPath)
+	entry, err := r.ResolvePath(ctx, repoPath)
 	if err != nil {
 		return err
 	}
 
-	if entry.IsDir {
+	if entry.Kind == metadata.EntryKindDirectory {
 		return fmt.Errorf("repository path %q is a directory, directories cannot be exported", repoPath)
 	}
 
+	if entry.ObjectID == nil {
+		return fmt.Errorf("file entry %s has no associated object ID", entry.ID)
+	}
+
 	// 2. Open the object from the store
-	rc, err := r.objectStore.Open(ctx, entry.Hash)
+	rc, err := r.objectStore.Open(ctx, *entry.ObjectID)
 	if err != nil {
 		return fmt.Errorf("failed to open object for metadata entry: %w", err)
 	}
@@ -51,7 +57,6 @@ func (r *Repository) Get(ctx context.Context, repoPath string, localPath string)
 
 	// 5. Restore the original modification time (mtime)
 	if err := os.Chtimes(localPath, timeNow(), entry.Mtime); err != nil {
-		// Non-fatal, but we should log or return it if it is critical. We'll return it wrapped.
 		return fmt.Errorf("failed to restore file timestamps: %w", err)
 	}
 

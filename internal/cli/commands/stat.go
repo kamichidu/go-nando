@@ -7,6 +7,7 @@ import (
 
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/internal/cli"
+	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/paths"
 )
 
@@ -48,15 +49,26 @@ func (c *StatCommand) Run(ctx context.Context, args []string) error {
 		return err
 	}
 
+	canonicalPath, err := application.DeriveCanonicalPath(ctx, entry)
+	if err != nil {
+		return fmt.Errorf("failed to derive canonical path: %w", err)
+	}
+
 	stdout := flagshim.MustStdoutFromContext(ctx)
-	fmt.Fprintf(stdout, "Path:         %s\n", entry.Path)
-	fmt.Fprintf(stdout, "Hash:         %s\n", entry.Hash)
+	fmt.Fprintf(stdout, "Path:         %s\n", canonicalPath)
+	if entry.Kind == metadata.EntryKindFile {
+		if entry.ObjectID != nil {
+			fmt.Fprintf(stdout, "Hash:         %s\n", entry.ObjectID.String())
+		} else {
+			fmt.Fprintf(stdout, "Hash:         <nil>\n")
+		}
+	}
 	fmt.Fprintf(stdout, "Size:         %d bytes\n", entry.Size)
 	fmt.Fprintf(stdout, "Mtime:        %s\n", entry.Mtime.Format(time.RFC3339))
 	fmt.Fprintf(stdout, "Mode:         %o\n", entry.Mode)
 	fmt.Fprintf(stdout, "Content-Type: %s\n", entry.ContentType)
-	fmt.Fprintf(stdout, "State:        %s\n", entry.State)
-	fmt.Fprintf(stdout, "IsDir:        %t\n", entry.IsDir)
+	fmt.Fprintf(stdout, "Revision:     %d\n", entry.Revision)
+	fmt.Fprintf(stdout, "Kind:         %s\n", string(entry.Kind))
 	fmt.Fprintf(stdout, "Created At:   %s\n", entry.CreatedAt.Format(time.RFC3339))
 	fmt.Fprintf(stdout, "Updated At:   %s\n", entry.UpdatedAt.Format(time.RFC3339))
 

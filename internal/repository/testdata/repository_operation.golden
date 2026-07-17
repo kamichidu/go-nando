@@ -1,0 +1,38 @@
+OP: create directory /documents
+EntryID: dir-documents
+ParentID: root
+Name: documents
+Revision Before: - After: 1
+ObjectID Before: - After: -
+Parent Revision Before: 1 After: 1
+
+OP: put file /documents/hello.txt
+EntryID: file-hello
+ParentID: dir-documents
+Name: hello.txt
+Revision Before: - After: 1
+ObjectID Before: - After: 6640ec4d43fe9d18fcfee38caab6c91e3f231e17
+Parent Revision Before: 1 After: 1
+
+OP: replace file content /documents/hello.txt
+EntryID: file-hello
+ParentID: dir-documents
+Name: hello.txt
+Revision Before: 1 After: 2
+ObjectID Before: 6640ec4d43fe9d18fcfee38caab6c91e3f231e17 After: da39a3ee5e6b4b0d3255bfef95601890afd80709
+Parent Revision Before: 1 After: 1
+
+OP: move file /documents/hello.txt to /documents/greeting.txt
+EntryID: file-hello
+ParentID: dir-documents
+Name: greeting.txt
+Revision Before: 2 After: 3
+ObjectID Before: da39a3ee5e6b4b0d3255bfef95601890afd80709 After: da39a3ee5e6b4b0d3255bfef95601890afd80709
+Parent Revision Before: 1 After: 1
+
+OP: remove file /documents/greeting.txt
+EntryID: file-hello
+ParentID: dir-documents
+Name: greeting.txt
+Status: Deleted (Unresolvable)
+Parent Revision Before: 1 After: 1

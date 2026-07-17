@@ -1,0 +1,5 @@
+ID=root Parent=- Kind=directory Name= Revision=1
+ID=dir-documents Parent=root Kind=directory Name=documents Revision=1
+ID=file-hello Parent=dir-documents Kind=file Name=hello.txt Revision=3 Object=6640ec4d43fe9d18fcfee38caab6c91e3f231e17
+ID=dir-archive Parent=dir-documents Kind=directory Name=archive Revision=1
+ID=file-old Parent=dir-archive Kind=file Name=old.txt Revision=1 Object=da39a3ee5e6b4b0d3255bfef95601890afd80709
