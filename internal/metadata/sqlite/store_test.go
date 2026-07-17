@@ -1378,4 +1378,265 @@ func TestSQLiteStore(t *testing.T) {
 			t.Errorf("expected ErrEntryNotFound after deletion, got: %v", err)
 		}
 	})
+
+	t.Run("Create: non-existent parent rejects entry creation", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		nonExistentParent := metadata.EntryID("non-existent")
+		id := metadata.EntryID("file-id")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        id,
+			ParentID:  &nonExistentParent,
+			Name:      "file.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Size:      10,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "does not exist") {
+			t.Errorf("expected ErrEntryConflict for non-existent parent, got: %v", err)
+		}
+
+		// Verify entry was not saved
+		_, err = store.GetByID(ctx, id)
+		if !errors.Is(err, metadata.ErrEntryNotFound) {
+			t.Errorf("expected ErrEntryNotFound after failed creation, got: %v", err)
+		}
+	})
+
+	t.Run("Create: file parent rejects entry creation", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		fileID1 := metadata.EntryID("file-id-1")
+		fileID2 := metadata.EntryID("file-id-2")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		// Create first file to act as the invalid parent
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        fileID1,
+			ParentID:  &parentID,
+			Name:      "file1.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Size:      10,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create first file: %v", err)
+		}
+
+		// Try creating second file under the first file as its parent
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        fileID2,
+			ParentID:  &fileID1,
+			Name:      "file2.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Size:      10,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "must be a directory") {
+			t.Errorf("expected ErrEntryConflict for file as parent, got: %v", err)
+		}
+
+		// Verify second entry was not saved
+		_, err = store.GetByID(ctx, fileID2)
+		if !errors.Is(err, metadata.ErrEntryNotFound) {
+			t.Errorf("expected ErrEntryNotFound after failed creation, got: %v", err)
+		}
+	})
+
+	t.Run("Create: duplicate parent + name rejects entry creation", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		fileID1 := metadata.EntryID("file-id-1")
+		fileID2 := metadata.EntryID("file-id-2")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		// Create first file under root
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        fileID1,
+			ParentID:  &parentID,
+			Name:      "duplicate.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Size:      10,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create first file: %v", err)
+		}
+
+		// Try creating second file under root with the exact same name "duplicate.txt"
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        fileID2,
+			ParentID:  &parentID,
+			Name:      "duplicate.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Size:      10,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "already exists under parent") {
+			t.Errorf("expected ErrEntryConflict for duplicate parent + name, got: %v", err)
+		}
+
+		// Verify second entry was not saved
+		_, err = store.GetByID(ctx, fileID2)
+		if !errors.Is(err, metadata.ErrEntryNotFound) {
+			t.Errorf("expected ErrEntryNotFound for fileID2, got: %v", err)
+		}
+	})
+
+	t.Run("Create: successful creation saves expected attributes", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		id := metadata.EntryID("file-id")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		expected := metadata.Entry{
+			ID:          id,
+			ParentID:    &parentID,
+			Name:        "file.txt",
+			Kind:        metadata.EntryKindFile,
+			ObjectID:    &oid,
+			Size:        12345,
+			Mtime:       now.Truncate(time.Second),
+			Mode:        0644,
+			ContentType: "text/plain",
+			Revision:    1,
+			CreatedAt:   now.Truncate(time.Second),
+			UpdatedAt:   now.Truncate(time.Second),
+		}
+
+		created, err := store.Create(ctx, expected)
+		if err != nil {
+			t.Fatalf("failed to create entry: %v", err)
+		}
+
+		if created.ID != expected.ID {
+			t.Errorf("expected ID %s, got %s", expected.ID, created.ID)
+		}
+
+		dbEntry, err := store.GetByID(ctx, id)
+		if err != nil {
+			t.Fatalf("failed to retrieve entry: %v", err)
+		}
+
+		if dbEntry.ID != expected.ID ||
+			*dbEntry.ParentID != *expected.ParentID ||
+			dbEntry.Name != expected.Name ||
+			dbEntry.Kind != expected.Kind ||
+			*dbEntry.ObjectID != *expected.ObjectID ||
+			dbEntry.Size != expected.Size ||
+			!dbEntry.Mtime.Equal(expected.Mtime) ||
+			dbEntry.Mode != expected.Mode ||
+			dbEntry.ContentType != expected.ContentType ||
+			dbEntry.Revision != expected.Revision {
+			t.Errorf("retrieved entry attributes do not match expected: %+v vs %+v", dbEntry, expected)
+		}
+	})
+
+	t.Run("Create: concurrent creations with same parent + name result in at most 1 success", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		targetName := "concurrent_file.txt"
+
+		var wg sync.WaitGroup
+		errs := make(chan error, 5)
+
+		for i := 0; i < 5; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				id := metadata.EntryID(fmt.Sprintf("file-id-%d", idx))
+				_, createErr := store.Create(ctx, metadata.Entry{
+					ID:        id,
+					ParentID:  &parentID,
+					Name:      targetName,
+					Kind:      metadata.EntryKindFile,
+					ObjectID:  &oid,
+					Size:      10,
+					Revision:  1,
+					CreatedAt: now,
+					UpdatedAt: now,
+				})
+				if createErr != nil {
+					errs <- createErr
+				}
+			}(i)
+		}
+
+		wg.Wait()
+		close(errs)
+
+		var failures []error
+		for f := range errs {
+			failures = append(failures, f)
+		}
+
+		successCount := 5 - len(failures)
+		if successCount != 1 {
+			t.Errorf("expected exactly 1 success, got %d successes (failures: %v)", successCount, failures)
+		}
+
+		// Verify there is exactly 1 child with name targetName under parentID
+		children, err := store.ListChildren(ctx, parentID)
+		if err != nil {
+			t.Fatalf("failed to list children: %v", err)
+		}
+
+		matchCount := 0
+		for _, child := range children {
+			if child.Name == targetName {
+				matchCount++
+			}
+		}
+		if matchCount != 1 {
+			t.Errorf("expected exactly 1 child matching name %q under parent, got %d", targetName, matchCount)
+		}
+	})
 }

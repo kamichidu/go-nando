@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kamichidu/go-nando/internal/content"
@@ -203,14 +204,18 @@ func (s *Store) GetByID(ctx context.Context, id metadata.EntryID) (metadata.Entr
 	return s.getByID(ctx, s.db, id)
 }
 
-// GetChild retrieves a single metadata entry under parentID by its local name.
-func (s *Store) GetChild(ctx context.Context, parentID metadata.EntryID, name string) (metadata.Entry, error) {
-	row := s.db.QueryRowContext(ctx, `
+func (s *Store) getChild(ctx context.Context, q dbtx, parentID metadata.EntryID, name string) (metadata.Entry, error) {
+	row := q.QueryRowContext(ctx, `
 		SELECT entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at
 		FROM entries
 		WHERE parent_id = ? AND name = ?
 	`, parentID.String(), name)
 	return s.scanEntry(row)
+}
+
+// GetChild retrieves a single metadata entry under parentID by its local name.
+func (s *Store) GetChild(ctx context.Context, parentID metadata.EntryID, name string) (metadata.Entry, error) {
+	return s.getChild(ctx, s.db, parentID, name)
 }
 
 // ListChildren returns direct child entries under parentID.
@@ -236,8 +241,56 @@ func (s *Store) ListChildren(ctx context.Context, parentID metadata.EntryID) ([]
 	return entries, nil
 }
 
+func isNamespaceUniqueConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "UNIQUE constraint failed") &&
+		strings.Contains(s, "parent_id") &&
+		strings.Contains(s, "name")
+}
+
+func (s *Store) validateCreateInvariants(ctx context.Context, q dbtx, entry metadata.Entry) error {
+	// If ParentID is specified, verify its existence and that it is a directory.
+	if entry.ParentID != nil {
+		parent, err := s.getByID(ctx, q, *entry.ParentID)
+		if err != nil {
+			if errors.Is(err, metadata.ErrEntryNotFound) {
+				return fmt.Errorf("%w: parent entry %s does not exist", metadata.ErrEntryConflict, *entry.ParentID)
+			}
+			return fmt.Errorf("failed to verify parent existence: %w", err)
+		}
+		if parent.Kind != metadata.EntryKindDirectory {
+			return fmt.Errorf("%w: parent entry %s must be a directory, but got %s", metadata.ErrEntryConflict, *entry.ParentID, parent.Kind)
+		}
+
+		// namespace collision check
+		_, err = s.getChild(ctx, q, *entry.ParentID, entry.Name)
+		switch {
+		case err == nil:
+			return fmt.Errorf("%w: entry %q already exists under parent %s", metadata.ErrEntryConflict, entry.Name, *entry.ParentID)
+		case errors.Is(err, metadata.ErrEntryNotFound):
+			return nil
+		default:
+			return fmt.Errorf("failed to verify entry uniqueness: %w", err)
+		}
+	}
+	return nil
+}
+
 // Create inserts a new entry into SQLite.
 func (s *Store) Create(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return metadata.Entry{}, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := s.validateCreateInvariants(ctx, tx, entry); err != nil {
+		return metadata.Entry{}, err
+	}
+
 	var parentIDVal sql.NullString
 	if entry.ParentID != nil {
 		parentIDVal = sql.NullString{String: entry.ParentID.String(), Valid: true}
@@ -248,7 +301,7 @@ func (s *Store) Create(ctx context.Context, entry metadata.Entry) (metadata.Entr
 		objectIDVal = sql.NullString{String: entry.ObjectID.String(), Valid: true}
 	}
 
-	_, err := s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO entries (
 			entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -267,7 +320,18 @@ func (s *Store) Create(ctx context.Context, entry metadata.Entry) (metadata.Entr
 		entry.UpdatedAt.Format(time.RFC3339),
 	)
 	if err != nil {
+		if isNamespaceUniqueConstraintError(err) {
+			parentIDStr := ""
+			if entry.ParentID != nil {
+				parentIDStr = entry.ParentID.String()
+			}
+			return metadata.Entry{}, fmt.Errorf("%w: entry %q already exists under parent %s", metadata.ErrEntryConflict, entry.Name, parentIDStr)
+		}
 		return metadata.Entry{}, fmt.Errorf("%w: failed to create entry: %w", metadata.ErrEntryConflict, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return metadata.Entry{}, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return entry, nil
