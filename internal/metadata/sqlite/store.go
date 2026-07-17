@@ -273,10 +273,10 @@ func (s *Store) Create(ctx context.Context, entry metadata.Entry) (metadata.Entr
 	return entry, nil
 }
 
-func (s *Store) validateUpdateInvariants(ctx context.Context, entry metadata.Entry) error {
+func (s *Store) validateUpdateInvariants(ctx context.Context, q dbtx, entry metadata.Entry) error {
 	// 5. Parent existence and parent kind validation
 	if entry.ParentID != nil {
-		parent, err := s.GetByID(ctx, *entry.ParentID)
+		parent, err := s.getByID(ctx, q, *entry.ParentID)
 		if err != nil {
 			if errors.Is(err, metadata.ErrEntryNotFound) {
 				return fmt.Errorf("%w: parent entry %s does not exist", metadata.ErrEntryConflict, *entry.ParentID)
@@ -301,7 +301,7 @@ func (s *Store) validateUpdateInvariants(ctx context.Context, entry metadata.Ent
 			}
 			visited[currentParentID] = true
 
-			parentEntry, err := s.GetByID(ctx, currentParentID)
+			parentEntry, err := s.getByID(ctx, q, currentParentID)
 			if err != nil {
 				return fmt.Errorf("failed to verify ancestry for %s: %w", currentParentID, err)
 			}
@@ -317,7 +317,25 @@ func (s *Store) validateUpdateInvariants(ctx context.Context, entry metadata.Ent
 
 // Update updates an existing entry in SQLite after performing basic invariant validation.
 func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
-	if err := s.validateUpdateInvariants(ctx, entry); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return metadata.Entry{}, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Verify target entry existence and current revision for optimistic concurrency check
+	existing, err := s.getByID(ctx, tx, entry.ID)
+	if err != nil {
+		if errors.Is(err, metadata.ErrEntryNotFound) {
+			return metadata.Entry{}, metadata.ErrEntryNotFound
+		}
+		return metadata.Entry{}, fmt.Errorf("failed to verify target entry existence: %w", err)
+	}
+	if existing.Revision != entry.Revision {
+		return metadata.Entry{}, fmt.Errorf("%w: optimistic concurrency conflict: current revision %d, update request revision %d", metadata.ErrEntryConflict, existing.Revision, entry.Revision)
+	}
+
+	if err := s.validateUpdateInvariants(ctx, tx, entry); err != nil {
 		return metadata.Entry{}, err
 	}
 
@@ -333,7 +351,7 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 
 	newRevision := entry.Revision + 1
 
-	res, err := s.db.ExecContext(ctx, `
+	res, err := tx.ExecContext(ctx, `
 		UPDATE entries SET
 			parent_id = ?,
 			name = ?,
@@ -345,7 +363,7 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 			content_type = ?,
 			revision = ?,
 			updated_at = ?
-		WHERE entry_id = ?
+		WHERE entry_id = ? AND revision = ?
 	`,
 		parentIDVal,
 		entry.Name,
@@ -358,6 +376,7 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 		newRevision,
 		time.Now().UTC().Format(time.RFC3339),
 		entry.ID.String(),
+		entry.Revision,
 	)
 	if err != nil {
 		return metadata.Entry{}, fmt.Errorf("%w: failed to update entry: %w", metadata.ErrEntryConflict, err)
@@ -368,7 +387,11 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 		return metadata.Entry{}, fmt.Errorf("failed to check rows affected: %w", err)
 	}
 	if rows == 0 {
-		return metadata.Entry{}, metadata.ErrEntryNotFound
+		return metadata.Entry{}, metadata.ErrEntryConflict
+	}
+
+	if err := tx.Commit(); err != nil {
+		return metadata.Entry{}, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	updatedEntry := entry
@@ -462,10 +485,16 @@ func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metad
 	return entry, nil
 }
 
-// Delete deletes an entry from SQLite atomically, preventing non-empty directory deletion inside the query.
+// Delete deletes an entry from SQLite atomically inside a transaction, preventing non-empty directory deletion.
 func (s *Store) Delete(ctx context.Context, id metadata.EntryID) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	// Attempt atomic DELETE of the entry if it's not root and has no children referencing it as parent_id
-	res, err := s.db.ExecContext(ctx, `
+	res, err := tx.ExecContext(ctx, `
 		DELETE FROM entries
 		WHERE entry_id = ?
 		  AND entry_id != 'root'
@@ -482,18 +511,21 @@ func (s *Store) Delete(ctx context.Context, id metadata.EntryID) error {
 		return fmt.Errorf("failed to check rows affected: %w", err)
 	}
 
-	// If successfully deleted, return nil immediately (no pre-queries in the happy path!)
+	// If successfully deleted, commit and return nil immediately (no pre-queries in the happy path!)
 	if rows == 1 {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit transaction: %w", err)
+		}
 		return nil
 	}
 
-	// RowsAffected == 0: Perform additional checks to determine the exact failure reason
+	// RowsAffected == 0: Perform additional checks inside the transaction to determine the exact failure reason
 	if id == "root" {
 		return fmt.Errorf("%w: operation on root entry is forbidden", metadata.ErrEntryConflict)
 	}
 
 	// Check if the entry exists
-	_, err = s.GetByID(ctx, id)
+	_, err = s.getByID(ctx, tx, id)
 	if err != nil {
 		if errors.Is(err, metadata.ErrEntryNotFound) {
 			return metadata.ErrEntryNotFound

@@ -977,4 +977,405 @@ func TestSQLiteStore(t *testing.T) {
 			t.Errorf("mutual cycle was created! both parent IDs point to each other")
 		}
 	})
+
+	t.Run("Update: rejects update on revision conflict", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		id := metadata.EntryID("file-id")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		entry, err := store.Create(ctx, metadata.Entry{
+			ID:        id,
+			ParentID:  &parentID,
+			Name:      "file.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Size:      10,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		// Update entry once, which will increment its revision in DB to 2
+		entry.Size = 20
+		_, err = store.Update(ctx, entry)
+		if err != nil {
+			t.Fatalf("failed to update first time: %v", err)
+		}
+
+		// Try updating with the old entry (which still has Revision 1)
+		entry.Size = 30
+		_, err = store.Update(ctx, entry)
+		if !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("expected ErrEntryConflict due to revision conflict, got: %v", err)
+		}
+
+		// Verify database still has Size 20 and Revision 2
+		dbEntry, err := store.GetByID(ctx, id)
+		if err != nil {
+			t.Fatalf("failed to get: %v", err)
+		}
+		if dbEntry.Size != 20 {
+			t.Errorf("expected Size 20, got %d", dbEntry.Size)
+		}
+		if dbEntry.Revision != 2 {
+			t.Errorf("expected Revision 2, got %d", dbEntry.Revision)
+		}
+	})
+
+	t.Run("Update: no partial update and rollback on cycle detection failure", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		dirAID := metadata.EntryID("dir-A")
+		dirBID := metadata.EntryID("dir-B")
+		now := time.Now().UTC()
+
+		dirA, err := store.Create(ctx, metadata.Entry{
+			ID:        dirAID,
+			ParentID:  &parentID,
+			Name:      "dirA",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create dirA: %v", err)
+		}
+
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        dirBID,
+			ParentID:  &dirAID,
+			Name:      "dirB",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create dirB: %v", err)
+		}
+
+		// Change dirA to point to dirB (cycle!) and try updating name/size
+		dirA.ParentID = &dirBID
+		dirA.Name = "mutatedDirA"
+
+		_, err = store.Update(ctx, dirA)
+		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "hierarchy cycle detected") {
+			t.Errorf("expected cycle detection error, got: %v", err)
+		}
+
+		// Verify database still has original dirA values
+		dbDirA, err := store.GetByID(ctx, dirAID)
+		if err != nil {
+			t.Fatalf("failed to get: %v", err)
+		}
+		if *dbDirA.ParentID != "root" {
+			t.Errorf("expected ParentID 'root', got %v", *dbDirA.ParentID)
+		}
+		if dbDirA.Name != "dirA" {
+			t.Errorf("expected Name 'dirA', got %q", dbDirA.Name)
+		}
+	})
+
+	t.Run("Update: revision increments by exactly 1 on successful update", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		id := metadata.EntryID("file-id")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		entry, err := store.Create(ctx, metadata.Entry{
+			ID:        id,
+			ParentID:  &parentID,
+			Name:      "file.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Size:      10,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		entry.Size = 20
+		updated, err := store.Update(ctx, entry)
+		if err != nil {
+			t.Fatalf("failed to update: %v", err)
+		}
+
+		if updated.Revision != 2 {
+			t.Errorf("expected revision to be 2, got %d", updated.Revision)
+		}
+
+		dbEntry, err := store.GetByID(ctx, id)
+		if err != nil {
+			t.Fatalf("failed to get from DB: %v", err)
+		}
+		if dbEntry.Revision != 2 {
+			t.Errorf("expected revision in DB to be 2, got %d", dbEntry.Revision)
+		}
+	})
+
+	t.Run("Update: concurrent updates with same revision result in at most 1 success", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		id := metadata.EntryID("file-id")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		entry, err := store.Create(ctx, metadata.Entry{
+			ID:        id,
+			ParentID:  &parentID,
+			Name:      "file.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Size:      10,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		var wg sync.WaitGroup
+		errs := make(chan error, 5)
+
+		// Fire 5 concurrent updates using the exact same Revision 1
+		for i := 0; i < 5; i++ {
+			wg.Add(1)
+			go func(val int64) {
+				defer wg.Done()
+				updateReq := entry
+				updateParams := val
+				updateReq.Size = updateParams
+				_, updateErr := store.Update(ctx, updateReq)
+				if updateErr != nil {
+					errs <- updateErr
+				}
+			}(int64(100 + i))
+		}
+
+		wg.Wait()
+		close(errs)
+
+		var failures []error
+		for f := range errs {
+			failures = append(failures, f)
+		}
+
+		successCount := 5 - len(failures)
+		if successCount != 1 {
+			t.Errorf("expected exactly 1 success, got %d successes (failures: %v)", successCount, failures)
+		}
+
+		// Verify that the final revision in the database is exactly 2 and the value was actually updated to one of the concurrently requested sizes
+		dbEntry, err := store.GetByID(ctx, id)
+		if err != nil {
+			t.Fatalf("failed to retrieve entry: %v", err)
+		}
+		if dbEntry.Revision != 2 {
+			t.Errorf("expected final revision to be 2, got %d", dbEntry.Revision)
+		}
+		if dbEntry.Size < 100 || dbEntry.Size > 104 {
+			t.Errorf("expected final size to be between 100 and 104, got %d", dbEntry.Size)
+		}
+	})
+
+	t.Run("Delete: non-empty directory is not deleted and target remains on failure", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		rootID := metadata.EntryID("root")
+		now := time.Now().UTC()
+
+		dirID := metadata.EntryID("parent-dir")
+		_, err := store.Create(ctx, metadata.Entry{
+			ID:        dirID,
+			ParentID:  &rootID,
+			Name:      "subdir",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create directory: %v", err)
+		}
+
+		childID := metadata.EntryID("child-dir")
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        childID,
+			ParentID:  &dirID,
+			Name:      "child_subdir",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create child: %v", err)
+		}
+
+		// Try to delete parent-dir
+		err = store.Delete(ctx, dirID)
+		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "cannot delete non-empty directory") {
+			t.Errorf("expected non-empty directory error, got: %v", err)
+		}
+
+		// Verify target parent-dir still exists (no rollback failure!)
+		_, err = store.GetByID(ctx, dirID)
+		if err != nil {
+			t.Errorf("expected directory to remain, but got error: %v", err)
+		}
+	})
+
+	t.Run("Delete: target is deleted but unrelated elements are untouched", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		rootID := metadata.EntryID("root")
+		now := time.Now().UTC()
+
+		id1 := metadata.EntryID("file-1")
+		id2 := metadata.EntryID("file-2")
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        id1,
+			ParentID:  &rootID,
+			Name:      "file1.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        id2,
+			ParentID:  &rootID,
+			Name:      "file2.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		// Delete file-1
+		err = store.Delete(ctx, id1)
+		if err != nil {
+			t.Fatalf("expected delete to succeed, got %v", err)
+		}
+
+		// Verify id1 is deleted
+		_, err = store.GetByID(ctx, id1)
+		if !errors.Is(err, metadata.ErrEntryNotFound) {
+			t.Errorf("expected ErrEntryNotFound for deleted entry, got: %v", err)
+		}
+
+		// Verify id2 remains completely untouched
+		dbEntry2, err := store.GetByID(ctx, id2)
+		if err != nil {
+			t.Fatalf("expected unrelated element to remain, got: %v", err)
+		}
+		if dbEntry2.ID != id2 {
+			t.Errorf("expected ID %s, got %s", id2, dbEntry2.ID)
+		}
+	})
+
+	t.Run("Delete: concurrent deletes targeting same entry result in at most 1 success", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		rootID := metadata.EntryID("root")
+		now := time.Now().UTC()
+
+		id := metadata.EntryID("file-1")
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        id,
+			ParentID:  &rootID,
+			Name:      "file1.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		var wg sync.WaitGroup
+		errs := make(chan error, 5)
+
+		for i := 0; i < 5; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				deleteErr := store.Delete(ctx, id)
+				if deleteErr != nil {
+					errs <- deleteErr
+				}
+			}()
+		}
+
+		wg.Wait()
+		close(errs)
+
+		var failures []error
+		for f := range errs {
+			failures = append(failures, f)
+		}
+
+		successCount := 5 - len(failures)
+		if successCount != 1 {
+			t.Errorf("expected exactly 1 successful delete, got %d successes (failures: %v)", successCount, failures)
+		}
+
+		// Verify that the entry no longer exists in the database
+		_, err = store.GetByID(ctx, id)
+		if !errors.Is(err, metadata.ErrEntryNotFound) {
+			t.Errorf("expected ErrEntryNotFound after deletion, got: %v", err)
+		}
+	})
 }
