@@ -465,6 +465,73 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 	return updatedEntry, nil
 }
 
+func (s *Store) validateMoveInvariants(
+	ctx context.Context,
+	q dbtx,
+	current metadata.Entry,
+	parentID metadata.EntryID,
+	name string,
+) error {
+	parent, err := s.getByID(ctx, q, parentID)
+	if err != nil {
+		if errors.Is(err, metadata.ErrEntryNotFound) {
+			return fmt.Errorf("%w: parent entry %s does not exist", metadata.ErrEntryConflict, parentID)
+		}
+		return fmt.Errorf("failed to verify parent existence: %w", err)
+	}
+	if parent.Kind != metadata.EntryKindDirectory {
+		return fmt.Errorf("%w: parent entry %s must be a directory, but got %s", metadata.ErrEntryConflict, parentID, parent.Kind)
+	}
+
+	if current.Kind == metadata.EntryKindDirectory {
+		if err := s.ensureMoveDoesNotCreateCycle(ctx, q, current.ID, parentID); err != nil {
+			return err
+		}
+	}
+
+	existing, err := s.getChild(ctx, q, parentID, name)
+	switch {
+	case err == nil && existing.ID != current.ID:
+		return fmt.Errorf("%w: entry %q already exists under parent %s", metadata.ErrEntryConflict, name, parentID)
+	case err == nil:
+		// No-op for same parent + name is allowed
+		return nil
+	case errors.Is(err, metadata.ErrEntryNotFound):
+		return nil
+	default:
+		return fmt.Errorf("failed to verify destination namespace: %w", err)
+	}
+}
+
+func (s *Store) ensureMoveDoesNotCreateCycle(
+	ctx context.Context,
+	q dbtx,
+	entryID metadata.EntryID,
+	parentID metadata.EntryID,
+) error {
+	current := parentID
+	visited := make(map[metadata.EntryID]bool)
+	for current != "root" {
+		if current == entryID {
+			return fmt.Errorf("%w: directory cannot be moved under its own descendant (hierarchy cycle)", metadata.ErrEntryConflict)
+		}
+		if visited[current] {
+			return fmt.Errorf("%w: cycle detected in parent ancestry during move", metadata.ErrEntryConflict)
+		}
+		visited[current] = true
+
+		p, err := s.getByID(ctx, q, current)
+		if err != nil {
+			return fmt.Errorf("failed to verify ancestry during move: %w", err)
+		}
+		if p.ParentID == nil {
+			break
+		}
+		current = *p.ParentID
+	}
+	return nil
+}
+
 // Move moves/renames an entry in SQLite.
 func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metadata.EntryID, newName string) (metadata.Entry, error) {
 	if id == newParentID {
@@ -477,7 +544,7 @@ func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metad
 	}
 	defer tx.Rollback()
 
-	entry, err := s.getByID(ctx, tx, id)
+	current, err := s.getByID(ctx, tx, id)
 	if err != nil {
 		if errors.Is(err, metadata.ErrEntryNotFound) {
 			return metadata.Entry{}, err
@@ -485,31 +552,12 @@ func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metad
 		return metadata.Entry{}, fmt.Errorf("failed to get entry inside transaction: %w", err)
 	}
 
-	if entry.Kind == metadata.EntryKindDirectory {
-		// Ancestry / descendant cycle check
-		current := newParentID
-		visited := make(map[metadata.EntryID]bool)
-		for current != "root" {
-			if current == id {
-				return metadata.Entry{}, fmt.Errorf("%w: directory cannot be moved under its own descendant (hierarchy cycle)", metadata.ErrEntryConflict)
-			}
-			if visited[current] {
-				return metadata.Entry{}, fmt.Errorf("%w: cycle detected in parent ancestry during move", metadata.ErrEntryConflict)
-			}
-			visited[current] = true
-
-			p, err := s.getByID(ctx, tx, current)
-			if err != nil {
-				return metadata.Entry{}, fmt.Errorf("failed to verify ancestry during move: %w", err)
-			}
-			if p.ParentID == nil {
-				break
-			}
-			current = *p.ParentID
-		}
+	if err := s.validateMoveInvariants(ctx, tx, current, newParentID, newName); err != nil {
+		return metadata.Entry{}, err
 	}
 
-	newRevision := entry.Revision + 1
+	newRevision := current.Revision + 1
+	now := time.Now().UTC()
 
 	res, err := tx.ExecContext(ctx, `
 		UPDATE entries SET
@@ -517,15 +565,19 @@ func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metad
 			name = ?,
 			revision = ?,
 			updated_at = ?
-		WHERE entry_id = ?
+		WHERE entry_id = ? AND revision = ?
 	`,
 		newParentID.String(),
 		newName,
 		newRevision,
-		time.Now().UTC().Format(time.RFC3339),
+		now.Format(time.RFC3339),
 		id.String(),
+		current.Revision,
 	)
 	if err != nil {
+		if isNamespaceUniqueConstraintError(err) {
+			return metadata.Entry{}, fmt.Errorf("%w: entry %q already exists under parent %s", metadata.ErrEntryConflict, newName, newParentID)
+		}
 		return metadata.Entry{}, fmt.Errorf("%w: failed to move entry: %w", metadata.ErrEntryConflict, err)
 	}
 
@@ -534,19 +586,19 @@ func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metad
 		return metadata.Entry{}, fmt.Errorf("failed to check rows affected: %w", err)
 	}
 	if rows == 0 {
-		return metadata.Entry{}, metadata.ErrEntryNotFound
+		return metadata.Entry{}, metadata.ErrEntryConflict
 	}
 
 	if err := tx.Commit(); err != nil {
 		return metadata.Entry{}, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	entry.ParentID = &newParentID
-	entry.Name = newName
-	entry.Revision = newRevision
-	entry.UpdatedAt = time.Now().UTC()
+	current.ParentID = &newParentID
+	current.Name = newName
+	current.Revision = newRevision
+	current.UpdatedAt = now
 
-	return entry, nil
+	return current, nil
 }
 
 // Delete deletes an entry from SQLite atomically inside a transaction, preventing non-empty directory deletion.

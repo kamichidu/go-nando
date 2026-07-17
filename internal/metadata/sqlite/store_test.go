@@ -1639,4 +1639,453 @@ func TestSQLiteStore(t *testing.T) {
 			t.Errorf("expected exactly 1 child matching name %q under parent, got %d", targetName, matchCount)
 		}
 	})
+
+	t.Run("Move: non-existent destination parent rejects move", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		fileID := metadata.EntryID("file-id")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        fileID,
+			ParentID:  &parentID,
+			Name:      "file.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		nonExistentParent := metadata.EntryID("non-existent")
+		_, err = store.Move(ctx, fileID, nonExistentParent, "moved.txt")
+		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "does not exist") {
+			t.Errorf("expected ErrEntryConflict for non-existent parent, got: %v", err)
+		}
+
+		// Verify state is unmodified
+		dbEntry, err := store.GetByID(ctx, fileID)
+		if err != nil {
+			t.Fatalf("failed to get: %v", err)
+		}
+		if *dbEntry.ParentID != parentID {
+			t.Errorf("expected ParentID %s, got %s", parentID, *dbEntry.ParentID)
+		}
+		if dbEntry.Name != "file.txt" {
+			t.Errorf("expected Name 'file.txt', got %q", dbEntry.Name)
+		}
+	})
+
+	t.Run("Move: file destination parent rejects move", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		fileID1 := metadata.EntryID("file-1")
+		fileID2 := metadata.EntryID("file-2")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        fileID1,
+			ParentID:  &parentID,
+			Name:      "file1.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        fileID2,
+			ParentID:  &parentID,
+			Name:      "file2.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		// Try to move file-2 under file-1 as its parent
+		_, err = store.Move(ctx, fileID2, fileID1, "moved.txt")
+		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "must be a directory") {
+			t.Errorf("expected ErrEntryConflict for file as parent, got: %v", err)
+		}
+
+		// Verify state is unmodified
+		dbEntry, err := store.GetByID(ctx, fileID2)
+		if err != nil {
+			t.Fatalf("failed to get: %v", err)
+		}
+		if *dbEntry.ParentID != parentID {
+			t.Errorf("expected ParentID %s, got %s", parentID, *dbEntry.ParentID)
+		}
+	})
+
+	t.Run("Move: cycle-creating move rejects move and original state remains", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		dirAID := metadata.EntryID("dir-A")
+		dirBID := metadata.EntryID("dir-B")
+		now := time.Now().UTC()
+
+		_, err := store.Create(ctx, metadata.Entry{
+			ID:        dirAID,
+			ParentID:  &parentID,
+			Name:      "dirA",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create dirA: %v", err)
+		}
+
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        dirBID,
+			ParentID:  &dirAID,
+			Name:      "dirB",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create dirB: %v", err)
+		}
+
+		// Try to move dir-A under dir-B (its own child/descendant!)
+		_, err = store.Move(ctx, dirAID, dirBID, "dirA")
+		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "hierarchy cycle") {
+			t.Errorf("expected cycle detection ErrEntryConflict, got: %v", err)
+		}
+
+		// Verify original states are maintained
+		dbDirA, err := store.GetByID(ctx, dirAID)
+		if err != nil {
+			t.Fatalf("failed to get dirA: %v", err)
+		}
+		if *dbDirA.ParentID != parentID {
+			t.Errorf("expected dirA parent %s, got %s", parentID, *dbDirA.ParentID)
+		}
+	})
+
+	t.Run("Move: duplicate destination namespace rejects move", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		fileID1 := metadata.EntryID("file-1")
+		fileID2 := metadata.EntryID("file-2")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        fileID1,
+			ParentID:  &parentID,
+			Name:      "file1.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        fileID2,
+			ParentID:  &parentID,
+			Name:      "file2.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		// Try to rename file-2 to "file1.txt" (name of file-1 under root!)
+		_, err = store.Move(ctx, fileID2, parentID, "file1.txt")
+		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "already exists under parent") {
+			t.Errorf("expected ErrEntryConflict due to name collision, got: %v", err)
+		}
+
+		// Verify state is unmodified
+		dbEntry, err := store.GetByID(ctx, fileID2)
+		if err != nil {
+			t.Fatalf("failed to get: %v", err)
+		}
+		if dbEntry.Name != "file2.txt" {
+			t.Errorf("expected Name 'file2.txt', got %q", dbEntry.Name)
+		}
+	})
+
+	t.Run("Move: successful move renames and increments revision", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		fileID := metadata.EntryID("file-id")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        fileID,
+			ParentID:  &parentID,
+			Name:      "file.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		moved, err := store.Move(ctx, fileID, parentID, "renamed.txt")
+		if err != nil {
+			t.Fatalf("expected Move to succeed, got %v", err)
+		}
+
+		if moved.Name != "renamed.txt" {
+			t.Errorf("expected renamed.txt, got %q", moved.Name)
+		}
+		if moved.Revision != 2 {
+			t.Errorf("expected Revision 2, got %d", moved.Revision)
+		}
+
+		dbEntry, err := store.GetByID(ctx, fileID)
+		if err != nil {
+			t.Fatalf("failed to get from DB: %v", err)
+		}
+		if dbEntry.Name != "renamed.txt" {
+			t.Errorf("expected renamed.txt in DB, got %q", dbEntry.Name)
+		}
+		if dbEntry.Revision != 2 {
+			t.Errorf("expected Revision 2 in DB, got %d", dbEntry.Revision)
+		}
+	})
+
+	t.Run("Move: concurrent moves on same entry result in exactly 1 success", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		// Temporarily allow more connections to simulate parallel transactions
+		store.db.SetMaxOpenConns(10)
+		defer store.db.SetMaxOpenConns(1)
+
+		rootID := metadata.EntryID("root")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		// Create dest subdirectories
+		subIDs := []metadata.EntryID{"sub-1", "sub-2", "sub-3", "sub-4", "sub-5"}
+		for _, subID := range subIDs {
+			_, err = store.Create(ctx, metadata.Entry{
+				ID:        subID,
+				ParentID:  &rootID,
+				Name:      string(subID),
+				Kind:      metadata.EntryKindDirectory,
+				Revision:  1,
+				CreatedAt: now,
+				UpdatedAt: now,
+			})
+			if err != nil {
+				t.Fatalf("failed to create subdirectory: %v", err)
+			}
+		}
+
+		// Create file under root
+		fileID := metadata.EntryID("file-id")
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        fileID,
+			ParentID:  &rootID,
+			Name:      "file.txt",
+			Kind:      metadata.EntryKindFile,
+			ObjectID:  &oid,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		var wg sync.WaitGroup
+		errs := make(chan error, 5)
+
+		// Fire 5 concurrent Moves of the same file to different subdirectories
+		for i := 0; i < 5; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				_, moveErr := store.Move(ctx, fileID, subIDs[idx], fmt.Sprintf("renamed-%d.txt", idx))
+				if moveErr != nil {
+					errs <- moveErr
+				}
+			}(i)
+		}
+
+		wg.Wait()
+		close(errs)
+
+		var failures []error
+		for f := range errs {
+			failures = append(failures, f)
+		}
+
+		successCount := 5 - len(failures)
+		if successCount != 1 {
+			t.Errorf("expected exactly 1 success, got %d successes (failures: %v)", successCount, failures)
+		}
+
+		// Verify the entry exists in exactly one location
+		dbEntry, err := store.GetByID(ctx, fileID)
+		if err != nil {
+			t.Fatalf("failed to retrieve entry: %v", err)
+		}
+
+		foundLocation := false
+		for idx, subID := range subIDs {
+			if *dbEntry.ParentID == subID && dbEntry.Name == fmt.Sprintf("renamed-%d.txt", idx) {
+				foundLocation = true
+				break
+			}
+		}
+		if !foundLocation {
+			t.Errorf("entry was not found in any of the expected destination locations: %+v", dbEntry)
+		}
+	})
+
+	t.Run("Move: concurrent moves on different entries to same destination result in at most 1 success", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		// Temporarily allow more connections to simulate parallel transactions
+		store.db.SetMaxOpenConns(10)
+		defer store.db.SetMaxOpenConns(1)
+
+		rootID := metadata.EntryID("root")
+		now := time.Now().UTC()
+		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		if err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+
+		// Create files under root
+		fileIDs := []metadata.EntryID{"file-1", "file-2", "file-3", "file-4", "file-5"}
+		for _, fileID := range fileIDs {
+			_, err = store.Create(ctx, metadata.Entry{
+				ID:        fileID,
+				ParentID:  &rootID,
+				Name:      fmt.Sprintf("%s.txt", fileID),
+				Kind:      metadata.EntryKindFile,
+				ObjectID:  &oid,
+				Revision:  1,
+				CreatedAt: now,
+				UpdatedAt: now,
+			})
+			if err != nil {
+				t.Fatalf("failed to create: %v", err)
+			}
+		}
+
+		// Create target subdirectory
+		destID := metadata.EntryID("dest-sub")
+		_, err = store.Create(ctx, metadata.Entry{
+			ID:        destID,
+			ParentID:  &rootID,
+			Name:      "destination",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		targetName := "same_name.txt"
+
+		var wg sync.WaitGroup
+		errs := make(chan error, 5)
+
+		// Fire 5 concurrent Moves of different files to the exact same dest ID and Name
+		for i := 0; i < 5; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				_, moveErr := store.Move(ctx, fileIDs[idx], destID, targetName)
+				if moveErr != nil {
+					errs <- moveErr
+				}
+			}(i)
+		}
+
+		wg.Wait()
+		close(errs)
+
+		var failures []error
+		for f := range errs {
+			failures = append(failures, f)
+		}
+
+		successCount := 5 - len(failures)
+		if successCount != 1 {
+			t.Errorf("expected exactly 1 success, got %d successes (failures: %v)", successCount, failures)
+		}
+
+		// Verify there is exactly 1 entry with targetName under destID
+		children, err := store.ListChildren(ctx, destID)
+		if err != nil {
+			t.Fatalf("failed to list children: %v", err)
+		}
+
+		matchCount := 0
+		for _, child := range children {
+			if child.Name == targetName {
+				matchCount++
+			}
+		}
+		if matchCount != 1 {
+			t.Errorf("expected exactly 1 matching entry under destination directory, got %d", matchCount)
+		}
+	})
 }
