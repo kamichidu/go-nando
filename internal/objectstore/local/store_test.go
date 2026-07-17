@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/kamichidu/go-nando/internal/content"
@@ -206,4 +207,154 @@ func TestLocalStore(t *testing.T) {
 			t.Errorf("golden file must contain path %q", expectedEmptyPath)
 		}
 	})
+
+	t.Run("Do not overwrite existing object with different content", func(t *testing.T) {
+		store, rootDir := setupStore(t)
+		contentStr := "original correct content"
+
+		res, err := store.Commit(ctx, strings.NewReader(contentStr))
+		if err != nil {
+			t.Fatalf("failed to commit: %v", err)
+		}
+
+		destPath := filepath.Join(rootDir, "objects", res.ID.String())
+		data, err := os.ReadFile(destPath)
+		if err != nil {
+			t.Fatalf("failed to read committed file: %v", err)
+		}
+		if string(data) != contentStr {
+			t.Fatalf("expected file to have original content, got %q", string(data))
+		}
+
+		corruptContent := "some corrupted or different content"
+		err = os.WriteFile(destPath, []byte(corruptContent), 0644)
+		if err != nil {
+			t.Fatalf("failed to write corrupt file: %v", err)
+		}
+
+		_, err = store.Commit(ctx, strings.NewReader(contentStr))
+		if !errors.Is(err, objectstore.ErrHashMismatch) {
+			t.Fatalf("expected error %v, got %v", objectstore.ErrHashMismatch, err)
+		}
+
+		dataAfter, err := os.ReadFile(destPath)
+		if err != nil {
+			t.Fatalf("failed to read file after commit: %v", err)
+		}
+		if string(dataAfter) != corruptContent {
+			t.Errorf("corrupt content was overwritten! got %q, expected %q", string(dataAfter), corruptContent)
+		}
+	})
+
+	t.Run("Concurrent Puts converge to the same Object ID", func(t *testing.T) {
+		store, _ := setupStore(t)
+		contentStr := "shared concurrent content"
+		numGoroutines := 20
+
+		var wg sync.WaitGroup
+		errs := make(chan error, numGoroutines)
+		results := make(chan objectstore.CommitResult, numGoroutines)
+
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				res, err := store.Commit(ctx, strings.NewReader(contentStr))
+				if err != nil {
+					errs <- err
+					return
+				}
+				results <- res
+			}()
+		}
+
+		wg.Wait()
+		close(errs)
+		close(results)
+
+		for err := range errs {
+			t.Errorf("concurrent commit failed: %v", err)
+		}
+
+		var firstID content.ID
+		first := true
+		for res := range results {
+			if first {
+				firstID = res.ID
+				first = false
+			} else if !res.ID.Equal(firstID) {
+				t.Errorf("expected ID %s, got %s", firstID.String(), res.ID.String())
+			}
+		}
+
+		if err := store.Verify(ctx, firstID); err != nil {
+			t.Errorf("final object %s is corrupt: %v", firstID.String(), err)
+		}
+	})
+
+	t.Run("Object content after publish matches Object ID", func(t *testing.T) {
+		store, _ := setupStore(t)
+		contentStr := "verification content"
+
+		res, err := store.Commit(ctx, strings.NewReader(contentStr))
+		if err != nil {
+			t.Fatalf("failed to commit: %v", err)
+		}
+
+		err = store.Verify(ctx, res.ID)
+		if err != nil {
+			t.Errorf("verify failed: %v", err)
+		}
+	})
+
+	t.Run("No partial object or temp file left on failure", func(t *testing.T) {
+		store, rootDir := setupStore(t)
+
+		contentBytes := []byte("some initial data that will fail later")
+		errReader := &errorReader{
+			data:  contentBytes,
+			limit: 10,
+		}
+
+		_, err := store.Commit(ctx, errReader)
+		if err == nil {
+			t.Fatalf("expected error from failed reader, got nil")
+		}
+
+		list, err := store.List(ctx)
+		if err != nil {
+			t.Fatalf("failed to list objects: %v", err)
+		}
+		if len(list) != 0 {
+			t.Errorf("expected 0 objects, got %v", len(list))
+		}
+
+		tempEntries, err := os.ReadDir(filepath.Join(rootDir, "temp"))
+		if err != nil {
+			t.Fatalf("failed to read temp directory: %v", err)
+		}
+		if len(tempEntries) != 0 {
+			t.Errorf("expected temp directory to be empty, but found %d files", len(tempEntries))
+		}
+	})
+}
+
+type errorReader struct {
+	data  []byte
+	limit int
+	read  int
+}
+
+func (r *errorReader) Read(p []byte) (n int, err error) {
+	if r.read >= r.limit {
+		return 0, errors.New("read error simulation")
+	}
+	rem := r.limit - r.read
+	toCopy := len(p)
+	if toCopy > rem {
+		toCopy = rem
+	}
+	copy(p[:toCopy], r.data[r.read:r.read+toCopy])
+	r.read += toCopy
+	return toCopy, nil
 }
