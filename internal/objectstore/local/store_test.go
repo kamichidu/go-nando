@@ -272,23 +272,81 @@ func TestLocalStore(t *testing.T) {
 		close(errs)
 		close(results)
 
+		hasErrors := false
 		for err := range errs {
 			t.Errorf("concurrent commit failed: %v", err)
+			hasErrors = true
+		}
+		if hasErrors {
+			t.Fatalf("at least one concurrent commit failed")
 		}
 
-		var firstID content.ID
-		first := true
+		var commits []objectstore.CommitResult
 		for res := range results {
-			if first {
-				firstID = res.ID
-				first = false
-			} else if !res.ID.Equal(firstID) {
-				t.Errorf("expected ID %s, got %s", firstID.String(), res.ID.String())
+			commits = append(commits, res)
+		}
+
+		if len(commits) != numGoroutines {
+			t.Fatalf("expected %d successful commits, got %d", numGoroutines, len(commits))
+		}
+
+		if len(commits) == 0 {
+			t.Fatalf("no successful commits were returned")
+		}
+
+		firstID := commits[0].ID
+		for i, res := range commits {
+			if !res.ID.Equal(firstID) {
+				t.Errorf("commit %d ID mismatch: expected %s, got %s", i, firstID.String(), res.ID.String())
 			}
 		}
 
 		if err := store.Verify(ctx, firstID); err != nil {
 			t.Errorf("final object %s is corrupt: %v", firstID.String(), err)
+		}
+	})
+
+	t.Run("Existing valid object is reused on subsequent commit", func(t *testing.T) {
+		store, rootDir := setupStore(t)
+		contentStr := "reusable object content"
+
+		// 1. First commit
+		res1, err := store.Commit(ctx, strings.NewReader(contentStr))
+		if err != nil {
+			t.Fatalf("first commit failed: %v", err)
+		}
+
+		destPath := filepath.Join(rootDir, "objects", res1.ID.String())
+
+		// Read content to establish baseline
+		dataBefore, err := os.ReadFile(destPath)
+		if err != nil {
+			t.Fatalf("failed to read baseline: %v", err)
+		}
+
+		// 2. Second commit of identical content
+		res2, err := store.Commit(ctx, strings.NewReader(contentStr))
+		if err != nil {
+			t.Fatalf("second commit failed: %v", err)
+		}
+
+		// 3. Both succeed and return matching Object IDs
+		if !res1.ID.Equal(res2.ID) {
+			t.Errorf("expected matching Object IDs, got %s and %s", res1.ID.String(), res2.ID.String())
+		}
+
+		// 4. Final object content has not changed
+		dataAfter, err := os.ReadFile(destPath)
+		if err != nil {
+			t.Fatalf("failed to read content after second commit: %v", err)
+		}
+		if string(dataAfter) != string(dataBefore) {
+			t.Errorf("final object content changed! got %q, expected %q", string(dataAfter), string(dataBefore))
+		}
+
+		// 5. Can successfully verify final object
+		if err := store.Verify(ctx, res1.ID); err != nil {
+			t.Errorf("verification of final object failed: %v", err)
 		}
 	})
 
@@ -307,7 +365,7 @@ func TestLocalStore(t *testing.T) {
 		}
 	})
 
-	t.Run("No partial object or temp file left on failure", func(t *testing.T) {
+	t.Run("Reader failure leaves no object or temp file", func(t *testing.T) {
 		store, rootDir := setupStore(t)
 
 		contentBytes := []byte("some initial data that will fail later")
