@@ -50,48 +50,19 @@ func (s *ValidatingStore) ListChildren(ctx context.Context, parentID EntryID) ([
 
 // Create validates the entry before inserting it.
 func (s *ValidatingStore) Create(ctx context.Context, entry Entry) (Entry, error) {
-	if entry.ID == "" {
-		return Entry{}, fmt.Errorf("%w: entry ID cannot be empty", ErrEntryConflict)
+	if err := runEntryValidators(entry,
+		mustHaveEntryIDInEntry,
+		mustNotBeRootInEntry,
+		mustHaveValidKind,
+		mustHaveValidRevision,
+		mustHaveValidParentID,
+		mustHaveNonEmptyName,
+		mustHaveValidObjectIDForKind,
+	); err != nil {
+		return Entry{}, err
 	}
 
-	// Forbid creating the root entry via normal Create
-	if entry.ID == "root" {
-		return Entry{}, fmt.Errorf("%w: operation on root entry is forbidden", ErrEntryConflict)
-	}
-
-	// 1. Kind validation: Kind must be "file" or "directory"
-	if entry.Kind != EntryKindFile && entry.Kind != EntryKindDirectory {
-		return Entry{}, fmt.Errorf("%w: invalid entry kind %q", ErrEntryConflict, entry.Kind)
-	}
-
-	// 2. Revision validation: Revision >= 1
-	if entry.Revision < 1 {
-		return Entry{}, fmt.Errorf("%w: invalid revision %d (must be >= 1)", ErrEntryConflict, entry.Revision)
-	}
-
-	// 3. ParentID and Name validation
-	if entry.ParentID == nil {
-		return Entry{}, fmt.Errorf("%w: non-root entry must have a parent ID", ErrEntryConflict)
-	}
-	if *entry.ParentID == "" {
-		return Entry{}, fmt.Errorf("%w: parent ID cannot be empty", ErrEntryConflict)
-	}
-	if entry.Name == "" {
-		return Entry{}, fmt.Errorf("%w: non-root entry must have a non-empty name", ErrEntryConflict)
-	}
-
-	// 4. File-specific & Directory-specific ObjectID validation
-	if entry.Kind == EntryKindFile {
-		if entry.ObjectID == nil {
-			return Entry{}, fmt.Errorf("%w: file entry must have an associated object ID", ErrEntryConflict)
-		}
-	} else {
-		if entry.ObjectID != nil {
-			return Entry{}, fmt.Errorf("%w: directory entry must not have an associated object ID", ErrEntryConflict)
-		}
-	}
-
-	// 5. Parent existence and parent kind validation
+	// State-dependent validation: Parent existence and parent kind validation
 	parent, err := s.next.GetByID(ctx, *entry.ParentID)
 	if err != nil {
 		if errors.Is(err, ErrEntryNotFound) {
@@ -108,45 +79,16 @@ func (s *ValidatingStore) Create(ctx context.Context, entry Entry) (Entry, error
 
 // Update validates the entry before delegating to the next store.
 func (s *ValidatingStore) Update(ctx context.Context, entry Entry) (Entry, error) {
-	if entry.ID == "" {
-		return Entry{}, fmt.Errorf("%w: entry ID cannot be empty", ErrEntryConflict)
-	}
-
-	// Forbid modifying the root entry via normal Update
-	if entry.ID == "root" {
-		return Entry{}, fmt.Errorf("%w: operation on root entry is forbidden", ErrEntryConflict)
-	}
-
-	// 1. Kind validation: Kind must be "file" or "directory"
-	if entry.Kind != EntryKindFile && entry.Kind != EntryKindDirectory {
-		return Entry{}, fmt.Errorf("%w: invalid entry kind %q", ErrEntryConflict, entry.Kind)
-	}
-
-	// 2. Revision validation: Revision >= 1
-	if entry.Revision < 1 {
-		return Entry{}, fmt.Errorf("%w: invalid revision %d (must be >= 1)", ErrEntryConflict, entry.Revision)
-	}
-
-	// 3. ParentID and Name validation
-	if entry.ParentID == nil {
-		return Entry{}, fmt.Errorf("%w: non-root entry must have a parent ID", ErrEntryConflict)
-	}
-	if *entry.ParentID == "" {
-		return Entry{}, fmt.Errorf("%w: parent ID cannot be empty", ErrEntryConflict)
-	}
-	if entry.Name == "" {
-		return Entry{}, fmt.Errorf("%w: non-root entry must have a non-empty name", ErrEntryConflict)
-	}
-
-	// 4. File-specific & Directory-specific ObjectID validation
-	if entry.Kind == EntryKindFile {
-		if entry.ObjectID == nil {
-			return Entry{}, fmt.Errorf("%w: file entry must have an associated object ID", ErrEntryConflict)
-		}
-	} else {
-		if entry.ObjectID != nil {
-			return Entry{}, fmt.Errorf("%w: directory entry must not have an associated object ID", ErrEntryConflict)
-		}
+	if err := runEntryValidators(entry,
+		mustHaveEntryIDInEntry,
+		mustNotBeRootInEntry,
+		mustHaveValidKind,
+		mustHaveValidRevision,
+		mustHaveValidParentID,
+		mustHaveNonEmptyName,
+		mustHaveValidObjectIDForKind,
+	); err != nil {
+		return Entry{}, err
 	}
 
 	return s.next.Update(ctx, entry)
@@ -154,21 +96,14 @@ func (s *ValidatingStore) Update(ctx context.Context, entry Entry) (Entry, error
 
 // Move validates the move operation before delegating to the next store.
 func (s *ValidatingStore) Move(ctx context.Context, id EntryID, newParentID EntryID, newName string) (Entry, error) {
-	if id == "" {
-		return Entry{}, fmt.Errorf("%w: entry ID cannot be empty", ErrEntryConflict)
-	}
-	if id == "root" {
-		return Entry{}, fmt.Errorf("%w: operation on root entry is forbidden", ErrEntryConflict)
-	}
-	if newParentID == "" {
-		return Entry{}, fmt.Errorf("%w: parent ID cannot be empty", ErrEntryConflict)
-	}
-	if newName == "" {
-		return Entry{}, fmt.Errorf("%w: local name cannot be empty", ErrEntryConflict)
-	}
-
-	if id == newParentID {
-		return Entry{}, fmt.Errorf("%w: entry cannot be moved to itself", ErrEntryConflict)
+	if err := runMoveValidators(moveParams{ID: id, NewParentID: newParentID, NewName: newName},
+		mustHaveMoveEntryID,
+		mustNotMoveRoot,
+		mustHaveMoveDestination,
+		mustHaveMoveName,
+		mustNotMoveToItself,
+	); err != nil {
+		return Entry{}, err
 	}
 
 	entry, err := s.next.GetByID(ctx, id)
@@ -215,11 +150,11 @@ func (s *ValidatingStore) Move(ctx context.Context, id EntryID, newParentID Entr
 
 // Delete validates the deletion before delegating to the next store.
 func (s *ValidatingStore) Delete(ctx context.Context, id EntryID) error {
-	if id == "" {
-		return fmt.Errorf("%w: entry ID cannot be empty", ErrEntryConflict)
-	}
-	if id == "root" {
-		return fmt.Errorf("%w: operation on root entry is forbidden", ErrEntryConflict)
+	if err := runEntryIDValidators(id,
+		mustHaveEntryID,
+		mustNotBeRootID,
+	); err != nil {
+		return err
 	}
 	return s.next.Delete(ctx, id)
 }
@@ -237,4 +172,145 @@ func (s *ValidatingStore) ListAll(ctx context.Context) ([]Entry, error) {
 // CheckSchemaCompatibility delegates to the next store.
 func (s *ValidatingStore) CheckSchemaCompatibility(ctx context.Context) error {
 	return s.next.CheckSchemaCompatibility(ctx)
+}
+
+// EntryID Validator definitions and helpers.
+
+type entryIDValidator func(EntryID) error
+
+func runEntryIDValidators(id EntryID, validators ...entryIDValidator) error {
+	for _, validate := range validators {
+		if err := validate(id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func mustHaveEntryID(id EntryID) error {
+	if id == "" {
+		return fmt.Errorf("%w: entry ID cannot be empty", ErrEntryConflict)
+	}
+	return nil
+}
+
+func mustNotBeRootID(id EntryID) error {
+	if id == "root" {
+		return fmt.Errorf("%w: operation on root entry is forbidden", ErrEntryConflict)
+	}
+	return nil
+}
+
+// Entry Validator definitions and helpers
+
+type entryValidator func(Entry) error
+
+func runEntryValidators(entry Entry, validators ...entryValidator) error {
+	for _, validate := range validators {
+		if err := validate(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func mustHaveEntryIDInEntry(entry Entry) error {
+	return mustHaveEntryID(entry.ID)
+}
+
+func mustNotBeRootInEntry(entry Entry) error {
+	return mustNotBeRootID(entry.ID)
+}
+
+func mustHaveValidKind(entry Entry) error {
+	if entry.Kind != EntryKindFile && entry.Kind != EntryKindDirectory {
+		return fmt.Errorf("%w: invalid entry kind %q", ErrEntryConflict, entry.Kind)
+	}
+	return nil
+}
+
+func mustHaveValidRevision(entry Entry) error {
+	if entry.Revision < 1 {
+		return fmt.Errorf("%w: invalid revision %d (must be >= 1)", ErrEntryConflict, entry.Revision)
+	}
+	return nil
+}
+
+func mustHaveValidParentID(entry Entry) error {
+	if entry.ParentID == nil {
+		return fmt.Errorf("%w: non-root entry must have a parent ID", ErrEntryConflict)
+	}
+	if *entry.ParentID == "" {
+		return fmt.Errorf("%w: parent ID cannot be empty", ErrEntryConflict)
+	}
+	return nil
+}
+
+func mustHaveNonEmptyName(entry Entry) error {
+	if entry.Name == "" {
+		return fmt.Errorf("%w: non-root entry must have a non-empty name", ErrEntryConflict)
+	}
+	return nil
+}
+
+func mustHaveValidObjectIDForKind(entry Entry) error {
+	switch entry.Kind {
+	case EntryKindFile:
+		if entry.ObjectID == nil {
+			return fmt.Errorf("%w: file entry must have an associated object ID", ErrEntryConflict)
+		}
+	case EntryKindDirectory:
+		if entry.ObjectID != nil {
+			return fmt.Errorf("%w: directory entry must not have an associated object ID", ErrEntryConflict)
+		}
+	}
+	return nil
+}
+
+// Move Validator definitions and helpers
+
+type moveParams struct {
+	ID          EntryID
+	NewParentID EntryID
+	NewName     string
+}
+
+type moveValidator func(moveParams) error
+
+func runMoveValidators(params moveParams, validators ...moveValidator) error {
+	for _, validate := range validators {
+		if err := validate(params); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func mustHaveMoveEntryID(params moveParams) error {
+	return mustHaveEntryID(params.ID)
+}
+
+func mustNotMoveRoot(params moveParams) error {
+	return mustNotBeRootID(params.ID)
+}
+
+func mustHaveMoveDestination(params moveParams) error {
+	if params.NewParentID == "" {
+		return fmt.Errorf("%w: parent ID cannot be empty", ErrEntryConflict)
+	}
+	return nil
+}
+
+func mustHaveMoveName(params moveParams) error {
+	if params.NewName == "" {
+		return fmt.Errorf("%w: local name cannot be empty", ErrEntryConflict)
+	}
+	return nil
+}
+
+func mustNotMoveToItself(params moveParams) error {
+	if params.ID == params.NewParentID {
+		return fmt.Errorf("%w: entry cannot be moved to itself", ErrEntryConflict)
+	}
+	return nil
 }

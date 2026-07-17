@@ -113,48 +113,6 @@ func (s *Store) CheckSchemaCompatibility(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) validateEntry(ctx context.Context, entry metadata.Entry, isUpdate bool) error {
-	// 5. Parent existence and parent kind validation
-	if entry.ParentID != nil {
-		parent, err := s.GetByID(ctx, *entry.ParentID)
-		if err != nil {
-			if errors.Is(err, metadata.ErrEntryNotFound) {
-				return fmt.Errorf("%w: parent entry %s does not exist", metadata.ErrEntryConflict, *entry.ParentID)
-			}
-			return fmt.Errorf("failed to verify parent existence: %w", err)
-		}
-		if parent.Kind != metadata.EntryKindDirectory {
-			return fmt.Errorf("%w: parent entry %s must be a directory, but got %s", metadata.ErrEntryConflict, *entry.ParentID, parent.Kind)
-		}
-	}
-
-	// 6. Ancestor / hierarchy cycle check for directory
-	if entry.Kind == metadata.EntryKindDirectory && entry.ParentID != nil {
-		currentParentID := *entry.ParentID
-		visited := make(map[metadata.EntryID]bool)
-		for currentParentID != "root" {
-			if currentParentID == entry.ID {
-				return fmt.Errorf("%w: hierarchy cycle detected: directory cannot be its own ancestor or child of its descendant", metadata.ErrEntryConflict)
-			}
-			if visited[currentParentID] {
-				return fmt.Errorf("%w: cycle detected in parent ancestry", metadata.ErrEntryConflict)
-			}
-			visited[currentParentID] = true
-
-			parentEntry, err := s.GetByID(ctx, currentParentID)
-			if err != nil {
-				return fmt.Errorf("failed to verify ancestry for %s: %w", currentParentID, err)
-			}
-			if parentEntry.ParentID == nil {
-				break
-			}
-			currentParentID = *parentEntry.ParentID
-		}
-	}
-
-	return nil
-}
-
 func (s *Store) scanEntry(scanner interface{ Scan(dest ...any) error }) (metadata.Entry, error) {
 	var entry metadata.Entry
 	var idStr string
@@ -315,9 +273,51 @@ func (s *Store) Create(ctx context.Context, entry metadata.Entry) (metadata.Entr
 	return entry, nil
 }
 
+func (s *Store) validateUpdateInvariants(ctx context.Context, entry metadata.Entry) error {
+	// 5. Parent existence and parent kind validation
+	if entry.ParentID != nil {
+		parent, err := s.GetByID(ctx, *entry.ParentID)
+		if err != nil {
+			if errors.Is(err, metadata.ErrEntryNotFound) {
+				return fmt.Errorf("%w: parent entry %s does not exist", metadata.ErrEntryConflict, *entry.ParentID)
+			}
+			return fmt.Errorf("failed to verify parent existence: %w", err)
+		}
+		if parent.Kind != metadata.EntryKindDirectory {
+			return fmt.Errorf("%w: parent entry %s must be a directory, but got %s", metadata.ErrEntryConflict, *entry.ParentID, parent.Kind)
+		}
+	}
+
+	// 6. Ancestor / hierarchy cycle check for directory
+	if entry.Kind == metadata.EntryKindDirectory && entry.ParentID != nil {
+		currentParentID := *entry.ParentID
+		visited := make(map[metadata.EntryID]bool)
+		for currentParentID != "root" {
+			if currentParentID == entry.ID {
+				return fmt.Errorf("%w: hierarchy cycle detected: directory cannot be its own ancestor or child of its descendant", metadata.ErrEntryConflict)
+			}
+			if visited[currentParentID] {
+				return fmt.Errorf("%w: cycle detected in parent ancestry", metadata.ErrEntryConflict)
+			}
+			visited[currentParentID] = true
+
+			parentEntry, err := s.GetByID(ctx, currentParentID)
+			if err != nil {
+				return fmt.Errorf("failed to verify ancestry for %s: %w", currentParentID, err)
+			}
+			if parentEntry.ParentID == nil {
+				break
+			}
+			currentParentID = *parentEntry.ParentID
+		}
+	}
+
+	return nil
+}
+
 // Update updates an existing entry in SQLite after performing basic invariant validation.
 func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
-	if err := s.validateEntry(ctx, entry, true); err != nil {
+	if err := s.validateUpdateInvariants(ctx, entry); err != nil {
 		return metadata.Entry{}, err
 	}
 
