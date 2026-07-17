@@ -1,5 +1,9 @@
 version: '3'
 
+vars:
+  BIN_DIR: .local/bin
+  REPO_DIR: .local/lib/nando/repo
+
 tasks:
   default:
     cmds:
@@ -10,7 +14,7 @@ tasks:
   build:
     desc: Build the nando CLI executable
     cmds:
-      - go build -o bin/nando cmd/nando/main.go
+      - go build -o {{.BIN_DIR}}/nando cmd/nando/main.go
 
   test:
     desc: Run unit and integration tests
@@ -25,4 +29,5 @@ tasks:
   clean:
     desc: Remove built binaries and output files
     cmds:
-      - rm -rf bin/
+      - rm -rf {{.BIN_DIR}}/
+      - rm -rf {{.REPO_DIR}}/

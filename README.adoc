@@ -127,7 +127,7 @@ task build
 +
 [source,bash]
 ----
-./bin/nando --repository ./test-repo init
+./.local/bin/nando --repository ./.local/lib/nando/repo init
 ----
 
 3. Import a local file:
@@ -135,28 +135,28 @@ task build
 [source,bash]
 ----
 echo "hello nando" > hello.txt
-./bin/nando --repository ./test-repo put ./hello.txt /documents/hello.txt
+./.local/bin/nando --repository ./.local/lib/nando/repo put ./hello.txt /documents/hello.txt
 ----
 
 4. List logical directory entries:
 +
 [source,bash]
 ----
-./bin/nando --repository ./test-repo ls /documents
+./.local/bin/nando --repository ./.local/lib/nando/repo ls /documents
 ----
 
 5. Check file metadata details:
 +
 [source,bash]
 ----
-./bin/nando --repository ./test-repo stat /documents/hello.txt
+./.local/bin/nando --repository ./.local/lib/nando/repo stat /documents/hello.txt
 ----
 
 6. Restore/Export the file:
 +
 [source,bash]
 ----
-./bin/nando --repository ./test-repo get /documents/hello.txt ./restored.txt
+./.local/bin/nando --repository ./.local/lib/nando/repo get /documents/hello.txt ./restored.txt
 ----
 
 7. Verify identical file content:
@@ -170,19 +170,19 @@ diff hello.txt restored.txt
 +
 [source,bash]
 ----
-./bin/nando --repository ./test-repo mv /documents/hello.txt /documents/greeting.txt
+./.local/bin/nando --repository ./.local/lib/nando/repo mv /documents/hello.txt /documents/greeting.txt
 ----
 
 9. Remove/Soft-delete a path:
 +
 [source,bash]
 ----
-./bin/nando --repository ./test-repo rm /documents/greeting.txt
+./.local/bin/nando --repository ./.local/lib/nando/repo rm /documents/greeting.txt
 ----
 
 10. Run garbage collection:
 +
 [source,bash]
 ----
-./bin/nando --repository ./test-repo gc
+./.local/bin/nando --repository ./.local/lib/nando/repo gc
 ----
