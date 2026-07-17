@@ -260,14 +260,24 @@ func (s *Store) Root(ctx context.Context) (metadata.Entry, error) {
 	return s.scanEntry(row)
 }
 
-// GetByID retrieves a single metadata entry by its ID.
-func (s *Store) GetByID(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
-	row := s.db.QueryRowContext(ctx, `
+type dbtx interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (s *Store) getByID(ctx context.Context, q dbtx, id metadata.EntryID) (metadata.Entry, error) {
+	row := q.QueryRowContext(ctx, `
 		SELECT entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at
 		FROM entries
 		WHERE entry_id = ?
 	`, id.String())
 	return s.scanEntry(row)
+}
+
+// GetByID retrieves a single metadata entry by its ID.
+func (s *Store) GetByID(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
+	return s.getByID(ctx, s.db, id)
 }
 
 // GetChild retrieves a single metadata entry under parentID by its local name.
@@ -403,32 +413,27 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 	return updatedEntry, nil
 }
 
-// Move moves/renames an entry in SQLite after validating invariants (dest exist/dir, no root move, descendant cycle prevention).
+// Move moves/renames an entry in SQLite.
 func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metadata.EntryID, newName string) (metadata.Entry, error) {
-	if id == "root" {
-		return metadata.Entry{}, fmt.Errorf("%w: operation on root entry is forbidden", metadata.ErrEntryConflict)
+	if id == newParentID {
+		return metadata.Entry{}, fmt.Errorf("%w: entry cannot be moved to itself", metadata.ErrEntryConflict)
 	}
 
-	entry, err := s.GetByID(ctx, id)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return metadata.Entry{}, err
+		return metadata.Entry{}, fmt.Errorf("failed to begin transaction: %w", err)
 	}
+	defer tx.Rollback()
 
-	newParent, err := s.GetByID(ctx, newParentID)
+	entry, err := s.getByID(ctx, tx, id)
 	if err != nil {
 		if errors.Is(err, metadata.ErrEntryNotFound) {
-			return metadata.Entry{}, fmt.Errorf("%w: destination parent entry %s does not exist", metadata.ErrEntryConflict, newParentID)
+			return metadata.Entry{}, err
 		}
-		return metadata.Entry{}, fmt.Errorf("failed to verify destination parent existence: %w", err)
-	}
-	if newParent.Kind != metadata.EntryKindDirectory {
-		return metadata.Entry{}, fmt.Errorf("%w: destination parent %s must be a directory", metadata.ErrEntryConflict, newParentID)
+		return metadata.Entry{}, fmt.Errorf("failed to get entry inside transaction: %w", err)
 	}
 
 	if entry.Kind == metadata.EntryKindDirectory {
-		if id == newParentID {
-			return metadata.Entry{}, fmt.Errorf("%w: directory cannot be moved to itself", metadata.ErrEntryConflict)
-		}
 		// Ancestry / descendant cycle check
 		current := newParentID
 		visited := make(map[metadata.EntryID]bool)
@@ -441,7 +446,7 @@ func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metad
 			}
 			visited[current] = true
 
-			p, err := s.GetByID(ctx, current)
+			p, err := s.getByID(ctx, tx, current)
 			if err != nil {
 				return metadata.Entry{}, fmt.Errorf("failed to verify ancestry during move: %w", err)
 			}
@@ -454,7 +459,7 @@ func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metad
 
 	newRevision := entry.Revision + 1
 
-	res, err := s.db.ExecContext(ctx, `
+	res, err := tx.ExecContext(ctx, `
 		UPDATE entries SET
 			parent_id = ?,
 			name = ?,
@@ -478,6 +483,10 @@ func (s *Store) Move(ctx context.Context, id metadata.EntryID, newParentID metad
 	}
 	if rows == 0 {
 		return metadata.Entry{}, metadata.ErrEntryNotFound
+	}
+
+	if err := tx.Commit(); err != nil {
+		return metadata.Entry{}, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	entry.ParentID = &newParentID

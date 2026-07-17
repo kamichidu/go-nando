@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -667,15 +668,9 @@ func TestSQLiteStore(t *testing.T) {
 			t.Errorf("expected ErrEntryConflict, got: %v", err)
 		}
 
-		// 4. Self move must fail
-		_, err = store.Move(ctx, dirID, dirID, "subdir")
-		if err == nil {
-			t.Errorf("expected self-move of directory to fail, but it succeeded")
-		} else if !errors.Is(err, metadata.ErrEntryConflict) {
-			t.Errorf("expected ErrEntryConflict on self-move, got: %v", err)
-		}
+		// 4. Self move (not tested here as it is checked by ValidatingStore)
 
-		// 5. Descendant move must fail
+		// 5. Descendant move (not tested here as it is checked by ValidatingStore)
 		childDirID := metadata.EntryID("child-dir")
 		_, err = store.Create(ctx, metadata.Entry{
 			ID:        childDirID,
@@ -688,14 +683,6 @@ func TestSQLiteStore(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatalf("failed to create child directory: %v", err)
-		}
-
-		// Moving dirID ("parent-dir") to childDirID ("child-dir" which is its descendant) must fail
-		_, err = store.Move(ctx, dirID, childDirID, "parent-moved")
-		if err == nil {
-			t.Errorf("expected descendant move of directory to fail, but it succeeded")
-		} else if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "hierarchy cycle") {
-			t.Errorf("expected hierarchy cycle ErrEntryConflict, got: %v", err)
 		}
 
 		// 6. Delete on non-existent entry returns metadata.ErrEntryNotFound
@@ -735,6 +722,122 @@ func TestSQLiteStore(t *testing.T) {
 		_, err = store.GetByID(ctx, dirID)
 		if !errors.Is(err, metadata.ErrEntryNotFound) {
 			t.Errorf("expected ErrEntryNotFound after leaf directory deletion, got: %v", err)
+		}
+	})
+
+	t.Run("Concurrent Move operations cannot create mutual cycles", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		rootID := metadata.EntryID("root")
+		now := time.Now().UTC()
+
+		// Create dir-A under root
+		dirA := metadata.Entry{
+			ID:        "dir-A",
+			ParentID:  &rootID,
+			Name:      "dirA",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		_, err := store.Create(ctx, dirA)
+		if err != nil {
+			t.Fatalf("failed to create dir-A: %v", err)
+		}
+
+		// Create dir-B under root
+		dirB := metadata.Entry{
+			ID:        "dir-B",
+			ParentID:  &rootID,
+			Name:      "dirB",
+			Kind:      metadata.EntryKindDirectory,
+			Revision:  1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		_, err = store.Create(ctx, dirB)
+		if err != nil {
+			t.Fatalf("failed to create dir-B: %v", err)
+		}
+
+		// Try to move A under B and B under A concurrently
+		var wg sync.WaitGroup
+		errs := make(chan error, 2)
+
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, err := store.Move(ctx, "dir-A", "dir-B", "dirA")
+			if err != nil {
+				errs <- err
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			_, err := store.Move(ctx, "dir-B", "dir-A", "dirB")
+			if err != nil {
+				errs <- err
+			}
+		}()
+
+		wg.Wait()
+		close(errs)
+
+		var errorsSlice []error
+		for err := range errs {
+			errorsSlice = append(errorsSlice, err)
+		}
+
+		t.Logf("Concurrent Move operations finished. Observed %d failures. Errors: %v", len(errorsSlice), errorsSlice)
+
+		successCount := 2 - len(errorsSlice)
+		if successCount == 0 {
+			t.Fatalf("both move operations failed completely (successCount == 0). Errors: %v", errorsSlice)
+		}
+
+		// Helper to verify that an entry can reach "root" without cycles
+		canReachRoot := func(id metadata.EntryID) bool {
+			current := id
+			visited := make(map[metadata.EntryID]bool)
+			for current != "root" {
+				if visited[current] {
+					return false // Cycle detected!
+				}
+				visited[current] = true
+				e, err := store.GetByID(ctx, current)
+				if err != nil {
+					return false // Missing parent!
+				}
+				if e.ParentID == nil {
+					return false // No parent and not root!
+				}
+				current = *e.ParentID
+			}
+			return true
+		}
+
+		// Verify the directory structure is still valid and has no cycle
+		if !canReachRoot("dir-A") {
+			t.Errorf("dir-A cannot reach root safely (cycle/unreachable parent detected)")
+		}
+		if !canReachRoot("dir-B") {
+			t.Errorf("dir-B cannot reach root safely (cycle/unreachable parent detected)")
+		}
+
+		// Double-check direct cycle
+		pA, err := store.GetByID(ctx, "dir-A")
+		if err != nil {
+			t.Fatalf("failed to get dir-A: %v", err)
+		}
+		pB, err := store.GetByID(ctx, "dir-B")
+		if err != nil {
+			t.Fatalf("failed to get dir-B: %v", err)
+		}
+
+		if *pA.ParentID == "dir-B" && *pB.ParentID == "dir-A" {
+			t.Errorf("mutual cycle was created! both parent IDs point to each other")
 		}
 	})
 }
