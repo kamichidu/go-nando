@@ -33,7 +33,7 @@ The model uses Design IR v1alpha1 schema repository revision `455ed318b7bc409d3e
 | Committed Entry lifecycle/revisions, Object lifecycle, failure boundaries, replacement and optional Lease lifecycle: corresponding `REQ-*` and `DES-*` nodes; interruption is not resumed.
 
 | `roadmap.adoc`
-| Phase 0–7 status/goals, phase ordering, exit criteria, cross-cutting validation and deferred optimizations: `DES-PHASE0-SCAFFOLDING`, `DES-PHASE1-FORMAT`, `DES-PHASE2-CAS`, `DES-PHASE3-EXCLUSION`, `DES-PHASE4-CLEANUP-EXPORT`, `DES-EXPLICIT-DIRECTORY-MODEL` (Phase 5), `DES-PHASE6-GCS`, `DES-PHASE7-SYNC`, `DES-CROSS-CUTTING-VALIDATION`, `DES-DEFERRED-OPTIMIZATIONS`. Phase order is also represented by `depends_on` relations. Exit criteria, status, phase numbers and checklist values are retained in node attributes.
+| Phase 0–7 status/goals, phase ordering, exit criteria, cross-cutting validation and deferred optimizations: `DES-PHASE0-SCAFFOLDING`, `DES-PHASE1-FORMAT`, `DES-PHASE2-CAS`, `DES-PHASE3-EXCLUSION`, `DES-PHASE4-CLEANUP-EXPORT`, `DES-PHASE5-DIRECTORIES`, `DES-PHASE6-GCS`, `DES-PHASE7-SYNC`, `DES-CROSS-CUTTING-VALIDATION`, `DES-DEFERRED-OPTIMIZATIONS`. The stable directory contract is separately represented by `DES-EXPLICIT-DIRECTORY-MODEL`. Phase order is also represented by `depends_on` relations. Exit criteria, status, phase numbers and checklist values are retained in roadmap-node attributes.
 
 | `glossary.adoc`
 | Entry, Directory, Object, Commit, Revision, Timestamp, Lease, Canonical Path, Derived Data, both Stores, Repository, and prohibited Operation Record: represented by the corresponding semantic nodes and requirements; no runtime Operation Record is introduced.
@@ -49,6 +49,12 @@ Observed implementation is separate from design and pinned to source revision `d
 * `IMP-CURRENT-GET-TRUNCATES` / `OBS-GET-ATOMIC-EXPORT-GAP`: Get truncates and writes the destination directly.
 
 These are observations, not amendments to design authority. Implementation artifacts are pinned in the observation records. The prior local design-document edits are not treated as implementation evidence.
+
+Implementation observations have no `realizes` or `satisfies` relations to target design: those relations would falsely imply success. `observations` and their `artifact_refs` record what was inspected and which design claims were compared.
+
+== Relationship and node review
+
+`depends_on` is retained only where the source design contract or roadmap phase semantically relies on the target authority or prerequisite. Administrative proximity and complete graph connectivity are not treated as reasons to add relations. The Phase 5 directory design contract (`DES-EXPLICIT-DIRECTORY-MODEL`) is separate from its roadmap goals and exit criteria (`DES-PHASE5-DIRECTORIES`); the latter depends on the former and on Phase 4.
 
 == Open decisions
 

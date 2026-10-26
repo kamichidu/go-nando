@@ -243,7 +243,7 @@ nodes:
   - id: DES-FAILURE-BOUNDARIES
     level: system_design
     kind: failure-model
-    statement: Before Object Commit, incomplete temporary data is private backend cleanup; after Object Commit and before Metadata Commit, an unreferenced committed Object is GC-eligible; after Metadata Commit, the Entry is published.
+    statement: Repository operation progress is not persisted; before Object Commit, incomplete temporary data is private backend cleanup; after Object Commit and before Metadata Commit, an unreferenced committed Object is GC-eligible; after Metadata Commit, the Entry is published.
     provenance:
       origin: imported
   - id: DES-REVISION-SEMANTICS
@@ -264,9 +264,15 @@ nodes:
     statement: Directories are first-class Metadata Store Entries, including empty directories; the root is a directory Entry and directories have no Object reference.
     provenance:
       origin: imported
+  - id: DES-PHASE5-DIRECTORIES
+    level: system_design
+    kind: roadmap-phase
+    statement: Phase 5 implements the accepted explicit-directory model across commands and stores.
+    provenance:
+      origin: imported
     attributes:
       roadmap_phase: 5
-      phase_status: accepted-design
+      phase_status: planned
       phase_goals:
         - define root semantics
         - provide mkdir where needed by the interface
@@ -282,14 +288,12 @@ nodes:
   - id: DES-IDENTITY-TARGET
     level: system_design
     kind: repository-format
-    statement: The Phase 1 target is SHA-256 content identity with algorithm-namespaced object identifiers; current SHA-1 identifiers are an implementation gap and must not be silently reinterpreted.
+    statement: The Phase 1 target is SHA-256 content identity with algorithm-namespaced object identifiers; existing identifiers must not be silently reinterpreted.
     provenance:
       origin: imported
     attributes:
       roadmap_phase: 1
       target_algorithm: sha256
-      current_algorithm: sha1
-      current_identifier_namespace: absent
   - id: DES-PHASE1-FORMAT
     level: system_design
     kind: roadmap-phase
@@ -367,15 +371,12 @@ nodes:
   - id: DES-PHASE0-SCAFFOLDING
     level: system_design
     kind: roadmap-phase
-    statement: Phase 0 is the current scaffolding baseline with CLI and application/repository boundaries, SQLite metadata, local Object Store, logical path normalization, basic repository commands and tests, and a GCS interface placeholder.
+    statement: Phase 0 establishes CLI and application/repository boundaries, SQLite metadata, a local Object Store, logical path normalization, and a basic command and test flow.
     provenance:
       origin: imported
     attributes:
       roadmap_phase: 0
       phase_status: current
-      known_limitations:
-        - agreed process-wide Repository exclusion is not implemented
-        - final Object Commit guarantees are not all implemented
   - id: DES-PHASE7-SYNC
     level: system_design
     kind: roadmap-phase
@@ -477,22 +478,10 @@ relations:
     from: DES-REPOSITORY-BOUNDARIES
     type: depends_on
     to: REQ-OBJECT-SSOT
-  - id: REL-DES-APPLICATION-BOUNDARY
-    from: DES-APPLICATION-BOUNDARY
-    type: depends_on
-    to: REQ-META-SSOT
-  - id: REL-DES-DEPENDENCY-META
-    from: DES-DEPENDENCY-DIRECTION
-    type: depends_on
-    to: REQ-META-SSOT
   - id: REL-DES-CONSTRUCTION-FORMAT
     from: DES-CONSTRUCTION
     type: depends_on
     to: DES-PHASE1-FORMAT
-  - id: REL-DES-CLI-BOUNDARY
-    from: DES-CLI-BOUNDARY
-    type: depends_on
-    to: REQ-NO-RESUME
   - id: REL-DES-OBJECT-CONTRACT
     from: DES-OBJECT-BACKEND-NEUTRALITY
     type: depends_on
@@ -530,7 +519,7 @@ relations:
     type: depends_on
     to: REQ-GET-ATOMIC-DESTINATION
   - id: REL-DES-SUBTREE
-    from: DES-EXPLICIT-DIRECTORY-MODEL
+    from: DES-PHASE5-DIRECTORIES
     type: depends_on
     to: REQ-SUBTREE-MUTATIONS
   - id: REL-DES-FAILURE-ORDER
@@ -545,10 +534,6 @@ relations:
     from: DES-REVISION-SEMANTICS
     type: depends_on
     to: REQ-REVISION
-  - id: REL-DES-ENTRY-ID-REVISION
-    from: DES-REVISION-SEMANTICS
-    type: depends_on
-    to: REQ-ENTRY-ID
   - id: REL-DES-DIRECTORIES
     from: DES-EXPLICIT-DIRECTORY-MODEL
     type: depends_on
@@ -561,14 +546,6 @@ relations:
     from: DES-OBJECT-MODEL
     type: depends_on
     to: REQ-OBJECT-SSOT
-  - id: REL-DES-ERROR-MODEL
-    from: DES-ERROR-MODEL
-    type: depends_on
-    to: REQ-NO-RESUME
-  - id: REL-DES-PATH-SEMANTICS
-    from: DES-PATH-SEMANTICS
-    type: depends_on
-    to: REQ-NAMESPACE-UNIQUENESS
   - id: REL-DES-PHASE1-FORMAT
     from: DES-PHASE1-FORMAT
     type: depends_on
@@ -597,10 +574,6 @@ relations:
     from: DES-PHASE3-EXCLUSION
     type: depends_on
     to: REQ-REPLACEMENT
-  - id: REL-PHASE1-IDENTITY
-    from: DES-PHASE1-FORMAT
-    type: depends_on
-    to: REQ-OBJECT-SSOT
   - id: REL-PHASE4-NO-RESUME
     from: DES-PHASE4-CLEANUP-EXPORT
     type: depends_on
@@ -610,9 +583,13 @@ relations:
     type: depends_on
     to: DES-PHASE3-EXCLUSION
   - id: REL-PHASE5-PHASE4
-    from: DES-EXPLICIT-DIRECTORY-MODEL
+    from: DES-PHASE5-DIRECTORIES
     type: depends_on
     to: DES-PHASE4-CLEANUP-EXPORT
+  - id: REL-PHASE5-DIRECTORY-CONTRACT
+    from: DES-PHASE5-DIRECTORIES
+    type: depends_on
+    to: DES-EXPLICIT-DIRECTORY-MODEL
   - id: REL-PHASE6-OBJECT
     from: DES-PHASE6-GCS
     type: depends_on
@@ -629,30 +606,10 @@ relations:
     from: DES-PHASE6-GCS
     type: depends_on
     to: DES-PHASE4-CLEANUP-EXPORT
-  - id: REL-PHASE0-BASELINE
-    from: DES-PHASE0-SCAFFOLDING
-    type: depends_on
-    to: REQ-META-SSOT
   - id: REL-PHASE7-AUTHORITY
     from: DES-PHASE7-SYNC
     type: depends_on
     to: DES-REPOSITORY-BOUNDARIES
-  - id: REL-IMP-SHA1
-    from: IMP-CURRENT-SHA1
-    type: realizes
-    to: DES-IDENTITY-TARGET
-  - id: REL-IMP-UNLOCKED
-    from: IMP-CURRENT-UNLOCKED-REPOSITORY
-    type: realizes
-    to: DES-REPOSITORY-BOUNDARIES
-  - id: REL-IMP-GCS
-    from: IMP-CURRENT-GCS-STUB
-    type: realizes
-    to: DES-PHASE6-GCS
-  - id: REL-IMP-GET
-    from: IMP-CURRENT-GET-TRUNCATES
-    type: realizes
-    to: DES-PHASE4-CLEANUP-EXPORT
 
 observations:
   - id: OBS-SHA1-IMPLEMENTATION-GAP
