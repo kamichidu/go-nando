@@ -64,13 +64,13 @@ func (c *StatCommand) Run(ctx context.Context, args []string) error {
 		}
 	}
 	fmt.Fprintf(stdout, "Size:         %d bytes\n", entry.Size)
-	fmt.Fprintf(stdout, "Mtime:        %s\n", entry.Mtime.Format(time.RFC3339))
+	fmt.Fprintf(stdout, "Mtime:        %s\n", entry.Mtime.Time().Format(time.RFC3339))
 	fmt.Fprintf(stdout, "Mode:         %o\n", entry.Mode)
 	fmt.Fprintf(stdout, "Content-Type: %s\n", entry.ContentType)
 	fmt.Fprintf(stdout, "Revision:     %d\n", entry.Revision)
 	fmt.Fprintf(stdout, "Kind:         %s\n", string(entry.Kind))
-	fmt.Fprintf(stdout, "Created At:   %s\n", entry.CreatedAt.Format(time.RFC3339))
-	fmt.Fprintf(stdout, "Updated At:   %s\n", entry.UpdatedAt.Format(time.RFC3339))
+	fmt.Fprintf(stdout, "Created At:   %s\n", entry.CreatedAt.Time().Format(time.RFC3339))
+	fmt.Fprintf(stdout, "Updated At:   %s\n", entry.UpdatedAt.Time().Format(time.RFC3339))
 
 	return nil
 }

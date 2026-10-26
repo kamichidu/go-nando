@@ -9,12 +9,12 @@ CREATE TABLE IF NOT EXISTS entries (
     kind          TEXT NOT NULL,
     object_id     TEXT NULL,
     size          INTEGER NOT NULL,
-    mtime         TEXT NOT NULL,
+    mtime         INTEGER NOT NULL,
     mode          INTEGER NOT NULL,
     content_type  TEXT NOT NULL,
     revision      INTEGER NOT NULL,
-    created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL,
     UNIQUE (parent_id, name)
 );
 `

@@ -56,7 +56,7 @@ func (r *Repository) Get(ctx context.Context, repoPath string, localPath string)
 	}
 
 	// 5. Restore the original modification time (mtime)
-	if err := os.Chtimes(localPath, timeNow(), entry.Mtime); err != nil {
+	if err := os.Chtimes(localPath, timeNow(), entry.Mtime.Time()); err != nil {
 		return fmt.Errorf("failed to restore file timestamps: %w", err)
 	}
 

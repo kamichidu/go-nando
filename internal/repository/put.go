@@ -63,7 +63,7 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 		contentType = "application/octet-stream"
 	}
 
-	now := time.Now().UTC().Truncate(time.Second)
+	now := metadata.TimestampFromTime(time.Now().UTC())
 
 	// Check if entry already exists
 	existing, err := r.metaStore.GetChild(ctx, parentID, baseName)
@@ -79,7 +79,7 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 		// - preserve CreatedAt, update UpdatedAt
 		existing.ObjectID = &res.ID
 		existing.Size = res.Size
-		existing.Mtime = localStat.ModTime().UTC().Truncate(time.Second)
+		existing.Mtime = metadata.TimestampFromTime(localStat.ModTime())
 		existing.Mode = uint32(localStat.Mode())
 		existing.ContentType = contentType
 
@@ -96,7 +96,7 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 			Kind:        metadata.EntryKindFile,
 			ObjectID:    &res.ID,
 			Size:        res.Size,
-			Mtime:       localStat.ModTime().UTC().Truncate(time.Second),
+			Mtime:       metadata.TimestampFromTime(localStat.ModTime()),
 			Mode:        uint32(localStat.Mode()),
 			ContentType: contentType,
 			Revision:    1,

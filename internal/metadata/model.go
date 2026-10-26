@@ -30,6 +30,19 @@ const (
 	EntryKindDirectory EntryKind = "directory"
 )
 
+// Timestamp is the number of nanoseconds elapsed since the Unix epoch.
+type Timestamp int64
+
+// TimestampFromTime converts a time.Time to a Timestamp.
+func TimestampFromTime(t time.Time) Timestamp {
+	return Timestamp(t.UnixNano())
+}
+
+// Time converts a Timestamp to a time.Time in UTC.
+func (t Timestamp) Time() time.Time {
+	return time.Unix(0, int64(t)).UTC()
+}
+
 // Entry represents the metadata of a file or directory in the nando logical repository.
 type Entry struct {
 	ID          EntryID
@@ -38,12 +51,12 @@ type Entry struct {
 	Kind        EntryKind
 	ObjectID    *content.ID // pointer to validated Content ID (nil for directories)
 	Size        int64       // Size in bytes
-	Mtime       time.Time   // Modification time in UTC
+	Mtime       Timestamp   // Modification time in UTC
 	Mode        uint32      // Unix-style file mode
 	ContentType string      // MIME type/Content-Type
 	Revision    uint64      // Per-entry revision (monotonically increasing)
-	CreatedAt   time.Time   // Created timestamp (UTC)
-	UpdatedAt   time.Time   // Updated timestamp (UTC)
+	CreatedAt   Timestamp   // Created timestamp (UTC)
+	UpdatedAt   Timestamp   // Updated timestamp (UTC)
 }
 
 // ParseEntryID validates and returns an EntryID.

@@ -57,14 +57,14 @@ func (s *Store) Initialize(ctx context.Context) error {
 	}
 
 	// Insert the root entry if it does not exist. Bypasses validateEntry as root creation is only allowed during initialization.
-	now := time.Now().UTC().Truncate(time.Second)
+	now := metadata.TimestampFromTime(time.Now().UTC())
 	_, err = s.db.ExecContext(ctx, `
 		INSERT OR IGNORE INTO entries (
 			entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at
 		) VALUES (
 			'root', NULL, '', 'directory', NULL, 0, ?, 0755, '', 1, ?, ?
 		)
-	`, now.Format(time.RFC3339), now.Format(time.RFC3339), now.Format(time.RFC3339))
+	`, int64(now), int64(now), int64(now))
 	if err != nil {
 		return fmt.Errorf("failed to create root entry: %w", err)
 	}
@@ -119,7 +119,7 @@ func (s *Store) scanEntry(scanner interface{ Scan(dest ...any) error }) (metadat
 	var idStr string
 	var parentIDStr sql.NullString
 	var objectIDStr sql.NullString
-	var mtimeStr, createdAtStr, updatedAtStr string
+	var mtimeVal, createdAtVal, updatedAtVal int64
 	var kindStr string
 
 	err := scanner.Scan(
@@ -129,12 +129,12 @@ func (s *Store) scanEntry(scanner interface{ Scan(dest ...any) error }) (metadat
 		&kindStr,
 		&objectIDStr,
 		&entry.Size,
-		&mtimeStr,
+		&mtimeVal,
 		&entry.Mode,
 		&entry.ContentType,
 		&entry.Revision,
-		&createdAtStr,
-		&updatedAtStr,
+		&createdAtVal,
+		&updatedAtVal,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -158,18 +158,9 @@ func (s *Store) scanEntry(scanner interface{ Scan(dest ...any) error }) (metadat
 		entry.ObjectID = &oid
 	}
 
-	entry.Mtime, err = time.Parse(time.RFC3339, mtimeStr)
-	if err != nil {
-		return metadata.Entry{}, fmt.Errorf("failed to parse mtime: %w", err)
-	}
-	entry.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)
-	if err != nil {
-		return metadata.Entry{}, fmt.Errorf("failed to parse created_at: %w", err)
-	}
-	entry.UpdatedAt, err = time.Parse(time.RFC3339, updatedAtStr)
-	if err != nil {
-		return metadata.Entry{}, fmt.Errorf("failed to parse updated_at: %w", err)
-	}
+	entry.Mtime = metadata.Timestamp(mtimeVal)
+	entry.CreatedAt = metadata.Timestamp(createdAtVal)
+	entry.UpdatedAt = metadata.Timestamp(updatedAtVal)
 
 	return entry, nil
 }
@@ -312,12 +303,12 @@ func (s *Store) Create(ctx context.Context, entry metadata.Entry) (metadata.Entr
 		string(entry.Kind),
 		objectIDVal,
 		entry.Size,
-		entry.Mtime.Format(time.RFC3339),
+		int64(entry.Mtime),
 		entry.Mode,
 		entry.ContentType,
 		entry.Revision,
-		entry.CreatedAt.Format(time.RFC3339),
-		entry.UpdatedAt.Format(time.RFC3339),
+		int64(entry.CreatedAt),
+		int64(entry.UpdatedAt),
 	)
 	if err != nil {
 		if isNamespaceUniqueConstraintError(err) {
@@ -414,6 +405,7 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 	}
 
 	newRevision := entry.Revision + 1
+	now := metadata.TimestampFromTime(time.Now().UTC())
 
 	res, err := tx.ExecContext(ctx, `
 		UPDATE entries SET
@@ -434,11 +426,11 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 		string(entry.Kind),
 		objectIDVal,
 		entry.Size,
-		entry.Mtime.Format(time.RFC3339),
+		int64(entry.Mtime),
 		entry.Mode,
 		entry.ContentType,
 		newRevision,
-		time.Now().UTC().Format(time.RFC3339),
+		int64(now),
 		entry.ID.String(),
 		entry.Revision,
 	)
@@ -460,7 +452,7 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 
 	updatedEntry := entry
 	updatedEntry.Revision = newRevision
-	updatedEntry.UpdatedAt = time.Now().UTC()
+	updatedEntry.UpdatedAt = now
 
 	return updatedEntry, nil
 }
@@ -567,7 +559,7 @@ func (s *Store) Move(ctx context.Context, entry metadata.Entry) (metadata.Entry,
 	}
 
 	newRevision := entry.Revision + 1
-	now := time.Now().UTC()
+	now := metadata.TimestampFromTime(time.Now().UTC())
 
 	res, err := tx.ExecContext(ctx, `
 		UPDATE entries SET
@@ -580,7 +572,7 @@ func (s *Store) Move(ctx context.Context, entry metadata.Entry) (metadata.Entry,
 		copiedParentID.String(),
 		entry.Name,
 		newRevision,
-		now.Format(time.RFC3339),
+		int64(now),
 		entry.ID.String(),
 		entry.Revision,
 	)

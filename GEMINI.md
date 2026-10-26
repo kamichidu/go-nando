@@ -99,7 +99,7 @@ Implement dedicated, operation-specific private validation functions rather than
 1. Compare the requested revision against the persisted state.
 2. Employ backend-native conditional writes using the requested revision as the expected version.
 3. Return `ErrEntryConflict` without applying the mutation if a revision mismatch is detected.
-4. Increment the revision exactly once on success.
+4. Produce one new revision on success.
 
 Do not silently reread the latest revision from the database to apply a stale caller request.
 

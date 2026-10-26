@@ -3,6 +3,7 @@ package metadata_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/kamichidu/go-nando/internal/content"
@@ -110,7 +111,13 @@ func TestValidatingStore(t *testing.T) {
 	})
 
 	t.Run("Create normal directory successfully", func(t *testing.T) {
-		fake := &fakeMetadataStore{}
+		getByIDCalled := false
+		fake := &fakeMetadataStore{
+			getByIDFunc: func(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
+				getByIDCalled = true
+				return metadata.Entry{}, metadata.ErrEntryNotFound
+			},
+		}
 		store := metadata.NewValidatingStore(fake)
 
 		entry := metadata.Entry{
@@ -125,6 +132,9 @@ func TestValidatingStore(t *testing.T) {
 		res, err := store.Create(ctx, entry)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
+		}
+		if getByIDCalled {
+			t.Errorf("ValidatingStore.Create should not fetch parent entry beforehand")
 		}
 		if !fake.createCalled {
 			t.Errorf("expected next.Create to be called")
@@ -332,61 +342,6 @@ func TestValidatingStore(t *testing.T) {
 		}
 	})
 
-	t.Run("Reject non-existent parent", func(t *testing.T) {
-		fake := &fakeMetadataStore{
-			getByIDFunc: func(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
-				return metadata.Entry{}, metadata.ErrEntryNotFound
-			},
-		}
-		store := metadata.NewValidatingStore(fake)
-
-		entry := metadata.Entry{
-			ID:       "file-1",
-			ParentID: &parentRoot,
-			Name:     "doc.txt",
-			Kind:     metadata.EntryKindFile,
-			ObjectID: &dummyObjectID,
-			Revision: 1,
-		}
-
-		_, err := store.Create(ctx, entry)
-		if !errors.Is(err, metadata.ErrEntryConflict) {
-			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
-		}
-		if fake.createCalled {
-			t.Errorf("next.Create should not be called")
-		}
-	})
-
-	t.Run("Reject file as parent", func(t *testing.T) {
-		fake := &fakeMetadataStore{
-			getByIDFunc: func(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
-				return metadata.Entry{
-					ID:   id,
-					Kind: metadata.EntryKindFile,
-				}, nil
-			},
-		}
-		store := metadata.NewValidatingStore(fake)
-
-		entry := metadata.Entry{
-			ID:       "file-1",
-			ParentID: &parentRoot,
-			Name:     "doc.txt",
-			Kind:     metadata.EntryKindFile,
-			ObjectID: &dummyObjectID,
-			Revision: 1,
-		}
-
-		_, err := store.Create(ctx, entry)
-		if !errors.Is(err, metadata.ErrEntryConflict) {
-			t.Errorf("expected %v, got %v", metadata.ErrEntryConflict, err)
-		}
-		if fake.createCalled {
-			t.Errorf("next.Create should not be called")
-		}
-	})
-
 	t.Run("Move file to another directory successfully", func(t *testing.T) {
 		fake := &fakeMetadataStore{
 			getByIDFunc: func(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
@@ -412,6 +367,7 @@ func TestValidatingStore(t *testing.T) {
 			ID:       "file-1",
 			ParentID: &destParent,
 			Name:     "newname.txt",
+			Revision: 1,
 		})
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
@@ -456,12 +412,32 @@ func TestValidatingStore(t *testing.T) {
 			ID:       "dir-1",
 			ParentID: &destParent,
 			Name:     "newdir",
+			Revision: 1,
 		})
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
 		if !fake.moveCalled {
 			t.Errorf("expected next.Move to be called")
+		}
+	})
+
+	t.Run("Move rejects Revision 0 before calling backend", func(t *testing.T) {
+		fake := &fakeMetadataStore{}
+		store := metadata.NewValidatingStore(fake)
+
+		destParent := metadata.EntryID("dir-dest")
+		_, err := store.Move(ctx, metadata.Entry{
+			ID:       "file-1",
+			ParentID: &destParent,
+			Name:     "newname.txt",
+			Revision: 0,
+		})
+		if !errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "invalid revision 0") {
+			t.Errorf("expected ErrEntryConflict for Revision 0, got %v", err)
+		}
+		if fake.moveCalled {
+			t.Errorf("next.Move should not be called")
 		}
 	})
 

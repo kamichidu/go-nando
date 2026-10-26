@@ -62,7 +62,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		parentID := metadata.EntryID("root")
 		childID := metadata.EntryID("child-1")
-		now := time.Now().UTC().Truncate(time.Second)
+		now := metadata.TimestampFromTime(time.Now().UTC())
 
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
@@ -112,7 +112,7 @@ func TestSQLiteStore(t *testing.T) {
 		defer store.Close()
 
 		parentID := metadata.EntryID("root")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -155,7 +155,7 @@ func TestSQLiteStore(t *testing.T) {
 		store, _ := setupStore(t)
 		defer store.Close()
 
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		rootID := metadata.EntryID("root")
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
@@ -214,7 +214,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		parentID := metadata.EntryID("root")
 		id := metadata.EntryID("file-id")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -255,7 +255,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		parentID := metadata.EntryID("root")
 		id := metadata.EntryID("file-id")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -293,7 +293,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		id1 := metadata.EntryID("file-id-1")
 		id2 := metadata.EntryID("file-id-2")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -347,7 +347,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		dirAID := metadata.EntryID("dir-A")
 		dirBID := metadata.EntryID("dir-B")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 
 		// Create dir-A
 		dirA, err := store.Create(ctx, metadata.Entry{
@@ -391,7 +391,7 @@ func TestSQLiteStore(t *testing.T) {
 		defer store.Close()
 
 		rootID := metadata.EntryID("root")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -471,7 +471,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		rootID := metadata.EntryID("root")
 		id := metadata.EntryID("del-id")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -599,7 +599,7 @@ func TestSQLiteStore(t *testing.T) {
 		defer store.Close()
 
 		rootID := metadata.EntryID("root")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 
 		// /documents
 		dirDocs := metadata.Entry{
@@ -766,7 +766,7 @@ func TestSQLiteStore(t *testing.T) {
 		defer store.Close()
 
 		rootID := metadata.EntryID("root")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -872,7 +872,7 @@ func TestSQLiteStore(t *testing.T) {
 		defer store.Close()
 
 		rootID := metadata.EntryID("root")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 
 		// Create dir-A under root
 		dirA := metadata.Entry{
@@ -1001,7 +1001,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		parentID := metadata.EntryID("root")
 		id := metadata.EntryID("file-id")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -1056,7 +1056,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		dirAID := metadata.EntryID("dir-A")
 		dirBID := metadata.EntryID("dir-B")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 
 		dirA, err := store.Create(ctx, metadata.Entry{
 			ID:        dirAID,
@@ -1112,7 +1112,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		parentID := metadata.EntryID("root")
 		id := metadata.EntryID("file-id")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -1158,7 +1158,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		parentID := metadata.EntryID("root")
 		id := metadata.EntryID("file-id")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -1228,7 +1228,7 @@ func TestSQLiteStore(t *testing.T) {
 		defer store.Close()
 
 		rootID := metadata.EntryID("root")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 
 		dirID := metadata.EntryID("parent-dir")
 		_, err := store.Create(ctx, metadata.Entry{
@@ -1276,7 +1276,7 @@ func TestSQLiteStore(t *testing.T) {
 		defer store.Close()
 
 		rootID := metadata.EntryID("root")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 
 		id1 := metadata.EntryID("file-1")
 		id2 := metadata.EntryID("file-2")
@@ -1340,7 +1340,7 @@ func TestSQLiteStore(t *testing.T) {
 		defer store.Close()
 
 		rootID := metadata.EntryID("root")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 
 		id := metadata.EntryID("file-1")
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
@@ -1402,7 +1402,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		nonExistentParent := metadata.EntryID("non-existent")
 		id := metadata.EntryID("file-id")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -1437,7 +1437,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		fileID1 := metadata.EntryID("file-id-1")
 		fileID2 := metadata.EntryID("file-id-2")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -1489,7 +1489,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		fileID1 := metadata.EntryID("file-id-1")
 		fileID2 := metadata.EntryID("file-id-2")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -1540,7 +1540,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		parentID := metadata.EntryID("root")
 		id := metadata.EntryID("file-id")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -1553,12 +1553,12 @@ func TestSQLiteStore(t *testing.T) {
 			Kind:        metadata.EntryKindFile,
 			ObjectID:    &oid,
 			Size:        12345,
-			Mtime:       now.Truncate(time.Second),
+			Mtime:       now,
 			Mode:        0644,
 			ContentType: "text/plain",
 			Revision:    1,
-			CreatedAt:   now.Truncate(time.Second),
-			UpdatedAt:   now.Truncate(time.Second),
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		}
 
 		created, err := store.Create(ctx, expected)
@@ -1581,7 +1581,7 @@ func TestSQLiteStore(t *testing.T) {
 			dbEntry.Kind != expected.Kind ||
 			*dbEntry.ObjectID != *expected.ObjectID ||
 			dbEntry.Size != expected.Size ||
-			!dbEntry.Mtime.Equal(expected.Mtime) ||
+			dbEntry.Mtime != expected.Mtime ||
 			dbEntry.Mode != expected.Mode ||
 			dbEntry.ContentType != expected.ContentType ||
 			dbEntry.Revision != expected.Revision {
@@ -1594,7 +1594,7 @@ func TestSQLiteStore(t *testing.T) {
 		defer store.Close()
 
 		parentID := metadata.EntryID("root")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -1663,7 +1663,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		parentID := metadata.EntryID("root")
 		fileID := metadata.EntryID("file-id")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -1714,7 +1714,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		fileID1 := metadata.EntryID("file-1")
 		fileID2 := metadata.EntryID("file-2")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -1776,7 +1776,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		dirAID := metadata.EntryID("dir-A")
 		dirBID := metadata.EntryID("dir-B")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 
 		_, err := store.Create(ctx, metadata.Entry{
 			ID:        dirAID,
@@ -1832,7 +1832,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		fileID1 := metadata.EntryID("file-1")
 		fileID2 := metadata.EntryID("file-2")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -1893,7 +1893,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		parentID := metadata.EntryID("root")
 		fileID := metadata.EntryID("file-id")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -2017,7 +2017,7 @@ func TestSQLiteStore(t *testing.T) {
 		defer store.db.SetMaxOpenConns(1)
 
 		rootID := metadata.EntryID("root")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -2117,7 +2117,7 @@ func TestSQLiteStore(t *testing.T) {
 		defer store.db.SetMaxOpenConns(1)
 
 		rootID := metadata.EntryID("root")
-		now := time.Now().UTC()
+		now := metadata.TimestampFromTime(time.Now().UTC())
 		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
@@ -2205,6 +2205,121 @@ func TestSQLiteStore(t *testing.T) {
 		}
 		if matchCount != 1 {
 			t.Errorf("expected exactly 1 matching entry under destination directory, got %d", matchCount)
+		}
+	})
+
+	t.Run("Timestamp: round-trip nanosecond precision", func(t *testing.T) {
+		now := time.Now().UTC()
+		ts := metadata.TimestampFromTime(now)
+		parsed := ts.Time()
+
+		if !now.Equal(parsed) {
+			t.Errorf("expected %v, got %v", now, parsed)
+		}
+	})
+
+	t.Run("Timestamp: distinguish distinct sub-second timestamps", func(t *testing.T) {
+		now := time.Now().UTC()
+		t1 := now
+		t2 := now.Add(time.Nanosecond)
+
+		ts1 := metadata.TimestampFromTime(t1)
+		ts2 := metadata.TimestampFromTime(t2)
+
+		if ts1 == ts2 {
+			t.Errorf("expected distinct timestamps, but ts1 == ts2 (%v)", ts1)
+		}
+	})
+
+	t.Run("Timestamp: SQLite storage preserves nanosecond precision and matches on Create/Update/Move", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		parentID := metadata.EntryID("root")
+		id := metadata.EntryID("time-test-id")
+		now := time.Now().UTC()
+		tsNow := metadata.TimestampFromTime(now)
+
+		// Create
+		entry := metadata.Entry{
+			ID:          id,
+			ParentID:    &parentID,
+			Name:        "file.txt",
+			Kind:        metadata.EntryKindFile,
+			Size:        10,
+			Mtime:       tsNow,
+			Mode:        0644,
+			ContentType: "text/plain",
+			Revision:    1,
+			CreatedAt:   tsNow,
+			UpdatedAt:   tsNow,
+		}
+
+		created, err := store.Create(ctx, entry)
+		if err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		if created.Mtime != tsNow || created.CreatedAt != tsNow || created.UpdatedAt != tsNow {
+			t.Errorf("created Entry timestamps do not match original tsNow")
+		}
+
+		dbEntry, err := store.GetByID(ctx, id)
+		if err != nil {
+			t.Fatalf("failed to get: %v", err)
+		}
+
+		if dbEntry.Mtime != tsNow || dbEntry.CreatedAt != tsNow || dbEntry.UpdatedAt != tsNow {
+			t.Errorf("database Entry timestamps do not match original tsNow")
+		}
+
+		// Update
+		time.Sleep(10 * time.Millisecond) // ensure time passes
+		updatedNow := time.Now().UTC()
+		tsUpdatedNow := metadata.TimestampFromTime(updatedNow)
+
+		dbEntry.Mtime = tsUpdatedNow
+		updated, err := store.Update(ctx, dbEntry)
+		if err != nil {
+			t.Fatalf("failed to update: %v", err)
+		}
+
+		if updated.Mtime != tsUpdatedNow {
+			t.Errorf("updated Entry Mtime does not match tsUpdatedNow")
+		}
+
+		dbEntryAfterUpdate, err := store.GetByID(ctx, id)
+		if err != nil {
+			t.Fatalf("failed to get: %v", err)
+		}
+
+		if dbEntryAfterUpdate.Mtime != tsUpdatedNow {
+			t.Errorf("database Entry after update does not match tsUpdatedNow")
+		}
+
+		if dbEntryAfterUpdate.UpdatedAt != updated.UpdatedAt {
+			t.Errorf("database Entry UpdatedAt (%v) does not match returned updated UpdatedAt (%v)", dbEntryAfterUpdate.UpdatedAt, updated.UpdatedAt)
+		}
+
+		// Move
+		destParent := metadata.EntryID("root")
+		moved, err := store.Move(ctx, metadata.Entry{
+			ID:       id,
+			ParentID: &destParent,
+			Name:     "moved_file.txt",
+			Revision: updated.Revision,
+		})
+		if err != nil {
+			t.Fatalf("failed to move: %v", err)
+		}
+
+		dbEntryAfterMove, err := store.GetByID(ctx, id)
+		if err != nil {
+			t.Fatalf("failed to get: %v", err)
+		}
+
+		if dbEntryAfterMove.UpdatedAt != moved.UpdatedAt {
+			t.Errorf("database Entry UpdatedAt (%v) does not match returned moved UpdatedAt (%v)", dbEntryAfterMove.UpdatedAt, moved.UpdatedAt)
 		}
 	})
 }

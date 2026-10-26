@@ -112,7 +112,7 @@ func (r *Repository) ResolveOrCreateParentDirectories(ctx context.Context, repoP
 	}
 
 	current := root
-	now := time.Now().UTC().Truncate(time.Second)
+	now := metadata.TimestampFromTime(time.Now().UTC())
 	for _, part := range parts {
 		if part == "" {
 			continue

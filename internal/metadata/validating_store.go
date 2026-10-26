@@ -2,7 +2,6 @@ package metadata
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/kamichidu/go-nando/internal/content"
@@ -62,18 +61,6 @@ func (s *ValidatingStore) Create(ctx context.Context, entry Entry) (Entry, error
 		return Entry{}, err
 	}
 
-	// State-dependent validation: Parent existence and parent kind validation
-	parent, err := s.next.GetByID(ctx, *entry.ParentID)
-	if err != nil {
-		if errors.Is(err, ErrEntryNotFound) {
-			return Entry{}, fmt.Errorf("%w: parent entry %s does not exist", ErrEntryConflict, *entry.ParentID)
-		}
-		return Entry{}, fmt.Errorf("failed to verify parent existence: %w", err)
-	}
-	if parent.Kind != EntryKindDirectory {
-		return Entry{}, fmt.Errorf("%w: parent entry %s must be a directory, but got %s", ErrEntryConflict, *entry.ParentID, parent.Kind)
-	}
-
 	return s.next.Create(ctx, entry)
 }
 
@@ -96,6 +83,10 @@ func (s *ValidatingStore) Update(ctx context.Context, entry Entry) (Entry, error
 
 // Move validates the move operation before delegating to the next store.
 func (s *ValidatingStore) Move(ctx context.Context, entry Entry) (Entry, error) {
+	if err := mustHaveValidRevision(entry); err != nil {
+		return Entry{}, err
+	}
+
 	if entry.ParentID == nil {
 		return Entry{}, fmt.Errorf("%w: parent ID cannot be empty", ErrEntryConflict)
 	}
