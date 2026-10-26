@@ -14,6 +14,16 @@ import (
 )
 
 func TestRollbackFailureDiscardsDatabaseSQLConnection(t *testing.T) {
+	assertConnectionDiscardedAfterRollbackFailure(t, nil)
+}
+
+func TestRollbackFailurePreservesOperationAndReleaseErrors(t *testing.T) {
+	operationErr := errors.New("injected operation failure")
+	assertConnectionDiscardedAfterRollbackFailure(t, operationErr)
+}
+
+func assertConnectionDiscardedAfterRollbackFailure(t *testing.T, operationErr error) {
+	t.Helper()
 	state := &rollbackFaultState{}
 	driverName := fmt.Sprintf("coordinator_rollback_fault_%d", rollbackFaultDriverID.Add(1))
 	sql.Register(driverName, &rollbackFaultDriver{state: state})
@@ -32,13 +42,19 @@ func TestRollbackFailureDiscardsDatabaseSQLConnection(t *testing.T) {
 	operationRan := false
 	err = coordinator.Exclusive(context.Background(), func() error {
 		operationRan = true
-		return nil
+		return operationErr
 	})
 	if !operationRan {
 		t.Fatal("callback did not run")
 	}
 	if !errors.Is(err, ErrRelease) || !errors.Is(err, errInjectedRollback) {
 		t.Fatalf("expected identifiable rollback release failure, got %v", err)
+	}
+	if operationErr != nil && (!errors.Is(err, ErrOperation) || !errors.Is(err, operationErr)) {
+		t.Fatalf("expected identifiable operation and callback errors as well as release errors, got %v", err)
+	}
+	if operationErr == nil && errors.Is(err, ErrOperation) {
+		t.Fatalf("successful callback unexpectedly returned operation error: %v", err)
 	}
 	if closed := state.closed.Load(); closed != 1 {
 		t.Fatalf("database/sql did not close the ErrBadConn connection; closed=%d", closed)
