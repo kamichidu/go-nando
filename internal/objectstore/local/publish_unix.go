@@ -3,7 +3,10 @@
 package local
 
 import (
+	"errors"
+	"fmt"
 	"os"
+	"syscall"
 )
 
 func publishNoReplace(tempPath, finalPath string) (bool, error) {
@@ -13,6 +16,9 @@ func publishNoReplace(tempPath, finalPath string) (bool, error) {
 	}
 	if os.IsExist(err) {
 		return false, nil
+	}
+	if errors.Is(err, syscall.EXDEV) {
+		return false, fmt.Errorf("%w: %w", ErrCrossFilesystem, err)
 	}
 	return false, err
 }

@@ -3,7 +3,8 @@
 package local
 
 import (
-	"os"
+	"errors"
+	"fmt"
 	"syscall"
 
 	"golang.org/x/sys/windows"
@@ -29,6 +30,9 @@ func publishNoReplace(tempPath, finalPath string) (bool, error) {
 		if errno == windows.ERROR_ALREADY_EXISTS || errno == windows.ERROR_FILE_EXISTS {
 			return false, nil
 		}
+	}
+	if errors.Is(err, windows.ERROR_NOT_SAME_DEVICE) {
+		return false, fmt.Errorf("%w: %w", ErrCrossFilesystem, err)
 	}
 
 	return false, err

@@ -23,6 +23,25 @@ func (invalidIDHasher) Sum(context.Context, io.Reader) (content.ID, error) {
 	return content.ID{}, nil
 }
 
+type errorHasher struct{ err error }
+
+func (h errorHasher) Sum(context.Context, io.Reader) (content.ID, error) {
+	return content.ID{}, h.err
+}
+
+type readerThenError struct {
+	read bool
+	err  error
+}
+
+func (r *readerThenError) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, r.err
+	}
+	r.read = true
+	return copy(p, []byte("partial object")), nil
+}
+
 func TestLocalStore(t *testing.T) {
 	hasher := content.NewHasher()
 	ctx := context.Background()
@@ -97,6 +116,10 @@ func TestLocalStore(t *testing.T) {
 			t.Fatalf("failed to open object: %v", err)
 		}
 		defer rc.Close()
+		exists, err := store.Exists(ctx, res.ID)
+		if err != nil || !exists {
+			t.Fatalf("successful Commit must be immediately visible to Exists, exists=%t err=%v", exists, err)
+		}
 
 		data, err := io.ReadAll(rc)
 		if err != nil {
@@ -105,6 +128,27 @@ func TestLocalStore(t *testing.T) {
 		if string(data) != contentStr {
 			t.Errorf("expected content %q, got %q", contentStr, string(data))
 		}
+	})
+
+	t.Run("Failed writes and hashing remove private staging files", func(t *testing.T) {
+		store, root := setupStore(t)
+		readErr := errors.New("injected source read failure")
+		if _, err := store.Commit(ctx, &readerThenError{err: readErr}); !errors.Is(err, readErr) {
+			t.Fatalf("expected injected read failure, got %v", err)
+		}
+		assertStoreDirsEmpty(t, root)
+
+		hashErr := errors.New("injected hash failure")
+		objectsDir := filepath.Join(root, "objects")
+		tempDir := filepath.Join(root, "temp")
+		failingStore, err := local.NewStore(objectsDir, tempDir, errorHasher{err: hashErr})
+		if err != nil {
+			t.Fatalf("failed to create store: %v", err)
+		}
+		if _, err := failingStore.Commit(ctx, strings.NewReader("complete temporary bytes")); !errors.Is(err, hashErr) {
+			t.Fatalf("expected injected hash failure, got %v", err)
+		}
+		assertStoreDirsEmpty(t, root)
 	})
 
 	t.Run("Commit identical content multiple times does not break and reuses", func(t *testing.T) {
@@ -433,6 +477,19 @@ func TestLocalStore(t *testing.T) {
 			t.Errorf("expected temp directory to be empty, but found %d files", len(tempEntries))
 		}
 	})
+}
+
+func assertStoreDirsEmpty(t *testing.T, root string) {
+	t.Helper()
+	for _, name := range []string{"objects", "temp"} {
+		entries, err := os.ReadDir(filepath.Join(root, name))
+		if err != nil {
+			t.Fatalf("failed to read %s directory: %v", name, err)
+		}
+		if len(entries) != 0 {
+			t.Errorf("%s directory should be empty after failed Commit, entries=%v", name, entries)
+		}
+	}
 }
 
 type errorReader struct {
