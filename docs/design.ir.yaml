@@ -228,6 +228,10 @@ nodes:
         - repository corruption
         - unsupported repository format
         - repository busy or locked
+      coordination_errors:
+        acquisition: ErrAcquire-wraps-context-and-SQLite-causes
+        callback: ErrOperation-wraps-the-callback-cause
+        release: ErrRelease;callback-success-may-already-be-reflected;release-failures-attach-to-panic
     provenance:
       origin: imported
   - id: DES-SCAFFOLDING-BOUNDARY

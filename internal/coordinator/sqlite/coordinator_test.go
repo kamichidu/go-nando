@@ -39,6 +39,9 @@ func TestExclusiveSerializesInstancesAndHonorsCancellation(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected deadline while waiting for SQLite writer lock, got %v", err)
 	}
+	if !errors.Is(err, sqlite.ErrAcquire) {
+		t.Fatalf("expected lock acquisition category, got %v", err)
+	}
 	if secondCalled {
 		t.Fatal("operation ran while another instance held the coordination lock")
 	}
@@ -52,7 +55,7 @@ func TestExclusiveSerializesInstancesAndHonorsCancellation(t *testing.T) {
 	}()
 	time.Sleep(40 * time.Millisecond)
 	cancelWait()
-	if err := <-cancelDone; !errors.Is(err, context.Canceled) {
+	if err := <-cancelDone; !errors.Is(err, context.Canceled) || !errors.Is(err, sqlite.ErrAcquire) {
 		t.Fatalf("expected canceled lock wait, got %v", err)
 	}
 	close(release)
@@ -67,7 +70,7 @@ func TestExclusiveSerializesInstancesAndHonorsCancellation(t *testing.T) {
 func TestExclusiveReleasesAfterErrorAndPanic(t *testing.T) {
 	coordinator := openCoordinator(t, filepath.Join(t.TempDir(), "coordination.db"))
 	wantErr := errors.New("operation failed")
-	if err := coordinator.Exclusive(context.Background(), func() error { return wantErr }); !errors.Is(err, wantErr) {
+	if err := coordinator.Exclusive(context.Background(), func() error { return wantErr }); !errors.Is(err, wantErr) || !errors.Is(err, sqlite.ErrOperation) {
 		t.Fatalf("expected operation error, got %v", err)
 	}
 
@@ -90,11 +93,22 @@ func TestExclusiveReleasesAfterErrorAndPanic(t *testing.T) {
 	if err := coordinator.Exclusive(ctx, func() error {
 		cancel()
 		return nil
-	}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected in-operation cancellation, got %v", err)
+	}); err != nil {
+		t.Fatalf("successful callback should remain successful when context is canceled afterwards: %v", err)
 	}
 	if err := coordinator.Exclusive(context.Background(), func() error { return nil }); err != nil {
 		t.Fatalf("lock was not released after cancellation: %v", err)
+	}
+
+	callbackCtx, cancelCallback := context.WithCancel(context.Background())
+	if err := coordinator.Exclusive(callbackCtx, func() error {
+		cancelCallback()
+		return callbackCtx.Err()
+	}); !errors.Is(err, context.Canceled) || !errors.Is(err, sqlite.ErrOperation) {
+		t.Fatalf("expected callback cancellation to be an operation failure, got %v", err)
+	}
+	if err := coordinator.Exclusive(context.Background(), func() error { return nil }); err != nil {
+		t.Fatalf("lock was not released after callback cancellation: %v", err)
 	}
 }
 
@@ -124,7 +138,7 @@ func TestExclusiveAcrossProcessesAndProcessTermination(t *testing.T) {
 	second := openCoordinator(t, dbPath)
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
-	if err := second.Exclusive(ctx, func() error { return nil }); !errors.Is(err, context.DeadlineExceeded) {
+	if err := second.Exclusive(ctx, func() error { return nil }); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, sqlite.ErrAcquire) {
 		t.Fatalf("separate process did not hold SQLite writer lock, got %v", err)
 	}
 

@@ -90,10 +90,10 @@ func (r *Repository) DeriveCanonicalPath(ctx context.Context, entry metadata.Ent
 	return "/" + strings.Join(parts, "/"), nil
 }
 
-// ResolveOrCreateParentDirectories takes a normalized logical path,
+// resolveOrCreateParentDirectories takes a normalized logical path,
 // traverses the ancestry from root, and implicitly creates any missing parent directories.
 // It returns the ID of the parent directory of the final component, or an error.
-func (r *Repository) ResolveOrCreateParentDirectories(ctx context.Context, repoPath string) (metadata.EntryID, error) {
+func (r *Repository) resolveOrCreateParentDirectories(ctx context.Context, repoPath string) (metadata.EntryID, error) {
 	normalized, err := paths.NormalizeLogicalPath(repoPath)
 	if err != nil {
 		return "", err

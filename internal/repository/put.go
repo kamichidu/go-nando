@@ -50,7 +50,7 @@ func (r *Repository) put(ctx context.Context, localPath string, repoPath string)
 	}
 
 	// 3. Resolve or create the destination parent directory
-	parentID, err := r.ResolveOrCreateParentDirectories(ctx, normalized)
+	parentID, err := r.resolveOrCreateParentDirectories(ctx, normalized)
 	if err != nil {
 		return err
 	}

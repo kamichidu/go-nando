@@ -19,10 +19,18 @@ type Coordinator struct {
 	db *sql.DB
 }
 
-// ErrRelease reports that the SQLite transaction or connection could not be
-// cleanly released. If returned after the callback succeeds, the callback's
-// operation may already have completed.
-var ErrRelease = errors.New("coordination lock release failed")
+var (
+	// ErrAcquire marks a failure to acquire the coordination lock. Its wrapped
+	// cause preserves context cancellation/deadline and SQLite errors.
+	ErrAcquire = errors.New("coordination lock acquisition failed")
+	// ErrOperation marks a callback failure. Its wrapped cause remains
+	// identifiable with errors.Is/errors.As.
+	ErrOperation = errors.New("coordinated operation failed")
+	// ErrRelease reports that the SQLite transaction or connection could not be
+	// cleanly released. If returned after the callback succeeds, the callback's
+	// operation may already have completed.
+	ErrRelease = errors.New("coordination lock release failed")
+)
 
 // Open opens the coordination database at dbPath. The path is made absolute
 // so callers using different working directories still address the same file.
@@ -63,7 +71,7 @@ func (c *Coordinator) Exclusive(ctx context.Context, operation func() error) (er
 	}
 	conn, err := c.db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("acquire coordination database connection: %w", err)
+		return fmt.Errorf("%w: acquire coordination database connection: %w", ErrAcquire, err)
 	}
 	transactionOpen := false
 	defer func() {
@@ -71,11 +79,11 @@ func (c *Coordinator) Exclusive(ctx context.Context, operation func() error) (er
 		var releaseErr error
 		if transactionOpen {
 			if rollbackErr := rollbackAndDiscardOnFailure(conn); rollbackErr != nil {
-				releaseErr = errors.Join(releaseErr, fmt.Errorf("%w: %v", ErrRelease, rollbackErr))
+				releaseErr = errors.Join(releaseErr, fmt.Errorf("%w: %w", ErrRelease, rollbackErr))
 			}
 		}
 		if closeErr := conn.Close(); closeErr != nil {
-			releaseErr = errors.Join(releaseErr, fmt.Errorf("%w: close coordination database connection: %v", ErrRelease, closeErr))
+			releaseErr = errors.Join(releaseErr, fmt.Errorf("%w: close coordination database connection: %w", ErrRelease, closeErr))
 		}
 		if panicValue != nil {
 			if releaseErr != nil {
@@ -86,18 +94,15 @@ func (c *Coordinator) Exclusive(ctx context.Context, operation func() error) (er
 		err = errors.Join(err, releaseErr)
 	}()
 	if err = beginImmediate(ctx, conn); err != nil {
-		return fmt.Errorf("begin exclusive coordination transaction: %w", err)
+		return fmt.Errorf("%w: begin exclusive coordination transaction: %w", ErrAcquire, err)
 	}
 	transactionOpen = true
 
 	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("%w: canceled before callback: %w", ErrOperation, err)
 	}
 	if err := operation(); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrOperation, err)
 	}
 	return nil
 }

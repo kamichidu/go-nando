@@ -564,18 +564,27 @@ func TestRepository(t *testing.T) {
 		})
 		repo := repository.NewRepository(metaStore, objStore, hasher, coordinator)
 
-		var sb strings.Builder
-
-		// 1. Create directory /documents (implied during put)
-		sb.WriteString("OP: create directory /documents\n")
-		_, err = repo.ResolveOrCreateParentDirectories(ctx, "/documents/hello.txt")
+		helloFile := filepath.Join(tempDir, "hello.txt")
+		err = os.WriteFile(helloFile, []byte("hello nando\n"), 0644)
 		if err != nil {
-			t.Fatalf("failed to create dir: %v", err)
+			t.Fatalf("failed to write local file: %v", err)
+		}
+		if err := repo.Put(ctx, helloFile, "/documents/hello.txt"); err != nil {
+			t.Fatalf("failed to put file and create parent directory: %v", err)
 		}
 		docsDir, err := repo.Stat(ctx, "/documents")
 		if err != nil {
 			t.Fatalf("failed to stat /documents: %v", err)
 		}
+		helloStat, err := repo.Stat(ctx, "/documents/hello.txt")
+		if err != nil {
+			t.Fatalf("failed to stat hello: %v", err)
+		}
+
+		var sb strings.Builder
+
+		// 1. Put creates the implied parent directory /documents.
+		sb.WriteString("OP: create directory /documents\n")
 		fmt.Fprintf(&sb, "EntryID: %s\n", docsDir.ID.String())
 		pStr := "-"
 		if docsDir.ParentID != nil {
@@ -589,19 +598,6 @@ func TestRepository(t *testing.T) {
 
 		// 2. Put file /documents/hello.txt
 		sb.WriteString("OP: put file /documents/hello.txt\n")
-		helloFile := filepath.Join(tempDir, "hello.txt")
-		err = os.WriteFile(helloFile, []byte("hello nando\n"), 0644)
-		if err != nil {
-			t.Fatalf("failed to write local file: %v", err)
-		}
-		err = repo.Put(ctx, helloFile, "/documents/hello.txt")
-		if err != nil {
-			t.Fatalf("failed to put: %v", err)
-		}
-		helloStat, err := repo.Stat(ctx, "/documents/hello.txt")
-		if err != nil {
-			t.Fatalf("failed to stat hello: %v", err)
-		}
 		fmt.Fprintf(&sb, "EntryID: %s\n", helloStat.ID.String())
 		fmt.Fprintf(&sb, "ParentID: %s\n", helloStat.ParentID.String())
 		fmt.Fprintf(&sb, "Name: %s\n", helloStat.Name)
