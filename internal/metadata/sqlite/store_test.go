@@ -14,6 +14,7 @@ import (
 
 	"github.com/kamichidu/go-nando/internal/content"
 	"github.com/kamichidu/go-nando/internal/metadata"
+	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
 )
 
 func TestSQLiteStore(t *testing.T) {
@@ -28,7 +29,7 @@ func TestSQLiteStore(t *testing.T) {
 			t.Fatalf("failed to create store: %v", err)
 		}
 
-		err = store.Initialize(ctx)
+		err = store.Initialize(ctx, repositoryformat.Current())
 		if err != nil {
 			t.Fatalf("failed to initialize schema: %v", err)
 		}
@@ -753,11 +754,9 @@ func TestSQLiteStore(t *testing.T) {
 		}
 
 		// Schema check must fail indicating obsolete Phase 0 schema
-		err = store.CheckSchemaCompatibility(ctx)
-		if err == nil {
-			t.Errorf("expected incompatible schema error, got nil")
-		} else if !errors.Is(err, ErrUnsupportedFormat) {
-			t.Errorf("expected incompatible schema error, got: %v", err)
+		err = store.CheckMigrations(ctx)
+		if !errors.Is(err, ErrMigrationsUnsupported) {
+			t.Errorf("expected incompatible migration history error, got: %v", err)
 		}
 	})
 
@@ -765,13 +764,13 @@ func TestSQLiteStore(t *testing.T) {
 		store, _ := setupStore(t)
 		defer store.Close()
 
-		var formatVersion, schemaVersion int
+		var formatVersion int
 		var algorithm, idFormat string
-		if err := store.db.QueryRowContext(ctx, `SELECT format_version, schema_version, content_algorithm, content_id_format FROM repository_format WHERE singleton=1`).Scan(&formatVersion, &schemaVersion, &algorithm, &idFormat); err != nil {
+		if err := store.db.QueryRowContext(ctx, `SELECT format_version, content_algorithm, content_id_format FROM repository_format WHERE singleton=1`).Scan(&formatVersion, &algorithm, &idFormat); err != nil {
 			t.Fatalf("failed to read format metadata: %v", err)
 		}
-		if formatVersion != CurrentFormatVersion || schemaVersion != CurrentSchemaVersion || algorithm != "sha256" || idFormat != CurrentContentIDFormat {
-			t.Fatalf("unexpected repository format metadata: %d %d %q %q", formatVersion, schemaVersion, algorithm, idFormat)
+		if formatVersion != repositoryformat.CurrentVersion || algorithm != repositoryformat.ContentAlgorithmSHA256 || idFormat != repositoryformat.ContentIDFormatSHA256 {
+			t.Fatalf("unexpected repository format metadata: %d %q %q", formatVersion, algorithm, idFormat)
 		}
 		var migrationCount int
 		if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations WHERE version=1").Scan(&migrationCount); err != nil || migrationCount != 1 {
@@ -781,8 +780,15 @@ func TestSQLiteStore(t *testing.T) {
 		if _, err := store.db.ExecContext(ctx, "UPDATE repository_format SET format_version=99 WHERE singleton=1"); err != nil {
 			t.Fatalf("failed to inject unsupported format: %v", err)
 		}
-		if err := store.CheckSchemaCompatibility(ctx); !errors.Is(err, ErrUnsupportedFormat) {
-			t.Fatalf("expected unsupported format error, got %v", err)
+		if err := store.CheckMigrations(ctx); err != nil {
+			t.Fatalf("format policy must not be checked by SQLite migration validation: %v", err)
+		}
+		persisted, found, err := store.RepositoryFormat(ctx)
+		if err != nil || !found {
+			t.Fatalf("failed to read unsupported format metadata: found=%t err=%v", found, err)
+		}
+		if err := persisted.Validate(); !errors.Is(err, repositoryformat.ErrUnsupported) {
+			t.Fatalf("Repository owner should reject unsupported format: %v", err)
 		}
 	})
 
@@ -792,14 +798,14 @@ func TestSQLiteStore(t *testing.T) {
 			t.Fatalf("failed to create empty database: %v", err)
 		}
 		defer store.Close()
-		if err := store.CheckSchemaCompatibility(ctx); !errors.Is(err, ErrUnsupportedFormat) {
-			t.Fatalf("expected empty database to be rejected by repository open, got %v", err)
+		if err := store.CheckMigrations(ctx); !errors.Is(err, ErrMigrationsUninitialized) {
+			t.Fatalf("expected empty database to have no migration history, got %v", err)
 		}
-		if err := store.Initialize(ctx); err != nil {
+		if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
 			t.Fatalf("fresh initialization should accept an empty database: %v", err)
 		}
-		if err := store.CheckSchemaCompatibility(ctx); err != nil {
-			t.Fatalf("initialized repository should be compatible: %v", err)
+		if err := store.CheckMigrations(ctx); err != nil {
+			t.Fatalf("initialized schema migrations should be accepted: %v", err)
 		}
 	})
 
@@ -828,7 +834,7 @@ func TestSQLiteStore(t *testing.T) {
 			t.Fatalf("failed to open legacy repository: %v", err)
 		}
 		defer store.Close()
-		if err := store.Initialize(ctx); !errors.Is(err, ErrUnsupportedFormat) {
+		if err := store.Initialize(ctx, repositoryformat.Current()); !errors.Is(err, ErrMigrationsUnsupported) {
 			t.Fatalf("expected legacy repository refusal, got %v", err)
 		}
 		var objectID string
@@ -943,6 +949,38 @@ func TestSQLiteStore(t *testing.T) {
 		_, err = store.GetByID(ctx, dirID)
 		if !errors.Is(err, metadata.ErrEntryNotFound) {
 			t.Errorf("expected ErrEntryNotFound after leaf directory deletion, got: %v", err)
+		}
+	})
+
+	t.Run("Zero Object ID is rejected before SQLite persistence", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+		var zero content.ID
+		rootID := metadata.EntryID("root")
+		now := metadata.TimestampFromTime(time.Now().UTC())
+		entry := metadata.Entry{
+			ID: "zero-object", ParentID: &rootID, Name: "invalid.bin", Kind: metadata.EntryKindFile,
+			ObjectID: &zero, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		}
+		if _, err := store.Create(ctx, entry); !errors.Is(err, content.ErrInvalidID) {
+			t.Fatalf("Create should reject zero Object ID, got %v", err)
+		}
+		if _, err := store.Update(ctx, entry); !errors.Is(err, content.ErrInvalidID) {
+			t.Fatalf("Update should reject zero Object ID, got %v", err)
+		}
+	})
+
+	t.Run("Invalid Object ID persisted outside the adapter is rejected on read", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+		_, err := store.db.ExecContext(ctx, `INSERT INTO entries
+			(entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at)
+			VALUES ('bad-object', 'root', 'bad.bin', 'file', 'not-an-object-id', 1, 0, 420, '', 1, 0, 0)`)
+		if err != nil {
+			t.Fatalf("failed to inject invalid persisted ID: %v", err)
+		}
+		if _, err := store.GetByID(ctx, "bad-object"); !errors.Is(err, content.ErrInvalidID) {
+			t.Fatalf("read should reject invalid persisted Object ID, got %v", err)
 		}
 	})
 

@@ -206,6 +206,9 @@ func (r *Repository) GC(ctx context.Context) (int, error) {
 
 	refSet := make(map[string]bool)
 	for _, id := range refIDs {
+		if err := id.Validate(); err != nil {
+			return 0, fmt.Errorf("metadata store returned invalid referenced object ID: %w", err)
+		}
 		refSet[id.String()] = true
 	}
 
@@ -216,6 +219,9 @@ func (r *Repository) GC(ctx context.Context) (int, error) {
 
 	deletedCount := 0
 	for _, id := range allIDs {
+		if err := id.Validate(); err != nil {
+			return deletedCount, fmt.Errorf("object store returned invalid object ID: %w", err)
+		}
 		if !refSet[id.String()] {
 			if err := r.objectStore.Delete(ctx, id); err != nil {
 				return deletedCount, fmt.Errorf("failed to delete unreferenced object %s: %w", id.String(), err)

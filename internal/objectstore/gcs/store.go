@@ -27,21 +27,33 @@ func (s *Store) Commit(ctx context.Context, src io.Reader) (objectstore.CommitRe
 
 // Open is not implemented yet.
 func (s *Store) Open(ctx context.Context, id content.ID) (io.ReadCloser, error) {
+	if err := id.Validate(); err != nil {
+		return nil, err
+	}
 	return nil, ErrNotImplemented
 }
 
 // Exists is not implemented yet.
 func (s *Store) Exists(ctx context.Context, id content.ID) (bool, error) {
+	if err := id.Validate(); err != nil {
+		return false, err
+	}
 	return false, ErrNotImplemented
 }
 
 // Delete is not implemented yet.
 func (s *Store) Delete(ctx context.Context, id content.ID) error {
+	if err := id.Validate(); err != nil {
+		return err
+	}
 	return ErrNotImplemented
 }
 
 // Verify is not implemented yet.
 func (s *Store) Verify(ctx context.Context, id content.ID) error {
+	if err := id.Validate(); err != nil {
+		return err
+	}
 	return ErrNotImplemented
 }
 

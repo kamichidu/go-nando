@@ -68,6 +68,9 @@ func (s *Store) Commit(ctx context.Context, src io.Reader) (objectstore.CommitRe
 	if err != nil {
 		return objectstore.CommitResult{}, fmt.Errorf("failed to hash temporary object: %w", err)
 	}
+	if err := id.Validate(); err != nil {
+		return objectstore.CommitResult{}, fmt.Errorf("hasher returned invalid object ID: %w", err)
+	}
 	if err := tempFile.Close(); err != nil {
 		return objectstore.CommitResult{}, fmt.Errorf("failed to close temporary file: %w", err)
 	}
@@ -125,6 +128,9 @@ func (s *Store) Commit(ctx context.Context, src io.Reader) (objectstore.CommitRe
 
 // Open retrieves the reader for the given object.
 func (s *Store) Open(ctx context.Context, id content.ID) (io.ReadCloser, error) {
+	if err := id.Validate(); err != nil {
+		return nil, err
+	}
 	path := filepath.Join(s.objectsDir, id.String())
 	file, err := os.Open(path)
 	if err != nil {
@@ -138,6 +144,9 @@ func (s *Store) Open(ctx context.Context, id content.ID) (io.ReadCloser, error) 
 
 // Exists checks if the object is present in the store.
 func (s *Store) Exists(ctx context.Context, id content.ID) (bool, error) {
+	if err := id.Validate(); err != nil {
+		return false, err
+	}
 	path := filepath.Join(s.objectsDir, id.String())
 	_, err := os.Stat(path)
 	if err == nil {
@@ -151,6 +160,9 @@ func (s *Store) Exists(ctx context.Context, id content.ID) (bool, error) {
 
 // Delete removes an object from the store.
 func (s *Store) Delete(ctx context.Context, id content.ID) error {
+	if err := id.Validate(); err != nil {
+		return err
+	}
 	path := filepath.Join(s.objectsDir, id.String())
 	err := os.Remove(path)
 	if err != nil {
@@ -164,6 +176,9 @@ func (s *Store) Delete(ctx context.Context, id content.ID) error {
 
 // Verify validates that the stored object matches its hash.
 func (s *Store) Verify(ctx context.Context, id content.ID) error {
+	if err := id.Validate(); err != nil {
+		return err
+	}
 	file, err := s.Open(ctx, id)
 	if err != nil {
 		return err

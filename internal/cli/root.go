@@ -19,6 +19,7 @@ import (
 	"github.com/kamichidu/go-nando/internal/objectstore/local"
 	"github.com/kamichidu/go-nando/internal/paths"
 	"github.com/kamichidu/go-nando/internal/repository"
+	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
 )
 
 // ErrInvalidArguments is returned when CLI arguments are missing or invalid.
@@ -162,7 +163,20 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func(), error) {
 		return nil, "", nil, fmt.Errorf("failed to open metadata store: %w", err)
 	}
 
-	if err := metaStore.CheckSchemaCompatibility(ctx); err != nil {
+	if err := metaStore.CheckMigrations(ctx); err != nil {
+		_ = metaStore.Close()
+		return nil, "", nil, err
+	}
+	repoFormat, found, err := metaStore.RepositoryFormat(ctx)
+	if err != nil {
+		_ = metaStore.Close()
+		return nil, "", nil, err
+	}
+	if !found {
+		_ = metaStore.Close()
+		return nil, "", nil, fmt.Errorf("%w: repository format metadata is missing", repositoryformat.ErrUnsupported)
+	}
+	if err := repoFormat.Validate(); err != nil {
 		_ = metaStore.Close()
 		return nil, "", nil, err
 	}

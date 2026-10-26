@@ -8,7 +8,6 @@ import (
 
 // MetadataStore defines the interface for managing repository metadata.
 type MetadataStore interface {
-	Initialize(ctx context.Context) error
 	Root(ctx context.Context) (Entry, error)
 	GetByID(ctx context.Context, id EntryID) (Entry, error)
 	GetChild(ctx context.Context, parentID EntryID, name string) (Entry, error)
@@ -28,5 +27,4 @@ type MetadataStore interface {
 	Delete(ctx context.Context, id EntryID) error
 	ReferencedObjectIDs(ctx context.Context) ([]content.ID, error)
 	ListAll(ctx context.Context) ([]Entry, error)
-	CheckSchemaCompatibility(ctx context.Context) error
 }

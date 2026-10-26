@@ -17,6 +17,12 @@ import (
 	"github.com/kamichidu/go-nando/internal/objectstore/local"
 )
 
+type invalidIDHasher struct{}
+
+func (invalidIDHasher) Sum(context.Context, io.Reader) (content.ID, error) {
+	return content.ID{}, nil
+}
+
 func TestLocalStore(t *testing.T) {
 	hasher := content.NewHasher()
 	ctx := context.Background()
@@ -33,6 +39,38 @@ func TestLocalStore(t *testing.T) {
 		}
 		return store, tempDir
 	}
+
+	t.Run("Zero ID is rejected at object store boundaries", func(t *testing.T) {
+		store, _ := setupStore(t)
+		var zero content.ID
+		if _, err := store.Open(ctx, zero); !errors.Is(err, content.ErrInvalidID) {
+			t.Fatalf("Open should reject zero ID, got %v", err)
+		}
+		if _, err := store.Exists(ctx, zero); !errors.Is(err, content.ErrInvalidID) {
+			t.Fatalf("Exists should reject zero ID, got %v", err)
+		}
+		if err := store.Delete(ctx, zero); !errors.Is(err, content.ErrInvalidID) {
+			t.Fatalf("Delete should reject zero ID, got %v", err)
+		}
+		if err := store.Verify(ctx, zero); !errors.Is(err, content.ErrInvalidID) {
+			t.Fatalf("Verify should reject zero ID, got %v", err)
+		}
+	})
+
+	t.Run("Commit rejects an invalid ID returned by its hasher", func(t *testing.T) {
+		root := t.TempDir()
+		store, err := local.NewStore(filepath.Join(root, "objects"), filepath.Join(root, "temp"), invalidIDHasher{})
+		if err != nil {
+			t.Fatalf("failed to create store: %v", err)
+		}
+		if _, err := store.Commit(ctx, strings.NewReader("data")); !errors.Is(err, content.ErrInvalidID) {
+			t.Fatalf("expected invalid hasher ID to be rejected, got %v", err)
+		}
+		raw, err := store.ListRaw(ctx)
+		if err != nil || len(raw) != 0 {
+			t.Fatalf("invalid ID must not publish an object path, raw=%v err=%v", raw, err)
+		}
+	})
 
 	t.Run("Commit and Open successful", func(t *testing.T) {
 		store, _ := setupStore(t)

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/kamichidu/go-nando/internal/metadata/sqlite"
+	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
 )
 
 // InitRepository initializes the directory structure and schema for a new nando repository.
@@ -25,7 +26,7 @@ func InitRepository(ctx context.Context, repoDir string) error {
 			return fmt.Errorf("failed to inspect repository directory: %w", readErr)
 		}
 		if len(entries) != 0 {
-			return fmt.Errorf("%w: non-empty directory has no repository format metadata", sqlite.ErrUnsupportedFormat)
+			return fmt.Errorf("%w: non-empty directory has no repository format metadata", repositoryformat.ErrUnsupported)
 		}
 	} else if err != nil {
 		return fmt.Errorf("failed to inspect metadata database path: %w", err)
@@ -38,13 +39,27 @@ func InitRepository(ctx context.Context, repoDir string) error {
 	}
 	defer store.Close()
 
+	repoFormat := repositoryformat.Current()
+	if err := repoFormat.Validate(); err != nil {
+		return err
+	}
 	if dbExists {
-		if err := store.CheckSchemaCompatibility(ctx); err != nil {
-			return fmt.Errorf("failed schema validation: %w", err)
+		if err := store.CheckMigrations(ctx); err != nil {
+			return fmt.Errorf("failed schema migration validation: %w", err)
+		}
+		persistedFormat, found, err := store.RepositoryFormat(ctx)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return repositoryformat.ErrUnsupported
+		}
+		if err := persistedFormat.Validate(); err != nil {
+			return err
 		}
 	}
 
-	if err := store.Initialize(ctx); err != nil {
+	if err := store.Initialize(ctx, repoFormat); err != nil {
 		return fmt.Errorf("failed to initialize metadata schema: %w", err)
 	}
 

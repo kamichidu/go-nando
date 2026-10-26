@@ -22,11 +22,6 @@ func NewValidatingStore(next MetadataStore) *ValidatingStore {
 // Ensure ValidatingStore implements MetadataStore
 var _ MetadataStore = (*ValidatingStore)(nil)
 
-// Initialize delegates to the next store.
-func (s *ValidatingStore) Initialize(ctx context.Context) error {
-	return s.next.Initialize(ctx)
-}
-
 // Root delegates to the next store.
 func (s *ValidatingStore) Root(ctx context.Context) (Entry, error) {
 	return s.next.Root(ctx)
@@ -125,11 +120,6 @@ func (s *ValidatingStore) ListAll(ctx context.Context) ([]Entry, error) {
 	return s.next.ListAll(ctx)
 }
 
-// CheckSchemaCompatibility delegates to the next store.
-func (s *ValidatingStore) CheckSchemaCompatibility(ctx context.Context) error {
-	return s.next.CheckSchemaCompatibility(ctx)
-}
-
 // EntryID Validator definitions and helpers.
 
 type entryIDValidator func(EntryID) error
@@ -214,6 +204,9 @@ func mustHaveValidObjectIDForKind(entry Entry) error {
 	case EntryKindFile:
 		if entry.ObjectID == nil {
 			return fmt.Errorf("%w: file entry must have an associated object ID", ErrEntryConflict)
+		}
+		if err := entry.ObjectID.Validate(); err != nil {
+			return fmt.Errorf("%w: invalid object ID: %w", ErrEntryConflict, err)
 		}
 	case EntryKindDirectory:
 		if entry.ObjectID != nil {

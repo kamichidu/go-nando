@@ -56,6 +56,9 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 	if err != nil {
 		return fmt.Errorf("failed to commit object: %w", err)
 	}
+	if err := res.ID.Validate(); err != nil {
+		return fmt.Errorf("object store returned invalid content ID: %w", err)
+	}
 
 	// 5. Publish or replace committed metadata
 	contentType := mime.TypeByExtension(filepath.Ext(localPath))

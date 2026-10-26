@@ -10,6 +10,7 @@ import (
 
 	"github.com/kamichidu/go-nando/internal/content"
 	"github.com/kamichidu/go-nando/internal/metadata"
+	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
 	_ "modernc.org/sqlite"
 )
 
@@ -18,9 +19,15 @@ type Store struct {
 	db *sql.DB
 }
 
-// ErrUnsupportedFormat identifies repositories whose persisted format cannot
-// be interpreted safely by this binary.
-var ErrUnsupportedFormat = errors.New("unsupported repository format")
+// ErrMigrationsUnsupported identifies a SQLite schema history this adapter
+// cannot safely apply or use.
+var ErrMigrationsUnsupported = errors.New("unsupported SQLite schema migrations")
+
+// ErrMigrationsUninitialized identifies a database without a migration ledger.
+var ErrMigrationsUninitialized = errors.New("SQLite schema migrations are not initialized")
+
+// ErrRepositoryFormatMissing indicates that no Repository Format record was persisted.
+var ErrRepositoryFormatMissing = errors.New("repository format metadata is missing")
 
 // NewStore creates a new Store instance backed by SQLite.
 func NewStore(dbPath string) (*Store, error) {
@@ -52,43 +59,62 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// Initialize executes schema migrations and ensures a single root entry is present.
-func (s *Store) Initialize(ctx context.Context) error {
-	if err := s.checkSchemaCompatibility(ctx, true); err != nil {
-		return err
-	}
-	var entriesExists int
-	err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='entries'").Scan(&entriesExists)
-	if err != nil {
-		return fmt.Errorf("failed to inspect SQLite schema: %w", err)
-	}
-	if entriesExists == 0 {
-		tx, err := s.db.BeginTx(ctx, nil)
+// Initialize applies the SQLite schema migrations and persists the supplied
+// Repository Format record in the same transaction. Compatibility validation
+// remains the Repository owner's responsibility.
+func (s *Store) Initialize(ctx context.Context, repoFormat repositoryformat.Format) error {
+	if err := s.CheckMigrations(ctx); err == nil {
+		_, found, err := s.RepositoryFormat(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to begin schema migration: %w", err)
-		}
-		defer tx.Rollback()
-		if _, err := tx.ExecContext(ctx, MigrationV1); err != nil {
-			return fmt.Errorf("failed to apply SQLite schema migration 1: %w", err)
-		}
-		now := metadata.TimestampFromTime(time.Now().UTC())
-		if _, err := tx.ExecContext(ctx, `INSERT INTO repository_format
-			(singleton, format_version, schema_version, content_algorithm, content_id_format)
-			VALUES (1, ?, ?, ?, ?)`, CurrentFormatVersion, CurrentSchemaVersion, CurrentContentAlgorithm, CurrentContentIDFormat); err != nil {
-			return fmt.Errorf("failed to write repository format metadata: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?)", int64(now)); err != nil {
-			return fmt.Errorf("failed to record SQLite schema migration: %w", err)
-		}
-		if err := insertRoot(ctx, tx, now); err != nil {
 			return err
 		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("failed to commit SQLite schema migration: %w", err)
+		if !found {
+			return ErrRepositoryFormatMissing
 		}
 		return nil
+	} else if !errors.Is(err, ErrMigrationsUninitialized) {
+		return err
 	}
-	return s.CheckSchemaCompatibility(ctx)
+	var existingTables int
+	err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&existingTables)
+	if err != nil {
+		return fmt.Errorf("failed to inspect uninitialized SQLite database: %w", err)
+	}
+	if existingTables != 0 {
+		return fmt.Errorf("%w: existing database has tables but no migration history", ErrMigrationsUnsupported)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin schema migration: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, MigrationV1); err != nil {
+		return fmt.Errorf("failed to apply SQLite schema migration 1: %w", err)
+	}
+	now := metadata.TimestampFromTime(time.Now().UTC())
+	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?)", int64(now)); err != nil {
+		return fmt.Errorf("failed to record SQLite schema migration: %w", err)
+	}
+	if err := insertRoot(ctx, tx, now); err != nil {
+		return err
+	}
+	if err := writeRepositoryFormat(ctx, tx, repoFormat); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit SQLite schema migration: %w", err)
+	}
+	return nil
+}
+
+func writeRepositoryFormat(ctx context.Context, tx *sql.Tx, repoFormat repositoryformat.Format) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO repository_format
+		(singleton, format_version, content_algorithm, content_id_format)
+		VALUES (1, ?, ?, ?)`, repoFormat.Version, repoFormat.ContentAlgorithm, repoFormat.ContentIDFormat)
+	if err != nil {
+		return fmt.Errorf("failed to persist Repository Format metadata: %w", err)
+	}
+	return nil
 }
 
 func insertRoot(ctx context.Context, tx *sql.Tx, now metadata.Timestamp) error {
@@ -106,54 +132,44 @@ func insertRoot(ctx context.Context, tx *sql.Tx, now metadata.Timestamp) error {
 	return nil
 }
 
-// CheckSchemaCompatibility checks if the schema is compatible.
-func (s *Store) CheckSchemaCompatibility(ctx context.Context) error {
-	return s.checkSchemaCompatibility(ctx, false)
+// RepositoryFormat reads the raw persisted Repository Format values. Policy
+// validation is deliberately performed by the Repository composition root.
+func (s *Store) RepositoryFormat(ctx context.Context) (repositoryformat.Format, bool, error) {
+	var result repositoryformat.Format
+	err := s.db.QueryRowContext(ctx, `SELECT format_version, content_algorithm, content_id_format
+		FROM repository_format WHERE singleton=1`).Scan(&result.Version, &result.ContentAlgorithm, &result.ContentIDFormat)
+	if errors.Is(err, sql.ErrNoRows) {
+		return repositoryformat.Format{}, false, nil
+	}
+	if err != nil {
+		return repositoryformat.Format{}, false, fmt.Errorf("failed to read Repository Format metadata: %w", err)
+	}
+	return result, true, nil
 }
 
-func (s *Store) checkSchemaCompatibility(ctx context.Context, allowUninitialized bool) error {
-	var count int
-	err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='entries'").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("failed to inspect entries table: %w", err)
+// CheckMigrations validates only the SQLite migration ledger. It does not
+// inspect every table or enforce Repository Format compatibility.
+func (s *Store) CheckMigrations(ctx context.Context) error {
+	var ledgerExists int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'").Scan(&ledgerExists); err != nil {
+		return fmt.Errorf("failed to inspect SQLite migration ledger: %w", err)
 	}
-	if count == 0 {
-		var tableCount int
-		if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tableCount); err != nil {
-			return fmt.Errorf("failed to inspect uninitialized SQLite database: %w", err)
+	if ledgerExists == 0 {
+		var existingTables int
+		if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&existingTables); err != nil {
+			return fmt.Errorf("failed to inspect database without migration ledger: %w", err)
 		}
-		if allowUninitialized && tableCount == 0 {
-			return nil
+		if existingTables != 0 {
+			return fmt.Errorf("%w: database has tables but no migration history", ErrMigrationsUnsupported)
 		}
-		return fmt.Errorf("%w: SQLite database has no repository format metadata", ErrUnsupportedFormat)
+		return ErrMigrationsUninitialized
 	}
-	var formatExists int
-	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='repository_format'").Scan(&formatExists); err != nil {
-		return fmt.Errorf("failed to inspect repository format metadata: %w", err)
+	var count, minVersion, maxVersion int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*), coalesce(min(version), 0), coalesce(max(version), 0) FROM schema_migrations").Scan(&count, &minVersion, &maxVersion); err != nil {
+		return fmt.Errorf("failed to read SQLite migration ledger: %w", err)
 	}
-	if formatExists == 0 {
-		return fmt.Errorf("%w: existing SQLite repository has no format metadata; legacy SHA-1 transition is undecided", ErrUnsupportedFormat)
-	}
-	var formatVersion, schemaVersion int
-	var algorithm, idFormat string
-	err = s.db.QueryRowContext(ctx, `SELECT format_version, schema_version, content_algorithm, content_id_format
-		FROM repository_format WHERE singleton=1`).Scan(&formatVersion, &schemaVersion, &algorithm, &idFormat)
-	if err != nil {
-		return fmt.Errorf("%w: repository format metadata is missing or invalid: %v", ErrUnsupportedFormat, err)
-	}
-	if formatVersion != CurrentFormatVersion || schemaVersion != CurrentSchemaVersion || algorithm != CurrentContentAlgorithm || idFormat != CurrentContentIDFormat {
-		return fmt.Errorf("%w: found format=%d schema=%d algorithm=%q id_format=%q; supported format=%d schema=%d algorithm=%q id_format=%q", ErrUnsupportedFormat, formatVersion, schemaVersion, algorithm, idFormat, CurrentFormatVersion, CurrentSchemaVersion, CurrentContentAlgorithm, CurrentContentIDFormat)
-	}
-	var migrationCount int
-	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations WHERE version = ?", CurrentSchemaVersion).Scan(&migrationCount); err != nil || migrationCount != 1 {
-		return fmt.Errorf("%w: required SQLite schema migration %d is not recorded", ErrUnsupportedFormat, CurrentSchemaVersion)
-	}
-	var maxMigration int
-	if err := s.db.QueryRowContext(ctx, "SELECT coalesce(max(version), 0) FROM schema_migrations").Scan(&maxMigration); err != nil {
-		return fmt.Errorf("%w: failed to inspect SQLite migration history: %v", ErrUnsupportedFormat, err)
-	}
-	if maxMigration > CurrentSchemaVersion {
-		return fmt.Errorf("%w: SQLite schema migration %d is newer than supported version %d", ErrUnsupportedFormat, maxMigration, CurrentSchemaVersion)
+	if minVersion != 1 || maxVersion > CurrentSchemaVersion || count != maxVersion || maxVersion != CurrentSchemaVersion {
+		return fmt.Errorf("%w: found %d migrations from version %d through %d; supported history is 1 through %d", ErrMigrationsUnsupported, count, minVersion, maxVersion, CurrentSchemaVersion)
 	}
 	return nil
 }
@@ -316,6 +332,11 @@ func (s *Store) validateCreateInvariants(ctx context.Context, q dbtx, entry meta
 
 // Create inserts a new entry into SQLite.
 func (s *Store) Create(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
+	if entry.ObjectID != nil {
+		if err := entry.ObjectID.Validate(); err != nil {
+			return metadata.Entry{}, fmt.Errorf("invalid object ID: %w", err)
+		}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return metadata.Entry{}, fmt.Errorf("failed to begin transaction: %w", err)
@@ -416,6 +437,11 @@ func (s *Store) validateUpdateInvariants(ctx context.Context, q dbtx, entry meta
 
 // Update updates an existing entry in SQLite after performing basic invariant validation.
 func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
+	if entry.ObjectID != nil {
+		if err := entry.ObjectID.Validate(); err != nil {
+			return metadata.Entry{}, fmt.Errorf("invalid object ID: %w", err)
+		}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return metadata.Entry{}, fmt.Errorf("failed to begin transaction: %w", err)

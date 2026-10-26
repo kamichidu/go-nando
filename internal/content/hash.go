@@ -65,6 +65,14 @@ func ParseID(value string) (ID, error) {
 	}, nil
 }
 
+// Validate reports whether id contains a supported algorithm namespace.
+func (id ID) Validate() error {
+	if id.algorithm != AlgorithmSHA256 {
+		return fmt.Errorf("%w: unsupported or empty algorithm namespace %q", ErrInvalidID, id.algorithm)
+	}
+	return nil
+}
+
 // String returns the canonical lowercase hexadecimal representation of the ID.
 func (id ID) String() string {
 	return string(id.algorithm) + "-" + hex.EncodeToString(id.digest[:])

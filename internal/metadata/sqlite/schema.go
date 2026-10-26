@@ -21,7 +21,6 @@ CREATE TABLE entries (
 CREATE TABLE repository_format (
     singleton          INTEGER PRIMARY KEY CHECK (singleton = 1),
     format_version     INTEGER NOT NULL,
-    schema_version     INTEGER NOT NULL,
     content_algorithm  TEXT NOT NULL,
     content_id_format  TEXT NOT NULL
 );
@@ -31,7 +30,4 @@ CREATE TABLE schema_migrations (
 );
 `
 
-const CurrentFormatVersion = 1
 const CurrentSchemaVersion = 1
-const CurrentContentAlgorithm = "sha256"
-const CurrentContentIDFormat = "sha256-<lowercase-hex>"

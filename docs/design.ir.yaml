@@ -121,7 +121,7 @@ nodes:
   - id: DES-REPOSITORY-BOUNDARIES
     level: system_design
     kind: responsibility-model
-    statement: The Repository owns cross-store consistency, commit ordering, and process-wide operation exclusion; the Application performs use-case orchestration.
+    statement: The Repository owns cross-store consistency, commit ordering, process-wide operation exclusion, and Repository Format meaning and compatibility policy; the Application performs use-case orchestration.
     provenance:
       origin: imported
     attributes:
@@ -167,7 +167,7 @@ nodes:
   - id: DES-CONSTRUCTION
     level: system_design
     kind: composition-root
-    statement: The executable boundary composes repository location, format metadata, metadata backend, object backend, digest algorithm, and Repository operation exclusion; backend selection is planned to use repository-owned configuration distinct from per-user runtime configuration.
+    statement: The executable composition root reads persisted Repository Format metadata, validates its meaning and compatibility before use, then composes the metadata backend, object backend, digest algorithm, and Repository. The SQLite adapter owns only SQLite schema migrations and persistence of Repository Format values; backend selection is planned to use repository-owned configuration distinct from per-user runtime configuration.
     attributes:
       current_backends: [SQLite, local filesystem Object Store]
       planned_backend_selection: repository-owned-configuration

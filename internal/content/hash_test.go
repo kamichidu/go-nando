@@ -104,3 +104,16 @@ func TestHasher(t *testing.T) {
 		}
 	})
 }
+
+func TestIDValidateRejectsZeroValue(t *testing.T) {
+	var zero content.ID
+	if err := zero.Validate(); !errors.Is(err, content.ErrInvalidID) {
+		t.Fatalf("expected zero ID to be invalid, got %v", err)
+	}
+
+	var zeroDigest [32]byte
+	constructed := content.NewID(zeroDigest)
+	if err := constructed.Validate(); err != nil {
+		t.Fatalf("NewID behavior should remain valid even for a zero digest: %v", err)
+	}
+}

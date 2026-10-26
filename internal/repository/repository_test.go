@@ -14,6 +14,7 @@ import (
 	"github.com/kamichidu/go-nando/internal/metadata/sqlite"
 	"github.com/kamichidu/go-nando/internal/objectstore/local"
 	"github.com/kamichidu/go-nando/internal/repository"
+	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
 )
 
 type fixedIDMetadataStore struct {
@@ -43,7 +44,7 @@ func TestRepository(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to create meta store: %v", err)
 		}
-		if err := metaStore.Initialize(ctx); err != nil {
+		if err := metaStore.Initialize(ctx, repositoryformat.Current()); err != nil {
 			t.Fatalf("failed to init meta store: %v", err)
 		}
 
@@ -230,7 +231,7 @@ func TestRepository(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to create meta store: %v", err)
 		}
-		if err := rawStore.Initialize(ctx); err != nil {
+		if err := rawStore.Initialize(ctx, repositoryformat.Current()); err != nil {
 			t.Fatalf("failed to init: %v", err)
 		}
 
