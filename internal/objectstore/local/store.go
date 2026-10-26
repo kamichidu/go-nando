@@ -2,7 +2,6 @@ package local
 
 import (
 	"context"
-	"crypto/sha1"
 	"fmt"
 	"io"
 	"os"
@@ -52,11 +51,7 @@ func (s *Store) Commit(ctx context.Context, src io.Reader) (objectstore.CommitRe
 		}
 	}()
 
-	// Use MultiWriter to hash as we write
-	h := sha1.New()
-	mw := io.MultiWriter(tempFile, h)
-
-	written, err := io.Copy(mw, src)
+	written, err := io.Copy(tempFile, src)
 	if err != nil {
 		return objectstore.CommitResult{}, fmt.Errorf("failed to write to temporary file: %w", err)
 	}
@@ -66,15 +61,16 @@ func (s *Store) Commit(ctx context.Context, src io.Reader) (objectstore.CommitRe
 		return objectstore.CommitResult{}, fmt.Errorf("failed to sync temporary file: %w", err)
 	}
 
+	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
+		return objectstore.CommitResult{}, fmt.Errorf("failed to seek temporary file for hashing: %w", err)
+	}
+	id, err := s.hasher.Sum(ctx, tempFile)
+	if err != nil {
+		return objectstore.CommitResult{}, fmt.Errorf("failed to hash temporary object: %w", err)
+	}
 	if err := tempFile.Close(); err != nil {
 		return objectstore.CommitResult{}, fmt.Errorf("failed to close temporary file: %w", err)
 	}
-
-	// Derive final ID from computed SHA-1 digest
-	digest := h.Sum(nil)
-	var arr [20]byte
-	copy(arr[:], digest)
-	id := content.NewID(arr)
 
 	destPath := filepath.Join(s.objectsDir, id.String())
 

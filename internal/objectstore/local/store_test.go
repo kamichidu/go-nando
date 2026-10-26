@@ -3,7 +3,7 @@ package local_test
 import (
 	"bytes"
 	"context"
-	"crypto/sha1"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"os"
@@ -43,7 +43,7 @@ func TestLocalStore(t *testing.T) {
 			t.Fatalf("failed to commit: %v", err)
 		}
 
-		expectedID, err := content.ParseID("7dbfef13e56908a5df3983234269d73489e97e52")
+		expectedID, err := content.ParseID("sha256-5d8b5e6fda5d36d6c59cc1cab7e31a59b9d135f109a6a3964624f3d65d9f0844")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -92,8 +92,8 @@ func TestLocalStore(t *testing.T) {
 		store, rootDir := setupStore(t)
 		contentStr := "test content"
 
-		// Precompute the true hash: sha1 for "test content" is 1eebdf4fdc9fc7bf283031b93f9aef3338de9052
-		trueID, err := content.ParseID("1eebdf4fdc9fc7bf283031b93f9aef3338de9052")
+		// SHA-256 of "test content" is declared independently from the store.
+		trueID, err := content.ParseID("sha256-6ae8a75555209fd6c44157c0aed8016e763ff435a19cf186f76863140143ff72")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -115,7 +115,7 @@ func TestLocalStore(t *testing.T) {
 
 	t.Run("Return NotFound for non-existent objects", func(t *testing.T) {
 		store, _ := setupStore(t)
-		fakeID, err := content.ParseID("1234567890abcdef1234567890abcdef12345678")
+		fakeID, err := content.ParseID("sha256-4c09422b949a71723f72af315de016346cc6abdc208ffecde026dc00bd506674")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -178,7 +178,7 @@ func TestLocalStore(t *testing.T) {
 			t.Fatalf("failed to commit zeros: %v", err)
 		}
 
-		directHash := sha1.Sum([]byte{0, 0, 0, 0})
+		directHash := sha256.Sum256([]byte{0, 0, 0, 0})
 		t.Logf("Golden Test empty: %s, hello: %s, zeros: %s, directHash: %x", resEmpty.ID.String(), resHello.ID.String(), resZeros.ID.String(), directHash)
 
 		// Load and verify golden file content
@@ -191,18 +191,18 @@ func TestLocalStore(t *testing.T) {
 		contentStr := string(data)
 
 		// Hardcoded expectations check to satisfy: "Expected digests must be hard-coded independently."
-		if resEmpty.ID.String() != "da39a3ee5e6b4b0d3255bfef95601890afd80709" {
-			t.Errorf("empty sha1 mismatch")
+		if resEmpty.ID.String() != "sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
+			t.Errorf("empty sha256 mismatch")
 		}
-		if resHello.ID.String() != "6640ec4d43fe9d18fcfee38caab6c91e3f231e17" {
-			t.Errorf("hello sha1 mismatch")
+		if resHello.ID.String() != "sha256-4b234e4b38341d10a8135b4a0af020a2c4db56b805272fd0fde62c568c8dd77e" {
+			t.Errorf("hello sha256 mismatch")
 		}
-		if resZeros.ID.String() != "9069ca78e7450a285173431b3e52c5c25299e473" {
-			t.Errorf("zeros sha1 mismatch")
+		if resZeros.ID.String() != "sha256-df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119" {
+			t.Errorf("zeros sha256 mismatch")
 		}
 
 		// Ensure final path check
-		expectedEmptyPath := "objects/da39a3ee5e6b4b0d3255bfef95601890afd80709"
+		expectedEmptyPath := "objects/sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 		if !strings.Contains(contentStr, expectedEmptyPath) {
 			t.Errorf("golden file must contain path %q", expectedEmptyPath)
 		}

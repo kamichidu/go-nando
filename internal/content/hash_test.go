@@ -56,7 +56,7 @@ func TestHasher(t *testing.T) {
 			t.Fatalf("failed to hash empty: %v", err)
 		}
 
-		expected := "da39a3ee5e6b4b0d3255bfef95601890afd80709" // SHA-1 of empty string
+		expected := "sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" // SHA-256 of empty string
 		if h.String() != expected {
 			t.Errorf("expected %q, got %q", expected, h.String())
 		}
@@ -67,13 +67,14 @@ func TestHasher(t *testing.T) {
 			input string
 			valid bool
 		}{
-			{input: "da39a3ee5e6b4b0d3255bfef95601890afd80709", valid: true},
-			{input: "6640ec4d43fe9d18fcfee38caab6c91e3f231e17", valid: true},
+			{input: "sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", valid: true},
+			{input: "sha256-4b234e4b38341d10a8135b4a0af020a2c4db56b805272fd0fde62c568c8dd77e", valid: true},
+			{input: "da39a3ee5e6b4b0d3255bfef95601890afd80709", valid: false}, // legacy unnamespaced SHA-1
 			// Invalid length
 			{input: "da39a3ee5e6b4b0d3255bfef95601890afd8070", valid: false},
 			{input: "da39a3ee5e6b4b0d3255bfef95601890afd807091", valid: false},
 			// Uppercase rejection (canonical lowercase only)
-			{input: "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709", valid: false},
+			{input: "sha256-E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855", valid: false},
 			// Invalid characters
 			{input: "da39a3ee5e6b4b0d3255bfef95601890afd8070z", valid: false},
 			// Slashes and directory traversal rejection

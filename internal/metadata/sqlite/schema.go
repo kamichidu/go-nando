@@ -1,8 +1,9 @@
 package sqlite
 
-// MigrationV1 contains the initial schema definition for the entries table.
+// MigrationV1 creates the initial committed-entry schema and records the
+// repository format metadata in the same SQLite database.
 const MigrationV1 = `
-CREATE TABLE IF NOT EXISTS entries (
+CREATE TABLE entries (
     entry_id      TEXT PRIMARY KEY,
     parent_id     TEXT NULL,
     name          TEXT NOT NULL,
@@ -17,4 +18,20 @@ CREATE TABLE IF NOT EXISTS entries (
     updated_at    INTEGER NOT NULL,
     UNIQUE (parent_id, name)
 );
+CREATE TABLE repository_format (
+    singleton          INTEGER PRIMARY KEY CHECK (singleton = 1),
+    format_version     INTEGER NOT NULL,
+    schema_version     INTEGER NOT NULL,
+    content_algorithm  TEXT NOT NULL,
+    content_id_format  TEXT NOT NULL
+);
+CREATE TABLE schema_migrations (
+    version     INTEGER PRIMARY KEY,
+    applied_at  INTEGER NOT NULL
+);
 `
+
+const CurrentFormatVersion = 1
+const CurrentSchemaVersion = 1
+const CurrentContentAlgorithm = "sha256"
+const CurrentContentIDFormat = "sha256-<lowercase-hex>"

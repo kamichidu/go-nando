@@ -11,7 +11,7 @@ EntryID: file-hello
 ParentID: dir-documents
 Name: hello.txt
 Revision Before: - After: 1
-ObjectID Before: - After: 6640ec4d43fe9d18fcfee38caab6c91e3f231e17
+ObjectID Before: - After: sha256-4b234e4b38341d10a8135b4a0af020a2c4db56b805272fd0fde62c568c8dd77e
 Parent Revision Before: 1 After: 1
 
 OP: replace file content /documents/hello.txt
@@ -19,7 +19,7 @@ EntryID: file-hello
 ParentID: dir-documents
 Name: hello.txt
 Revision Before: 1 After: 2
-ObjectID Before: 6640ec4d43fe9d18fcfee38caab6c91e3f231e17 After: da39a3ee5e6b4b0d3255bfef95601890afd80709
+ObjectID Before: sha256-4b234e4b38341d10a8135b4a0af020a2c4db56b805272fd0fde62c568c8dd77e After: sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 Parent Revision Before: 1 After: 1
 
 OP: move file /documents/hello.txt to /documents/greeting.txt
@@ -27,7 +27,7 @@ EntryID: file-hello
 ParentID: dir-documents
 Name: greeting.txt
 Revision Before: 2 After: 3
-ObjectID Before: da39a3ee5e6b4b0d3255bfef95601890afd80709 After: da39a3ee5e6b4b0d3255bfef95601890afd80709
+ObjectID Before: sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 After: sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 Parent Revision Before: 1 After: 1
 
 OP: remove file /documents/greeting.txt

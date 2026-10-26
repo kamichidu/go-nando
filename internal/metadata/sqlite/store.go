@@ -18,6 +18,10 @@ type Store struct {
 	db *sql.DB
 }
 
+// ErrUnsupportedFormat identifies repositories whose persisted format cannot
+// be interpreted safely by this binary.
+var ErrUnsupportedFormat = errors.New("unsupported repository format")
+
 // NewStore creates a new Store instance backed by SQLite.
 func NewStore(dbPath string) (*Store, error) {
 	db, err := sql.Open("sqlite", dbPath)
@@ -50,16 +54,47 @@ func (s *Store) Close() error {
 
 // Initialize executes schema migrations and ensures a single root entry is present.
 func (s *Store) Initialize(ctx context.Context) error {
-	// Execute schema migration
-	_, err := s.db.ExecContext(ctx, MigrationV1)
-	if err != nil {
-		return fmt.Errorf("failed to initialize schema: %w", err)
+	if err := s.checkSchemaCompatibility(ctx, true); err != nil {
+		return err
 	}
+	var entriesExists int
+	err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='entries'").Scan(&entriesExists)
+	if err != nil {
+		return fmt.Errorf("failed to inspect SQLite schema: %w", err)
+	}
+	if entriesExists == 0 {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("failed to begin schema migration: %w", err)
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, MigrationV1); err != nil {
+			return fmt.Errorf("failed to apply SQLite schema migration 1: %w", err)
+		}
+		now := metadata.TimestampFromTime(time.Now().UTC())
+		if _, err := tx.ExecContext(ctx, `INSERT INTO repository_format
+			(singleton, format_version, schema_version, content_algorithm, content_id_format)
+			VALUES (1, ?, ?, ?, ?)`, CurrentFormatVersion, CurrentSchemaVersion, CurrentContentAlgorithm, CurrentContentIDFormat); err != nil {
+			return fmt.Errorf("failed to write repository format metadata: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?)", int64(now)); err != nil {
+			return fmt.Errorf("failed to record SQLite schema migration: %w", err)
+		}
+		if err := insertRoot(ctx, tx, now); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit SQLite schema migration: %w", err)
+		}
+		return nil
+	}
+	return s.CheckSchemaCompatibility(ctx)
+}
 
-	// Insert the root entry if it does not exist. Bypasses validateEntry as root creation is only allowed during initialization.
-	now := metadata.TimestampFromTime(time.Now().UTC())
-	_, err = s.db.ExecContext(ctx, `
-		INSERT OR IGNORE INTO entries (
+func insertRoot(ctx context.Context, tx *sql.Tx, now metadata.Timestamp) error {
+	// Root creation is part of the initial schema migration.
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO entries (
 			entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at
 		) VALUES (
 			'root', NULL, '', 'directory', NULL, 0, ?, 0755, '', 1, ?, ?
@@ -68,49 +103,58 @@ func (s *Store) Initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create root entry: %w", err)
 	}
-
 	return nil
 }
 
 // CheckSchemaCompatibility checks if the schema is compatible.
 func (s *Store) CheckSchemaCompatibility(ctx context.Context) error {
-	var name string
-	err := s.db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name='entries'").Scan(&name)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
+	return s.checkSchemaCompatibility(ctx, false)
+}
+
+func (s *Store) checkSchemaCompatibility(ctx context.Context, allowUninitialized bool) error {
+	var count int
+	err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='entries'").Scan(&count)
 	if err != nil {
-		return fmt.Errorf("failed to check entries table: %w", err)
+		return fmt.Errorf("failed to inspect entries table: %w", err)
 	}
-
-	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info(entries)")
+	if count == 0 {
+		var tableCount int
+		if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tableCount); err != nil {
+			return fmt.Errorf("failed to inspect uninitialized SQLite database: %w", err)
+		}
+		if allowUninitialized && tableCount == 0 {
+			return nil
+		}
+		return fmt.Errorf("%w: SQLite database has no repository format metadata", ErrUnsupportedFormat)
+	}
+	var formatExists int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='repository_format'").Scan(&formatExists); err != nil {
+		return fmt.Errorf("failed to inspect repository format metadata: %w", err)
+	}
+	if formatExists == 0 {
+		return fmt.Errorf("%w: existing SQLite repository has no format metadata; legacy SHA-1 transition is undecided", ErrUnsupportedFormat)
+	}
+	var formatVersion, schemaVersion int
+	var algorithm, idFormat string
+	err = s.db.QueryRowContext(ctx, `SELECT format_version, schema_version, content_algorithm, content_id_format
+		FROM repository_format WHERE singleton=1`).Scan(&formatVersion, &schemaVersion, &algorithm, &idFormat)
 	if err != nil {
-		return fmt.Errorf("failed to get table info: %w", err)
+		return fmt.Errorf("%w: repository format metadata is missing or invalid: %v", ErrUnsupportedFormat, err)
 	}
-	defer rows.Close()
-
-	hasPathColumn := false
-	hasEntryIDColumn := false
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dfltVal sql.NullString
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltVal, &pk); err != nil {
-			return fmt.Errorf("failed to scan table info row: %w", err)
-		}
-		if name == "path" {
-			hasPathColumn = true
-		}
-		if name == "entry_id" {
-			hasEntryIDColumn = true
-		}
+	if formatVersion != CurrentFormatVersion || schemaVersion != CurrentSchemaVersion || algorithm != CurrentContentAlgorithm || idFormat != CurrentContentIDFormat {
+		return fmt.Errorf("%w: found format=%d schema=%d algorithm=%q id_format=%q; supported format=%d schema=%d algorithm=%q id_format=%q", ErrUnsupportedFormat, formatVersion, schemaVersion, algorithm, idFormat, CurrentFormatVersion, CurrentSchemaVersion, CurrentContentAlgorithm, CurrentContentIDFormat)
 	}
-
-	if hasPathColumn && !hasEntryIDColumn {
-		return fmt.Errorf("incompatible obsolete Phase 0 repository format detected (uses obsolete path-based schema)")
+	var migrationCount int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations WHERE version = ?", CurrentSchemaVersion).Scan(&migrationCount); err != nil || migrationCount != 1 {
+		return fmt.Errorf("%w: required SQLite schema migration %d is not recorded", ErrUnsupportedFormat, CurrentSchemaVersion)
 	}
-
+	var maxMigration int
+	if err := s.db.QueryRowContext(ctx, "SELECT coalesce(max(version), 0) FROM schema_migrations").Scan(&maxMigration); err != nil {
+		return fmt.Errorf("%w: failed to inspect SQLite migration history: %v", ErrUnsupportedFormat, err)
+	}
+	if maxMigration > CurrentSchemaVersion {
+		return fmt.Errorf("%w: SQLite schema migration %d is newer than supported version %d", ErrUnsupportedFormat, maxMigration, CurrentSchemaVersion)
+	}
 	return nil
 }
 

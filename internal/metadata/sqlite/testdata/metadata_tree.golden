@@ -1,5 +1,5 @@
 ID=root Parent=- Kind=directory Name= Revision=1
 ID=dir-documents Parent=root Kind=directory Name=documents Revision=1
-ID=file-hello Parent=dir-documents Kind=file Name=hello.txt Revision=3 Object=6640ec4d43fe9d18fcfee38caab6c91e3f231e17
+ID=file-hello Parent=dir-documents Kind=file Name=hello.txt Revision=3 Object=sha256-d497750a791fc4366c7f6e7021c9c8a4aef022e81786f57d7ec16f54a03586c2
 ID=dir-archive Parent=dir-documents Kind=directory Name=archive Revision=1
-ID=file-old Parent=dir-archive Kind=file Name=old.txt Revision=1 Object=da39a3ee5e6b4b0d3255bfef95601890afd80709
+ID=file-old Parent=dir-archive Kind=file Name=old.txt Revision=1 Object=sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec

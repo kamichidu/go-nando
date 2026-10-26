@@ -78,7 +78,7 @@ func (f *fakeMetadataStore) Move(ctx context.Context, entry metadata.Entry) (met
 
 func TestValidatingStore(t *testing.T) {
 	ctx := context.Background()
-	dummyObjectID, err := content.ParseID("1234567890abcdef1234567890abcdef12345678")
+	dummyObjectID, err := content.ParseID("sha256-4c09422b949a71723f72af315de016346cc6abdc208ffecde026dc00bd506674")
 	if err != nil {
 		t.Fatalf("failed to parse dummy object ID: %v", err)
 	}

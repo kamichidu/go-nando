@@ -64,7 +64,7 @@ func TestSQLiteStore(t *testing.T) {
 		childID := metadata.EntryID("child-1")
 		now := metadata.TimestampFromTime(time.Now().UTC())
 
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -113,7 +113,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		parentID := metadata.EntryID("root")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -157,7 +157,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		now := metadata.TimestampFromTime(time.Now().UTC())
 		rootID := metadata.EntryID("root")
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -215,7 +215,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		id := metadata.EntryID("file-id")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -256,7 +256,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		id := metadata.EntryID("file-id")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -294,7 +294,7 @@ func TestSQLiteStore(t *testing.T) {
 		id1 := metadata.EntryID("file-id-1")
 		id2 := metadata.EntryID("file-id-2")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -392,7 +392,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		rootID := metadata.EntryID("root")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -472,7 +472,7 @@ func TestSQLiteStore(t *testing.T) {
 		rootID := metadata.EntryID("root")
 		id := metadata.EntryID("del-id")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -617,7 +617,7 @@ func TestSQLiteStore(t *testing.T) {
 		}
 
 		// /documents/hello.txt
-		oidHello, err := content.ParseID("6640ec4d43fe9d18fcfee38caab6c91e3f231e17")
+		oidHello, err := content.ParseID("sha256-d497750a791fc4366c7f6e7021c9c8a4aef022e81786f57d7ec16f54a03586c2")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -652,7 +652,7 @@ func TestSQLiteStore(t *testing.T) {
 		}
 
 		// /documents/archive/old.txt
-		oidOld, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oidOld, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -756,8 +756,87 @@ func TestSQLiteStore(t *testing.T) {
 		err = store.CheckSchemaCompatibility(ctx)
 		if err == nil {
 			t.Errorf("expected incompatible schema error, got nil")
-		} else if !strings.Contains(err.Error(), "incompatible obsolete Phase 0 repository format") {
+		} else if !errors.Is(err, ErrUnsupportedFormat) {
 			t.Errorf("expected incompatible schema error, got: %v", err)
+		}
+	})
+
+	t.Run("Format metadata and migration history are persisted and enforced", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		var formatVersion, schemaVersion int
+		var algorithm, idFormat string
+		if err := store.db.QueryRowContext(ctx, `SELECT format_version, schema_version, content_algorithm, content_id_format FROM repository_format WHERE singleton=1`).Scan(&formatVersion, &schemaVersion, &algorithm, &idFormat); err != nil {
+			t.Fatalf("failed to read format metadata: %v", err)
+		}
+		if formatVersion != CurrentFormatVersion || schemaVersion != CurrentSchemaVersion || algorithm != "sha256" || idFormat != CurrentContentIDFormat {
+			t.Fatalf("unexpected repository format metadata: %d %d %q %q", formatVersion, schemaVersion, algorithm, idFormat)
+		}
+		var migrationCount int
+		if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations WHERE version=1").Scan(&migrationCount); err != nil || migrationCount != 1 {
+			t.Fatalf("expected migration 1 to be recorded once, count=%d err=%v", migrationCount, err)
+		}
+
+		if _, err := store.db.ExecContext(ctx, "UPDATE repository_format SET format_version=99 WHERE singleton=1"); err != nil {
+			t.Fatalf("failed to inject unsupported format: %v", err)
+		}
+		if err := store.CheckSchemaCompatibility(ctx); !errors.Is(err, ErrUnsupportedFormat) {
+			t.Fatalf("expected unsupported format error, got %v", err)
+		}
+	})
+
+	t.Run("Empty SQLite database is not an openable repository until initialized", func(t *testing.T) {
+		store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
+		if err != nil {
+			t.Fatalf("failed to create empty database: %v", err)
+		}
+		defer store.Close()
+		if err := store.CheckSchemaCompatibility(ctx); !errors.Is(err, ErrUnsupportedFormat) {
+			t.Fatalf("expected empty database to be rejected by repository open, got %v", err)
+		}
+		if err := store.Initialize(ctx); err != nil {
+			t.Fatalf("fresh initialization should accept an empty database: %v", err)
+		}
+		if err := store.CheckSchemaCompatibility(ctx); err != nil {
+			t.Fatalf("initialized repository should be compatible: %v", err)
+		}
+	})
+
+	t.Run("Legacy SHA-1 repository is rejected without migration", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "metadata.sqlite")
+		db, err := sql.Open("sqlite", dbPath)
+		if err != nil {
+			t.Fatalf("failed to create legacy database: %v", err)
+		}
+		_, err = db.Exec(`CREATE TABLE entries (
+			entry_id TEXT PRIMARY KEY, parent_id TEXT NULL, name TEXT NOT NULL, kind TEXT NOT NULL,
+			object_id TEXT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, mode INTEGER NOT NULL,
+			content_type TEXT NOT NULL, revision INTEGER NOT NULL, created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL, UNIQUE(parent_id, name));
+			INSERT INTO entries VALUES ('root', NULL, '', 'directory', NULL, 0, 0, 493, '', 1, 0, 0);
+			INSERT INTO entries VALUES ('legacy-file', 'root', 'old.txt', 'file', 'da39a3ee5e6b4b0d3255bfef95601890afd80709', 1, 0, 420, '', 1, 0, 0);`)
+		if err != nil {
+			t.Fatalf("failed to write legacy repository fixture: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("failed to close legacy fixture: %v", err)
+		}
+
+		store, err := NewStore(dbPath)
+		if err != nil {
+			t.Fatalf("failed to open legacy repository: %v", err)
+		}
+		defer store.Close()
+		if err := store.Initialize(ctx); !errors.Is(err, ErrUnsupportedFormat) {
+			t.Fatalf("expected legacy repository refusal, got %v", err)
+		}
+		var objectID string
+		if err := store.db.QueryRowContext(ctx, "SELECT object_id FROM entries WHERE entry_id='legacy-file'").Scan(&objectID); err != nil {
+			t.Fatalf("legacy entry was not preserved: %v", err)
+		}
+		if objectID != "da39a3ee5e6b4b0d3255bfef95601890afd80709" {
+			t.Fatalf("legacy object ID was altered: %q", objectID)
 		}
 	})
 
@@ -767,7 +846,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		rootID := metadata.EntryID("root")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1002,7 +1081,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		id := metadata.EntryID("file-id")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1113,7 +1192,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		id := metadata.EntryID("file-id")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1159,7 +1238,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		id := metadata.EntryID("file-id")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1280,7 +1359,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		id1 := metadata.EntryID("file-1")
 		id2 := metadata.EntryID("file-2")
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1343,7 +1422,7 @@ func TestSQLiteStore(t *testing.T) {
 		now := metadata.TimestampFromTime(time.Now().UTC())
 
 		id := metadata.EntryID("file-1")
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1403,7 +1482,7 @@ func TestSQLiteStore(t *testing.T) {
 		nonExistentParent := metadata.EntryID("non-existent")
 		id := metadata.EntryID("file-id")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1438,7 +1517,7 @@ func TestSQLiteStore(t *testing.T) {
 		fileID1 := metadata.EntryID("file-id-1")
 		fileID2 := metadata.EntryID("file-id-2")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1490,7 +1569,7 @@ func TestSQLiteStore(t *testing.T) {
 		fileID1 := metadata.EntryID("file-id-1")
 		fileID2 := metadata.EntryID("file-id-2")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1541,7 +1620,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		id := metadata.EntryID("file-id")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1595,7 +1674,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		parentID := metadata.EntryID("root")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1664,7 +1743,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		fileID := metadata.EntryID("file-id")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1715,7 +1794,7 @@ func TestSQLiteStore(t *testing.T) {
 		fileID1 := metadata.EntryID("file-1")
 		fileID2 := metadata.EntryID("file-2")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1833,7 +1912,7 @@ func TestSQLiteStore(t *testing.T) {
 		fileID1 := metadata.EntryID("file-1")
 		fileID2 := metadata.EntryID("file-2")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1894,7 +1973,7 @@ func TestSQLiteStore(t *testing.T) {
 		parentID := metadata.EntryID("root")
 		fileID := metadata.EntryID("file-id")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -1915,7 +1994,7 @@ func TestSQLiteStore(t *testing.T) {
 		}
 
 		// 1. mismatched revision should return ErrEntryConflict and maintain original state
-		invalidOid, err := content.ParseID("1111111111111111111111111111111111111111")
+		invalidOid, err := content.ParseID("sha256-468d019ea81224aeca7ee270b11959d8a187f6f0b6a3febff1c34dc1d66c8d85")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -2018,7 +2097,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		rootID := metadata.EntryID("root")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
@@ -2118,7 +2197,7 @@ func TestSQLiteStore(t *testing.T) {
 
 		rootID := metadata.EntryID("root")
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		oid, err := content.ParseID("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+		oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
 		if err != nil {
 			t.Fatalf("failed to parse: %v", err)
 		}
