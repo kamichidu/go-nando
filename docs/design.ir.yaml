@@ -1,0 +1,716 @@
+contract_version: 1alpha1
+schema_ref:
+  revision: 455ed318b7bc409d3e1da320620ef92d457042b9
+  sha256: 9b109dbc7ac09b32d3dbe2e233eed7da1378bc912d0e84c479c3ed0bed9f7103
+model:
+  id: go-nando
+  title: go-nando repository design
+  description: Canonical semantic design for repository authority, storage contracts, operation consistency, failure outcomes, and implementation roadmap.
+  domain: file repository
+  profile: repository-system-design
+nodes:
+  - id: REQ-META-SSOT
+    level: system_requirement
+    kind: authority-invariant
+    statement: The Metadata Store MUST be the sole source of truth for committed Entries and the logical namespace; object presence or layout MUST NOT determine logical visibility.
+    provenance:
+      origin: imported
+  - id: REQ-META-COMMITTED-ONLY
+    level: system_requirement
+    kind: persistence-invariant
+    statement: The Metadata Store MUST persist committed Entries only and MUST NOT persist Pending Entries or other in-progress Repository operation state.
+    provenance:
+      origin: imported
+  - id: REQ-OBJECT-SSOT
+    level: system_requirement
+    kind: authority-invariant
+    statement: The Object Store MUST be the source of truth for committed immutable content.
+    provenance:
+      origin: imported
+  - id: REQ-OBJECT-COMMIT
+    level: system_requirement
+    kind: commit-invariant
+    statement: A successful Object Store Commit MUST atomically publish a complete immutable Object, and subsequent Open MUST read it while Exists MUST report it present.
+    provenance:
+      origin: imported
+  - id: REQ-METADATA-ORDER
+    level: system_requirement
+    kind: commit-invariant
+    statement: Repository metadata MUST NOT commit a reference to an Object before that Object has successfully committed.
+    provenance:
+      origin: imported
+  - id: REQ-REVISION
+    level: system_requirement
+    kind: version-invariant
+    statement: Entry revisions MUST be initialized to a valid uint64 value at creation and MUST increase monotonically after successful writes affecting that Entry, without requiring an exact increment size.
+    provenance:
+      origin: imported
+  - id: REQ-PUT-GC-EXCLUSION
+    level: system_requirement
+    kind: concurrency-invariant
+    statement: In the initial single-host, single-repository deployment, process-wide Repository exclusion MUST prevent GC from deleting a Put Object between reachability evaluation and the corresponding Metadata Commit.
+    provenance:
+      origin: imported
+  - id: REQ-READ-GC-EXCLUSION
+    level: system_requirement
+    kind: concurrency-invariant
+    statement: In the initial single-host, single-repository deployment, process-wide Repository exclusion MUST prevent GC from deleting an Object while an active Read is consuming it.
+    provenance:
+      origin: imported
+  - id: REQ-EXPLICIT-DIRECTORIES
+    level: system_requirement
+    kind: namespace-invariant
+    statement: The logical namespace MUST use explicit first-class directory Entries and preserve empty directories.
+    provenance:
+      origin: imported
+  - id: REQ-REPLACEMENT
+    level: system_requirement
+    kind: commit-invariant
+    statement: When replacing an Entry's content, the old committed Entry MUST remain authoritative until the new Object is committed and the replacement Metadata Commit succeeds.
+    provenance:
+      origin: imported
+  - id: REQ-NO-RESUME
+    level: system_requirement
+    kind: failure-invariant
+    statement: Repository operations MUST NOT persist progress for later resumption; interruption is handled by backend cleanup or normal garbage collection according to the last completed commit boundary.
+    provenance:
+      origin: imported
+  - id: REQ-ENTRY-ID
+    level: system_requirement
+    kind: identity-invariant
+    statement: Every Entry MUST have a globally unique, opaque immutable identifier that remains unchanged throughout the Entry lifecycle.
+    provenance:
+      origin: imported
+  - id: REQ-NAMESPACE-UNIQUENESS
+    level: system_requirement
+    kind: namespace-invariant
+    statement: No two Entries MUST have the same name under the same parent directory, and Entry hierarchy MUST remain valid and acyclic.
+    provenance:
+      origin: imported
+  - id: REQ-ROOT-ENTRY
+    level: system_requirement
+    kind: namespace-invariant
+    statement: The logical namespace MUST have a first-class root directory Entry.
+    provenance:
+      origin: imported
+  - id: REQ-DIRECTORY-NO-OBJECT
+    level: system_requirement
+    kind: namespace-invariant
+    statement: A directory Entry MUST NOT reference content in the Object Store.
+    provenance:
+      origin: imported
+  - id: REQ-SUBTREE-MUTATIONS
+    level: system_requirement
+    kind: namespace-invariant
+    statement: Move and Remove MUST enforce conflicts across the affected subtree and MUST reject moving an Entry into its own descendant subtree.
+    provenance:
+      origin: imported
+  - id: REQ-GET-ATOMIC-DESTINATION
+    level: system_requirement
+    kind: export-invariant
+    statement: Get MUST write to a temporary destination and replace the final destination atomically only after successful completion, preserving an existing destination on failure.
+    provenance:
+      origin: imported
+  - id: REQ-DOCTOR-NONDESTRUCTIVE
+    level: system_requirement
+    kind: diagnostic-invariant
+    statement: Doctor MUST validate repository integrity without mutating repository state unless an explicit repair mode is invoked.
+    provenance:
+      origin: imported
+
+  - id: DES-REPOSITORY-BOUNDARIES
+    level: system_design
+    kind: responsibility-model
+    statement: The Repository owns cross-store consistency, commit ordering, and process-wide operation exclusion; the Application performs use-case orchestration.
+    provenance:
+      origin: imported
+    attributes:
+      deployment_scope: single-host-single-repository
+      exclusion_scope: cross-process
+      unsupported_initial_capabilities:
+        - distributed metadata writes
+        - multi-host transactional coordination
+        - transparent filesystem mounting
+        - remote concurrent writers
+        - user-visible version history
+  - id: DES-CLI-BOUNDARY
+    level: system_design
+    kind: responsibility-model
+    statement: CLI owns argument parsing, input normalization, dependency construction, exit-code mapping, and stream wiring; it does not execute SQL, derive content IDs, decide object reachability, or implement recovery policy.
+    attributes:
+      exit_codes:
+        success: 0
+        general_failure: 1
+        invalid_arguments: 2
+        entry_or_object_not_found: 3
+        conflict: 4
+        corruption_or_verification_failure: 5
+    provenance:
+      origin: imported
+  - id: DES-APPLICATION-BOUNDARY
+    level: system_design
+    kind: responsibility-model
+    statement: Application exposes repository use cases and owns use-case orchestration and operation input/output models, while Repository-wide consistency and exclusion remain Repository responsibilities.
+  - id: DES-DEPENDENCY-DIRECTION
+    level: system_design
+    kind: component-model
+    statement: Runtime dependency direction is CLI to Application to Repository to Metadata Store, Object Store, and Content Identity, with CLI also depending on Paths and Runtime Config; concrete storage packages depend on interfaces and domain values, and core Repository logic does not depend on CLI.
+    attributes:
+      dependency_edges:
+        - [CLI, Application]
+        - [Application, Repository]
+        - [Repository, Metadata Store]
+        - [Repository, Object Store]
+        - [Repository, Content Identity]
+        - [CLI, Paths]
+        - [CLI, Runtime Config]
+  - id: DES-CONSTRUCTION
+    level: system_design
+    kind: composition-root
+    statement: The executable boundary composes repository location, format metadata, metadata backend, object backend, digest algorithm, and Repository operation exclusion; backend selection is planned to use repository-owned configuration distinct from per-user runtime configuration.
+    attributes:
+      current_backends: [SQLite, local filesystem Object Store]
+      planned_backend_selection: repository-owned-configuration
+    provenance:
+      origin: imported
+  - id: DES-METADATA-MODEL
+    level: system_design
+    kind: metadata-model
+    statement: Entry IDs are globally unique opaque internal identifiers; parent-child relationships are authoritative, logical paths are derived, sibling names are unique, and canonical path caches are disposable derived data.
+    provenance:
+      origin: imported
+    attributes:
+      current_entry_id_implementation: UUIDv4
+  - id: DES-OBJECT-MODEL
+    level: system_design
+    kind: object-model
+    statement: Object Store supports content verification, committed-object enumeration, and deletion of unreachable committed Objects without assigning logical paths.
+    provenance:
+      origin: imported
+  - id: DES-DOCTOR
+    level: system_design
+    kind: diagnostic-contract
+    statement: Doctor checks committed metadata references, object content identity, metadata integrity, and repository-format support; repair is a separate explicit operation.
+    provenance:
+      origin: imported
+  - id: DES-ERROR-MODEL
+    level: system_design
+    kind: error-contract
+    statement: Domain errors are typed or sentinel errors mapped at the CLI boundary; message-text matching is not the primary corruption or verification classification mechanism.
+    attributes:
+      stable_categories:
+        - invalid arguments
+        - Entry or Object not found
+        - path conflict
+        - repository corruption
+        - unsupported repository format
+        - repository busy or locked
+    provenance:
+      origin: imported
+  - id: DES-SCAFFOLDING-BOUNDARY
+    level: system_design
+    kind: implementation-scope
+    statement: Scaffolding avoids placeholder packages unless they establish a compile-time contract used by current code; architecture is expressed through explicit interfaces, invariants, and tests.
+    provenance:
+      origin: imported
+  - id: DES-OBJECT-BACKEND-NEUTRALITY
+    level: system_design
+    kind: backend-contract
+    statement: Object staging mechanisms, physical layout, and prefix or bucket separation are backend-internal choices and are not Repository-wide contracts.
+    provenance:
+      origin: imported
+  - id: DES-OBJECT-CONSISTENCY
+    level: system_design
+    kind: backend-contract
+    statement: Object Store consistency and availability beyond successful Commit visibility are backend-specific; the shared design does not classify all Object Stores as eventually consistent.
+    provenance:
+      origin: imported
+  - id: DES-LEASE
+    level: system_design
+    kind: optimization-boundary
+    statement: An optional per-hash Lease may suppress duplicate transfer work only and provides no cross-store consistency, Repository exclusion, or GC protection; when used, it has an absolute UTC ExpiresAt, is valid only while ExpiresAt is later than now, and may terminate by explicit release or natural expiration.
+    attributes:
+      expiration_representation: absolute-utc-timestamp
+      failed_or_aborted_commit: lease-may-expire-naturally
+    provenance:
+      origin: imported
+  - id: DES-READ-SEMANTICS
+    level: system_design
+    kind: read-protocol
+    statement: Read consistency, Object availability, and GC safety are distinct properties; rechecking an Entry revision alone guarantees neither Object availability nor GC safety.
+    provenance:
+      origin: imported
+  - id: DES-FAILURE-BOUNDARIES
+    level: system_design
+    kind: failure-model
+    statement: Before Object Commit, incomplete temporary data is private backend cleanup; after Object Commit and before Metadata Commit, an unreferenced committed Object is GC-eligible; after Metadata Commit, the Entry is published.
+    provenance:
+      origin: imported
+  - id: DES-REVISION-SEMANTICS
+    level: system_design
+    kind: metadata-versioning
+    statement: Revision is a per-Entry monotonically increasing uint64; no fixed step such as plus one is guaranteed, child changes do not advance the parent revision, and revisions do not provide Object availability or GC protection.
+    provenance:
+      origin: imported
+  - id: DES-TIMESTAMP-REPRESENTATION
+    level: system_design
+    kind: metadata-representation
+    statement: Persisted timestamp values use Unix nanoseconds where their unit must be explicit; this does not guarantee monotonic wall-clock behavior or cross-host ordering.
+    provenance:
+      origin: imported
+  - id: DES-EXPLICIT-DIRECTORY-MODEL
+    level: system_design
+    kind: namespace-model
+    statement: Directories are first-class Metadata Store Entries, including empty directories; the root is a directory Entry and directories have no Object reference.
+    provenance:
+      origin: imported
+    attributes:
+      roadmap_phase: 5
+      phase_status: accepted-design
+      phase_goals:
+        - define root semantics
+        - provide mkdir where needed by the interface
+        - define parent creation and validation
+        - constrain file-only and directory-only metadata fields
+        - make subtree move and delete conflict-safe
+        - reject moves into own subtree
+        - test literal percent and underscore path handling
+      exit_criteria:
+        - consistent explicit-directory model across commands and stores
+        - enforce root, parent-kind, namespace, and ancestry-cycle invariants
+        - preserve hierarchy invariants during subtree moves and deletes
+  - id: DES-IDENTITY-TARGET
+    level: system_design
+    kind: repository-format
+    statement: The Phase 1 target is SHA-256 content identity with algorithm-namespaced object identifiers; current SHA-1 identifiers are an implementation gap and must not be silently reinterpreted.
+    provenance:
+      origin: imported
+    attributes:
+      roadmap_phase: 1
+      target_algorithm: sha256
+      current_algorithm: sha1
+      current_identifier_namespace: absent
+  - id: DES-PHASE1-FORMAT
+    level: system_design
+    kind: roadmap-phase
+    statement: Phase 1 introduces repository-owned format configuration and versioning, SHA-256 algorithm-namespaced identity, real SQLite schema migrations, and explicit rejection of unsupported formats.
+    provenance:
+      origin: imported
+    attributes:
+      roadmap_phase: 1
+      exit_criteria:
+        - open only repositories with compatible format semantics
+        - do not silently reinterpret the digest algorithm
+        - bind IDs unambiguously to their digest algorithm
+        - cover every supported format transition with migration tests
+  - id: DES-PHASE2-CAS
+    level: system_design
+    kind: roadmap-phase
+    statement: Phase 2 establishes correct local CAS Commit through byte-derived identity, atomic publication, immutable verified reuse, safe concurrent identical commits, committed-only enumeration, and post-Commit Open and Exists visibility.
+    provenance:
+      origin: imported
+    attributes:
+      roadmap_phase: 2
+      exit_criteria:
+        - interrupted writes never expose partial committed Objects
+        - committed bytes match their content identifier
+        - repeated identical commits are idempotent
+        - concurrent publication never overwrites committed content
+        - corruption is detected before reusing an Object
+        - enumeration exposes committed Objects only
+  - id: DES-PHASE3-EXCLUSION
+    level: system_design
+    kind: roadmap-phase
+    statement: Phase 3 implements Repository-owned cross-process exclusion for Put versus GC and active Read versus GC, plus atomic committed-only metadata transitions and old-entry preservation during replacement.
+    provenance:
+      origin: imported
+    attributes:
+      roadmap_phase: 3
+      persistent_operation_state: prohibited
+      lease_role: optional-duplicate-transfer-optimization
+      exit_criteria:
+        - multi-process tests protect Put through reachability evaluation and Metadata Commit
+        - multi-process tests protect active Read from GC deletion
+        - replacement failure before Metadata Commit preserves the old Entry
+        - successful Metadata Commit references an already committed readable Object
+        - correctness does not depend on process-local mutexes
+  - id: DES-PHASE4-CLEANUP-EXPORT
+    level: system_design
+    kind: roadmap-phase
+    statement: Phase 4 defines backend cleanup for incomplete pre-Commit staging, atomic destination replacement for get, and explicit repair behavior without Repository operation recovery or resumption.
+    provenance:
+      origin: imported
+    attributes:
+      roadmap_phase: 4
+      phase_goals:
+        - define tombstone retention or metadata compaction policy
+        - separate explicit repair operations from doctor
+      exit_criteria:
+        - failure injection demonstrates the documented commit-boundary outcome
+        - incomplete staging cleanup is backend-owned
+        - get failure does not truncate an existing destination
+        - doctor is non-destructive by default and repair is explicit
+        - restart does not scan or resume persisted operation progress
+  - id: DES-PHASE6-GCS
+    level: system_design
+    kind: roadmap-phase
+    statement: Phase 6 implements GCS as an Object Store backend conforming to shared atomic publication, immutable content, verification, post-Commit visibility, enumeration, deletion, and interruption cleanup contracts.
+    provenance:
+      origin: imported
+    attributes:
+      roadmap_phase: 6
+      exit_criteria:
+        - local and GCS pass the shared Object Store conformance suite
+        - interruption never exposes partial committed Objects
+        - Repository Put, replacement, Read, and GC work without GCS-specific use-case branches
+        - GCS consistency facts are not generalized to all backends
+  - id: DES-PHASE0-SCAFFOLDING
+    level: system_design
+    kind: roadmap-phase
+    statement: Phase 0 is the current scaffolding baseline with CLI and application/repository boundaries, SQLite metadata, local Object Store, logical path normalization, basic repository commands and tests, and a GCS interface placeholder.
+    provenance:
+      origin: imported
+    attributes:
+      roadmap_phase: 0
+      phase_status: current
+      known_limitations:
+        - agreed process-wide Repository exclusion is not implemented
+        - final Object Commit guarantees are not all implemented
+  - id: DES-PHASE7-SYNC
+    level: system_design
+    kind: roadmap-phase
+    statement: Phase 7 sync and remote operation work is deferred until authority, conflict resolution, snapshot boundaries, deletion propagation, offline mutation, authentication, and repository ownership semantics are defined.
+    provenance:
+      origin: imported
+    attributes:
+      roadmap_phase: 7
+      phase_status: deferred
+  - id: DES-CROSS-CUTTING-VALIDATION
+    level: system_design
+    kind: verification-strategy
+    statement: Implementation phases validate Object Store conformance, committed-only Metadata behavior, multi-process Repository interleavings, stable CLI behavior, and each durable failure boundary at the narrowest responsible layer.
+    provenance:
+      origin: imported
+    attributes:
+      test_areas:
+        - Object Store commit, visibility, verification, idempotency, cleanup, enumeration
+        - Metadata committed-only transitions, revisions, conflicts, migrations, rollback
+        - Repository Put, replacement, Read, remove, GC interleavings
+        - CLI exit-code mapping and data-stream behavior
+        - failure injection before Object Commit, between Object and Metadata Commit, and after Metadata Commit
+  - id: DES-DEFERRED-OPTIMIZATIONS
+    level: system_design
+    kind: optimization-boundary
+    statement: Hash fan-out tuning, parallel verification, batched GC, GCS listing optimization, additional metadata indexes, content-type detection, remote read caching, and optional per-hash transfer Lease follow correctness work and must not redefine visibility, commit, exclusion, or GC semantics.
+    provenance:
+      origin: imported
+    attributes:
+      deferred_optimizations:
+        - hash fan-out directory tuning
+        - parallel verification
+        - batched GC deletion
+        - GCS listing optimization
+        - metadata indexes beyond observed need
+        - content-type detection improvements
+        - remote read caching
+        - optional per-hash Lease for duplicate-transfer reduction
+  - id: DES-PATH-SEMANTICS
+    level: system_design
+    kind: path-model
+    statement: Logical repository paths use forward slashes on every platform, are absolute and normalized by resolving duplicate separators, dot segments, and parent segments, are case-sensitive, and cannot escape the repository root.
+    provenance:
+      origin: imported
+
+  - id: IMP-CURRENT-SHA1
+    level: implementation
+    kind: observed-implementation
+    statement: The inspected content package hashes with SHA-1 and serializes IDs as unnamespaced 40-character lowercase hexadecimal strings.
+    provenance:
+      origin: observed
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/content/hash.go
+        revision: d3a1db2faf961a91908fae5e71620449bc947385
+        role: implementation-source
+  - id: IMP-CURRENT-UNLOCKED-REPOSITORY
+    level: implementation
+    kind: observed-implementation
+    statement: The inspected Repository Put, Get, Cat, and GC paths contain no process-wide cross-process operation exclusion.
+    provenance:
+      origin: observed
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/put.go
+        revision: d3a1db2faf961a91908fae5e71620449bc947385
+        role: implementation-source
+      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/get.go
+        revision: d3a1db2faf961a91908fae5e71620449bc947385
+        role: implementation-source
+      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/repository.go
+        revision: d3a1db2faf961a91908fae5e71620449bc947385
+        role: implementation-source
+  - id: IMP-CURRENT-GCS-STUB
+    level: implementation
+    kind: observed-implementation
+    statement: The GCS Object Store package is a placeholder whose operations return ErrNotImplemented.
+    provenance:
+      origin: observed
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/objectstore/gcs/store.go
+        revision: d3a1db2faf961a91908fae5e71620449bc947385
+        role: implementation-source
+  - id: IMP-CURRENT-GET-TRUNCATES
+    level: implementation
+    kind: observed-implementation
+    statement: The inspected Get implementation opens the destination with O_TRUNC and writes directly to it rather than using a temporary destination and atomic replacement.
+    provenance:
+      origin: observed
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/get.go
+        revision: d3a1db2faf961a91908fae5e71620449bc947385
+        role: implementation-source
+
+relations:
+  - id: REL-DES-REPOSITORY-META-AUTHORITY
+    from: DES-REPOSITORY-BOUNDARIES
+    type: depends_on
+    to: REQ-META-SSOT
+  - id: REL-DES-REPOSITORY-OBJECT-AUTHORITY
+    from: DES-REPOSITORY-BOUNDARIES
+    type: depends_on
+    to: REQ-OBJECT-SSOT
+  - id: REL-DES-APPLICATION-BOUNDARY
+    from: DES-APPLICATION-BOUNDARY
+    type: depends_on
+    to: REQ-META-SSOT
+  - id: REL-DES-DEPENDENCY-META
+    from: DES-DEPENDENCY-DIRECTION
+    type: depends_on
+    to: REQ-META-SSOT
+  - id: REL-DES-CONSTRUCTION-FORMAT
+    from: DES-CONSTRUCTION
+    type: depends_on
+    to: DES-PHASE1-FORMAT
+  - id: REL-DES-CLI-BOUNDARY
+    from: DES-CLI-BOUNDARY
+    type: depends_on
+    to: REQ-NO-RESUME
+  - id: REL-DES-OBJECT-CONTRACT
+    from: DES-OBJECT-BACKEND-NEUTRALITY
+    type: depends_on
+    to: REQ-OBJECT-COMMIT
+  - id: REL-DES-METADATA-COMMITTED
+    from: DES-METADATA-MODEL
+    type: depends_on
+    to: REQ-META-COMMITTED-ONLY
+  - id: REL-DES-ENTRY-ID
+    from: DES-METADATA-MODEL
+    type: depends_on
+    to: REQ-ENTRY-ID
+  - id: REL-DES-NAMESPACE
+    from: DES-METADATA-MODEL
+    type: depends_on
+    to: REQ-NAMESPACE-UNIQUENESS
+  - id: REL-DES-ROOT
+    from: DES-EXPLICIT-DIRECTORY-MODEL
+    type: depends_on
+    to: REQ-ROOT-ENTRY
+  - id: REL-DES-DIRECTORY-OBJECT
+    from: DES-EXPLICIT-DIRECTORY-MODEL
+    type: depends_on
+    to: REQ-DIRECTORY-NO-OBJECT
+  - id: REL-DES-READ-GC
+    from: DES-READ-SEMANTICS
+    type: depends_on
+    to: REQ-READ-GC-EXCLUSION
+  - id: REL-DES-DOCTOR
+    from: DES-DOCTOR
+    type: depends_on
+    to: REQ-DOCTOR-NONDESTRUCTIVE
+  - id: REL-DES-GET
+    from: DES-PHASE4-CLEANUP-EXPORT
+    type: depends_on
+    to: REQ-GET-ATOMIC-DESTINATION
+  - id: REL-DES-SUBTREE
+    from: DES-EXPLICIT-DIRECTORY-MODEL
+    type: depends_on
+    to: REQ-SUBTREE-MUTATIONS
+  - id: REL-DES-FAILURE-ORDER
+    from: DES-FAILURE-BOUNDARIES
+    type: depends_on
+    to: REQ-METADATA-ORDER
+  - id: REL-DES-NO-PENDING
+    from: DES-FAILURE-BOUNDARIES
+    type: depends_on
+    to: REQ-META-COMMITTED-ONLY
+  - id: REL-DES-REVISION
+    from: DES-REVISION-SEMANTICS
+    type: depends_on
+    to: REQ-REVISION
+  - id: REL-DES-ENTRY-ID-REVISION
+    from: DES-REVISION-SEMANTICS
+    type: depends_on
+    to: REQ-ENTRY-ID
+  - id: REL-DES-DIRECTORIES
+    from: DES-EXPLICIT-DIRECTORY-MODEL
+    type: depends_on
+    to: REQ-EXPLICIT-DIRECTORIES
+  - id: REL-DES-IDENTITY
+    from: DES-IDENTITY-TARGET
+    type: depends_on
+    to: REQ-OBJECT-SSOT
+  - id: REL-DES-OBJECT-MODEL
+    from: DES-OBJECT-MODEL
+    type: depends_on
+    to: REQ-OBJECT-SSOT
+  - id: REL-DES-ERROR-MODEL
+    from: DES-ERROR-MODEL
+    type: depends_on
+    to: REQ-NO-RESUME
+  - id: REL-DES-PATH-SEMANTICS
+    from: DES-PATH-SEMANTICS
+    type: depends_on
+    to: REQ-NAMESPACE-UNIQUENESS
+  - id: REL-DES-PHASE1-FORMAT
+    from: DES-PHASE1-FORMAT
+    type: depends_on
+    to: DES-IDENTITY-TARGET
+  - id: REL-PHASE2-COMMIT
+    from: DES-PHASE2-CAS
+    type: depends_on
+    to: REQ-OBJECT-COMMIT
+  - id: REL-PHASE2-FORMAT
+    from: DES-PHASE2-CAS
+    type: depends_on
+    to: DES-PHASE1-FORMAT
+  - id: REL-PHASE3-PUT-GC
+    from: DES-PHASE3-EXCLUSION
+    type: depends_on
+    to: REQ-PUT-GC-EXCLUSION
+  - id: REL-PHASE3-PHASE2
+    from: DES-PHASE3-EXCLUSION
+    type: depends_on
+    to: DES-PHASE2-CAS
+  - id: REL-PHASE3-READ-GC
+    from: DES-PHASE3-EXCLUSION
+    type: depends_on
+    to: REQ-READ-GC-EXCLUSION
+  - id: REL-PHASE3-REPLACE
+    from: DES-PHASE3-EXCLUSION
+    type: depends_on
+    to: REQ-REPLACEMENT
+  - id: REL-PHASE1-IDENTITY
+    from: DES-PHASE1-FORMAT
+    type: depends_on
+    to: REQ-OBJECT-SSOT
+  - id: REL-PHASE4-NO-RESUME
+    from: DES-PHASE4-CLEANUP-EXPORT
+    type: depends_on
+    to: REQ-NO-RESUME
+  - id: REL-PHASE4-PHASE3
+    from: DES-PHASE4-CLEANUP-EXPORT
+    type: depends_on
+    to: DES-PHASE3-EXCLUSION
+  - id: REL-PHASE5-PHASE4
+    from: DES-EXPLICIT-DIRECTORY-MODEL
+    type: depends_on
+    to: DES-PHASE4-CLEANUP-EXPORT
+  - id: REL-PHASE6-OBJECT
+    from: DES-PHASE6-GCS
+    type: depends_on
+    to: REQ-OBJECT-COMMIT
+  - id: REL-PHASE6-PHASE2
+    from: DES-PHASE6-GCS
+    type: depends_on
+    to: DES-PHASE2-CAS
+  - id: REL-PHASE6-PHASE3
+    from: DES-PHASE6-GCS
+    type: depends_on
+    to: DES-PHASE3-EXCLUSION
+  - id: REL-PHASE6-PHASE4
+    from: DES-PHASE6-GCS
+    type: depends_on
+    to: DES-PHASE4-CLEANUP-EXPORT
+  - id: REL-PHASE0-BASELINE
+    from: DES-PHASE0-SCAFFOLDING
+    type: depends_on
+    to: REQ-META-SSOT
+  - id: REL-PHASE7-AUTHORITY
+    from: DES-PHASE7-SYNC
+    type: depends_on
+    to: DES-REPOSITORY-BOUNDARIES
+  - id: REL-IMP-SHA1
+    from: IMP-CURRENT-SHA1
+    type: realizes
+    to: DES-IDENTITY-TARGET
+  - id: REL-IMP-UNLOCKED
+    from: IMP-CURRENT-UNLOCKED-REPOSITORY
+    type: realizes
+    to: DES-REPOSITORY-BOUNDARIES
+  - id: REL-IMP-GCS
+    from: IMP-CURRENT-GCS-STUB
+    type: realizes
+    to: DES-PHASE6-GCS
+  - id: REL-IMP-GET
+    from: IMP-CURRENT-GET-TRUNCATES
+    type: realizes
+    to: DES-PHASE4-CLEANUP-EXPORT
+
+observations:
+  - id: OBS-SHA1-IMPLEMENTATION-GAP
+    subject: IMP-CURRENT-SHA1
+    activity: Inspected source at the pinned repository revision and compared content identity with the Phase 1 design target.
+    claims: [DES-IDENTITY-TARGET]
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/content/hash.go
+        revision: d3a1db2faf961a91908fae5e71620449bc947385
+        role: inspected-source
+  - id: OBS-REPOSITORY-EXCLUSION-GAP
+    subject: IMP-CURRENT-UNLOCKED-REPOSITORY
+    activity: Inspected Put, Read, and GC code paths at the pinned repository revision for process-wide exclusion.
+    claims: [DES-REPOSITORY-BOUNDARIES, REQ-PUT-GC-EXCLUSION, REQ-READ-GC-EXCLUSION]
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/put.go
+        revision: d3a1db2faf961a91908fae5e71620449bc947385
+        role: inspected-source
+      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/get.go
+        revision: d3a1db2faf961a91908fae5e71620449bc947385
+        role: inspected-source
+      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/repository.go
+        revision: d3a1db2faf961a91908fae5e71620449bc947385
+        role: inspected-source
+  - id: OBS-GCS-PLACEHOLDER
+    subject: IMP-CURRENT-GCS-STUB
+    activity: Inspected GCS Object Store methods at the pinned repository revision.
+    claims: [DES-PHASE6-GCS]
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/objectstore/gcs/store.go
+        revision: d3a1db2faf961a91908fae5e71620449bc947385
+        role: inspected-source
+  - id: OBS-GET-ATOMIC-EXPORT-GAP
+    subject: IMP-CURRENT-GET-TRUNCATES
+    activity: Inspected Get destination handling at the pinned repository revision and compared it with the Phase 4 export goal.
+    claims: [DES-PHASE4-CLEANUP-EXPORT]
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/get.go
+        revision: d3a1db2faf961a91908fae5e71620449bc947385
+        role: inspected-source
+
+open_items:
+  - id: OPEN-SHA1-FORMAT-TRANSITION
+    statement: Decide how repositories with current plain SHA-1 identifiers transition to the Phase 1 SHA-256 algorithm-namespaced format without silently reinterpreting existing IDs.
+    status: open
+    related_refs: [DES-IDENTITY-TARGET, IMP-CURRENT-SHA1]
+  - id: OPEN-READ-REVISION-CHANGE
+    statement: Decide whether a Read that observes an Entry revision change during streaming returns the already opened content or retries before exposing bytes; preserve Read/GC exclusion independently of this policy.
+    status: open
+    related_refs: [DES-READ-SEMANTICS, REQ-READ-GC-EXCLUSION]
+  - id: OPEN-PATH-CACHE-UPDATE
+    statement: Decide whether a derived canonical path cache is synchronously updated, invalidated for later recalculation, or lazily rebuilt after Entry moves and renames.
+    status: open
+    related_refs: [DES-EXPLICIT-DIRECTORY-MODEL]
+  - id: OPEN-DELETE-RETENTION
+    statement: Decide whether removed Entries are represented as tombstones, physically removed, or compacted, and define any retention policy without changing committed namespace visibility semantics.
+    status: open
+    related_refs: [DES-EXPLICIT-DIRECTORY-MODEL, DES-PHASE4-CLEANUP-EXPORT]
+
+representation_gaps:
+  []
