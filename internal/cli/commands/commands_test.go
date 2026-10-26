@@ -85,5 +85,9 @@ func TestCLI(t *testing.T) {
 		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 			t.Errorf("expected metadata.sqlite to exist at %s, but it was not found", dbPath)
 		}
+		coordinationDBPath := filepath.Join(tempRepo, "coordination.db")
+		if _, err := os.Stat(coordinationDBPath); os.IsNotExist(err) {
+			t.Errorf("expected coordination.db to exist at %s, but it was not found", coordinationDBPath)
+		}
 	})
 }

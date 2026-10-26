@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/kamichidu/go-flagshim"
@@ -24,7 +25,7 @@ func (c *LsCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) con
 }
 
 // Run executes the list command to display child entries under the path.
-func (c *LsCommand) Run(ctx context.Context, args []string) error {
+func (c *LsCommand) Run(ctx context.Context, args []string) (runErr error) {
 	rawRepoPath := "/"
 	if len(args) > 0 {
 		rawRepoPath = args[0]
@@ -39,7 +40,7 @@ func (c *LsCommand) Run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
 	cli.LogVerbose(ctx, "Listing entries under logical path %q", repoPath)
 

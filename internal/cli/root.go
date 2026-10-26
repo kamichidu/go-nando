@@ -13,6 +13,7 @@ import (
 	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/config"
 	"github.com/kamichidu/go-nando/internal/content"
+	coordinatorsqlite "github.com/kamichidu/go-nando/internal/coordinator/sqlite"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/metadata/sqlite"
 	"github.com/kamichidu/go-nando/internal/objectstore"
@@ -147,7 +148,7 @@ func ResolveRepositoryAndVerbose(ctx context.Context) (string, bool, error) {
 }
 
 // NewAppFromContext initializes the App layer and dependencies based on resolved context configuration.
-func NewAppFromContext(ctx context.Context) (*app.App, string, func(), error) {
+func NewAppFromContext(ctx context.Context) (*app.App, string, func() error, error) {
 	repoDir, _, err := ResolveRepositoryAndVerbose(ctx)
 	if err != nil {
 		return nil, "", nil, err
@@ -164,21 +165,17 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func(), error) {
 	}
 
 	if err := metaStore.CheckMigrations(ctx); err != nil {
-		_ = metaStore.Close()
-		return nil, "", nil, err
+		return nil, "", nil, errors.Join(err, metaStore.Close())
 	}
 	repoFormat, found, err := metaStore.RepositoryFormat(ctx)
 	if err != nil {
-		_ = metaStore.Close()
-		return nil, "", nil, err
+		return nil, "", nil, errors.Join(err, metaStore.Close())
 	}
 	if !found {
-		_ = metaStore.Close()
-		return nil, "", nil, fmt.Errorf("%w: repository format metadata is missing", repositoryformat.ErrUnsupported)
+		return nil, "", nil, errors.Join(fmt.Errorf("%w: repository format metadata is missing", repositoryformat.ErrUnsupported), metaStore.Close())
 	}
 	if err := repoFormat.Validate(); err != nil {
-		_ = metaStore.Close()
-		return nil, "", nil, err
+		return nil, "", nil, errors.Join(err, metaStore.Close())
 	}
 
 	objectsDir := filepath.Join(repoDir, "objects")
@@ -187,16 +184,19 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func(), error) {
 
 	objStore, err := local.NewStore(objectsDir, tempDir, hasher)
 	if err != nil {
-		_ = metaStore.Close()
-		return nil, "", nil, fmt.Errorf("failed to open object store: %w", err)
+		return nil, "", nil, errors.Join(fmt.Errorf("failed to open object store: %w", err), metaStore.Close())
 	}
 
 	validatingMetaStore := metadata.NewValidatingStore(metaStore)
-	repo := repository.NewRepository(validatingMetaStore, objStore, hasher)
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(repoDir, "coordination.db"))
+	if err != nil {
+		return nil, "", nil, errors.Join(fmt.Errorf("failed to open repository coordinator: %w", err), metaStore.Close())
+	}
+	repo := repository.NewRepository(validatingMetaStore, objStore, hasher, coordinator)
 	application := app.NewApp(repo)
 
-	cleanup := func() {
-		_ = metaStore.Close()
+	cleanup := func() error {
+		return errors.Join(coordinator.Close(), metaStore.Close())
 	}
 
 	return application, repoDir, cleanup, nil

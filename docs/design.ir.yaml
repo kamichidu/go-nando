@@ -133,6 +133,29 @@ nodes:
         - transparent filesystem mounting
         - remote concurrent writers
         - user-visible version history
+      coordination:
+        authority: Repository
+        storage: dedicated-SQLite-coordination-db
+        filename: coordination.db
+        transaction: BEGIN-IMMEDIATE
+        transaction_release: ROLLBACK-on-success-error-cancel-or-panic
+        release_failure: discard-connection-and-report-ErrRelease;operation-may-have-completed;attach-to-panic-when-panicking
+        scope: all-processes-and-Repository-instances-for-one-repository
+        filesystem: local-filesystem-only
+        protected_operations: [Put, Get, Cat, GC, Doctor]
+        mode: exclusive-for-all-protected-operations
+        shared-mode: future-extension-boundary-only
+        metadata-database: separate-from-coordination-database
+        cancellation: context-cancellation-or-deadline-stops-lock-wait
+        process-termination: SQLite-releases-lock
+        panic: rollback-and-release-lock
+        unsupported:
+          - deleting-and-recreating-coordination-db-while-repository-is-in-use
+          - direct-external-metadata-or-object-store-modification
+          - multi-host-or-network-filesystem-coordination
+        tradeoffs:
+          - long-Get-or-Cat-blocks-Put-Get-GC-and-Doctor
+          - exclusive-serialization-sacrifices-concurrent-reads
   - id: DES-CLI-BOUNDARY
     level: system_design
     kind: responsibility-model
@@ -325,19 +348,39 @@ nodes:
   - id: DES-PHASE3-EXCLUSION
     level: system_design
     kind: roadmap-phase
-    statement: Phase 3 implements Repository-owned cross-process exclusion for Put versus GC and active Read versus GC, plus atomic committed-only metadata transitions and old-entry preservation during replacement.
+    statement: Phase 3 implements Repository-owned cross-process exclusion through a dedicated SQLite coordination database per repository. BEGIN IMMEDIATE serializes protected operations across processes and Repository instances; the Metadata database remains separate and is not blocked by coordination transactions. Put, Get, the full Cat read, GC, and Doctor run under exclusive coordination. The design boundary permits a future shared/exclusive mode, but the initial implementation is exclusive-only.
     provenance:
       origin: imported
     attributes:
       roadmap_phase: 3
       persistent_operation_state: prohibited
       lease_role: optional-duplicate-transfer-optimization
+      coordination_database: dedicated-SQLite-coordination.db
+      coordination_transaction: BEGIN-IMMEDIATE
+      transaction_release: ROLLBACK-on-success-error-cancel-or-panic
+      release_failure: discard-connection-and-report-ErrRelease;operation-may-have-completed;attach-to-panic-when-panicking
+      coordination_scope: all-processes-and-instances-sharing-one-repository
+      protected_operations: [Put, Get, Cat, GC, Doctor]
+      initial_lock_mode: exclusive
+      filesystem_scope: local-filesystem-only
+      unsupported_conditions:
+        - coordination-db-deleted-and-recreated-during-use-may-create-split-brain
+        - direct-external-metadata-or-object-store-modification
+        - multi-host-or-network-filesystem-coordination
+      blocking_tradeoffs:
+        - long-Get-or-Cat-blocks-Put-Get-GC-and-Doctor
+        - all-protected-operations-are-serialized
       exit_criteria:
-        - multi-process tests protect Put through reachability evaluation and Metadata Commit
-        - multi-process tests protect active Read from GC deletion
+        - multiple-Repository-instance and multi-process tests protect Put through Object Commit and Metadata Commit
+        - active Cat and Get remain protected from GC deletion for the full Object read
+        - Doctor reference and Object observations cannot race with GC or Put
+        - context cancellation and deadlines stop waiting for coordination
+        - panic and process termination release coordination for later operations
+        - coordination writer transactions do not block Metadata database writers
         - replacement failure before Metadata Commit preserves the old Entry
         - successful Metadata Commit references an already committed readable Object
         - correctness does not depend on process-local mutexes
+        - coordination database recreation and direct external store mutation are documented outside the guarantee
   - id: DES-PHASE4-CLEANUP-EXPORT
     level: system_design
     kind: roadmap-phase
@@ -435,18 +478,18 @@ nodes:
   - id: IMP-CURRENT-UNLOCKED-REPOSITORY
     level: implementation
     kind: observed-implementation
-    statement: The inspected Repository Put, Get, Cat, and GC paths contain no process-wide cross-process operation exclusion.
+    statement: At baseline commit 9b8b738be3fe0510200e1ff144282f645cc15e19, the inspected Repository Put, Get, Cat, GC, and Doctor paths contained no process-wide cross-process operation exclusion.
     provenance:
       origin: observed
     artifact_refs:
-      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/put.go
-        revision: d3a1db2faf961a91908fae5e71620449bc947385
+      - uri: https://github.com/kamichidu/go-nando/blob/9b8b738be3fe0510200e1ff144282f645cc15e19/internal/repository/put.go
+        revision: 9b8b738be3fe0510200e1ff144282f645cc15e19
         role: implementation-source
-      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/get.go
-        revision: d3a1db2faf961a91908fae5e71620449bc947385
+      - uri: https://github.com/kamichidu/go-nando/blob/9b8b738be3fe0510200e1ff144282f645cc15e19/internal/repository/get.go
+        revision: 9b8b738be3fe0510200e1ff144282f645cc15e19
         role: implementation-source
-      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/repository.go
-        revision: d3a1db2faf961a91908fae5e71620449bc947385
+      - uri: https://github.com/kamichidu/go-nando/blob/9b8b738be3fe0510200e1ff144282f645cc15e19/internal/repository/repository.go
+        revision: 9b8b738be3fe0510200e1ff144282f645cc15e19
         role: implementation-source
   - id: IMP-CURRENT-GCS-STUB
     level: implementation
@@ -622,17 +665,17 @@ observations:
         role: inspected-source
   - id: OBS-REPOSITORY-EXCLUSION-GAP
     subject: IMP-CURRENT-UNLOCKED-REPOSITORY
-    activity: Inspected Put, Read, and GC code paths at the pinned repository revision for process-wide exclusion.
+    activity: Inspected Put, Get, Cat, GC, and Doctor code paths at the pinned pre-Phase-3 baseline for process-wide exclusion.
     claims: [DES-REPOSITORY-BOUNDARIES, REQ-PUT-GC-EXCLUSION, REQ-READ-GC-EXCLUSION]
     artifact_refs:
-      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/put.go
-        revision: d3a1db2faf961a91908fae5e71620449bc947385
+      - uri: https://github.com/kamichidu/go-nando/blob/9b8b738be3fe0510200e1ff144282f645cc15e19/internal/repository/put.go
+        revision: 9b8b738be3fe0510200e1ff144282f645cc15e19
         role: inspected-source
-      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/get.go
-        revision: d3a1db2faf961a91908fae5e71620449bc947385
+      - uri: https://github.com/kamichidu/go-nando/blob/9b8b738be3fe0510200e1ff144282f645cc15e19/internal/repository/get.go
+        revision: 9b8b738be3fe0510200e1ff144282f645cc15e19
         role: inspected-source
-      - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/repository.go
-        revision: d3a1db2faf961a91908fae5e71620449bc947385
+      - uri: https://github.com/kamichidu/go-nando/blob/9b8b738be3fe0510200e1ff144282f645cc15e19/internal/repository/repository.go
+        revision: 9b8b738be3fe0510200e1ff144282f645cc15e19
         role: inspected-source
   - id: OBS-GCS-PLACEHOLDER
     subject: IMP-CURRENT-GCS-STUB

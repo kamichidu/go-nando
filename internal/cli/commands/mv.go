@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/kamichidu/go-flagshim"
@@ -24,7 +25,7 @@ func (c *MvCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) con
 }
 
 // Run executes renaming or moving logical path.
-func (c *MvCommand) Run(ctx context.Context, args []string) error {
+func (c *MvCommand) Run(ctx context.Context, args []string) (runErr error) {
 	if len(args) < 2 {
 		return fmt.Errorf("%w: nando mv <source-path> <destination-path>", cli.ErrInvalidArguments)
 	}
@@ -46,7 +47,7 @@ func (c *MvCommand) Run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
 	cli.LogVerbose(ctx, "Moving logical path %q to %q", src, dst)
 

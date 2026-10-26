@@ -17,6 +17,12 @@ import (
 
 // Put imports a local file into the repository under the specified logical repository path.
 func (r *Repository) Put(ctx context.Context, localPath string, repoPath string) error {
+	return r.coordinator.Exclusive(ctx, func() error {
+		return r.put(ctx, localPath, repoPath)
+	})
+}
+
+func (r *Repository) put(ctx context.Context, localPath string, repoPath string) error {
 	// 1. Normalize and validate destination
 	normalized, err := paths.NormalizeLogicalPath(repoPath)
 	if err != nil {

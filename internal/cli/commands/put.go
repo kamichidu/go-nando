@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/kamichidu/go-flagshim"
@@ -24,7 +25,7 @@ func (c *PutCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) co
 }
 
 // Run executes importing a local file into the logical repository.
-func (c *PutCommand) Run(ctx context.Context, args []string) error {
+func (c *PutCommand) Run(ctx context.Context, args []string) (runErr error) {
 	if len(args) < 2 {
 		return fmt.Errorf("%w: nando put <local-file> <repository-path>", cli.ErrInvalidArguments)
 	}
@@ -41,7 +42,7 @@ func (c *PutCommand) Run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
 	cli.LogVerbose(ctx, "Importing file %q to logical repository path %q", localPath, repoPath)
 

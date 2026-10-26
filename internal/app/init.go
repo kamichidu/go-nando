@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	coordinatorsqlite "github.com/kamichidu/go-nando/internal/coordinator/sqlite"
 	"github.com/kamichidu/go-nando/internal/metadata/sqlite"
 	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
 )
@@ -71,6 +72,17 @@ func InitRepository(ctx context.Context, repoDir string) error {
 	tempDir := filepath.Join(repoDir, "temp")
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(repoDir, "coordination.db"))
+	if err != nil {
+		return fmt.Errorf("failed to open repository coordinator: %w", err)
+	}
+	if err := coordinator.Exclusive(ctx, func() error { return nil }); err != nil {
+		return errors.Join(fmt.Errorf("initialize repository coordinator: %w", err), coordinator.Close())
+	}
+	if err := coordinator.Close(); err != nil {
+		return fmt.Errorf("close repository coordinator: %w", err)
 	}
 
 	return nil

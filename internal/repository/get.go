@@ -13,6 +13,12 @@ import (
 
 // Get exports a file from the repository to the local filesystem.
 func (r *Repository) Get(ctx context.Context, repoPath string, localPath string) error {
+	return r.coordinator.Exclusive(ctx, func() error {
+		return r.get(ctx, repoPath, localPath)
+	})
+}
+
+func (r *Repository) get(ctx context.Context, repoPath string, localPath string) error {
 	// 1. Retrieve the metadata entry
 	entry, err := r.ResolvePath(ctx, repoPath)
 	if err != nil {

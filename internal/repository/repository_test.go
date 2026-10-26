@@ -4,14 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/kamichidu/go-nando/internal/content"
+	coordinatorsqlite "github.com/kamichidu/go-nando/internal/coordinator/sqlite"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/metadata/sqlite"
+	"github.com/kamichidu/go-nando/internal/objectstore"
 	"github.com/kamichidu/go-nando/internal/objectstore/local"
 	"github.com/kamichidu/go-nando/internal/repository"
 	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
@@ -19,6 +24,300 @@ import (
 
 type fixedIDMetadataStore struct {
 	metadata.MetadataStore
+}
+
+func TestRepositoryCoordinatorProtectsPutAndCatFromGC(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	objectsDir := filepath.Join(tempDir, "objects")
+	tempObjectDir := filepath.Join(tempDir, "temp")
+	baseObjects, err := local.NewStore(objectsDir, tempObjectDir, hasher)
+	if err != nil {
+		t.Fatalf("open object store: %v", err)
+	}
+
+	putEntered := make(chan struct{})
+	putRelease := make(chan struct{})
+	putEntryReady := make(chan metadata.Entry, 1)
+	putMetaStore := &blockingCreateMetadataStore{MetadataStore: metaStore, entered: putEntered, release: putRelease, entryReady: putEntryReady}
+	putRepo := openRepositoryInstance(t, tempDir, putMetaStore, baseObjects, hasher)
+	gcRepo := openRepositoryInstance(t, tempDir, openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx), baseObjects, hasher)
+	sourcePath := filepath.Join(tempDir, "new.txt")
+	if err := os.WriteFile(sourcePath, []byte("new object"), 0600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	putDone := make(chan error, 1)
+	go func() { putDone <- putRepo.Put(ctx, sourcePath, "/new.txt") }()
+	<-putEntered
+	committingEntry := <-putEntryReady
+	if committingEntry.ObjectID == nil {
+		t.Fatal("Put reached metadata create without a committed Object ID")
+	}
+	exists, err := baseObjects.Exists(ctx, *committingEntry.ObjectID)
+	if err != nil || !exists {
+		t.Fatalf("Object must be committed before Metadata Create: exists=%v err=%v", exists, err)
+	}
+	rc, err := baseObjects.Open(ctx, *committingEntry.ObjectID)
+	if err != nil {
+		t.Fatalf("open committed object before metadata commit: %v", err)
+	}
+	committedBytes, readErr := io.ReadAll(rc)
+	closeErr := rc.Close()
+	if readErr != nil || closeErr != nil || string(committedBytes) != "new object" {
+		t.Fatalf("pre-metadata object was not fully readable: bytes=%q read=%v close=%v", committedBytes, readErr, closeErr)
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer cancel()
+	if _, err := gcRepo.GC(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("GC did not wait for Put coordination: %v", err)
+	}
+	close(putRelease)
+	if err := <-putDone; err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	if deleted, err := gcRepo.GC(ctx); err != nil || deleted != 0 {
+		t.Fatalf("GC after Put should preserve the newly referenced object; deleted=%d err=%v", deleted, err)
+	}
+
+	readEntered := make(chan struct{})
+	readRelease := make(chan struct{})
+	catRepo := openRepositoryInstance(t, tempDir, openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx), &blockingRepositoryObjectStore{
+		ObjectStore: baseObjects,
+		readEntered: readEntered,
+		readRelease: readRelease,
+	}, hasher)
+	catDone := make(chan error, 1)
+	go func() { catDone <- catRepo.Cat(ctx, "/new.txt", io.Discard) }()
+	<-readEntered
+	waitCtx2, cancel2 := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer cancel2()
+	if _, err := gcRepo.GC(waitCtx2); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("GC did not wait for the full Cat read: %v", err)
+	}
+	close(readRelease)
+	if err := <-catDone; err != nil {
+		t.Fatalf("Cat failed: %v", err)
+	}
+	if deleted, err := gcRepo.GC(ctx); err != nil || deleted != 0 {
+		t.Fatalf("GC after Cat should preserve the referenced object; deleted=%d err=%v", deleted, err)
+	}
+
+	getEntered := make(chan struct{})
+	getRelease := make(chan struct{})
+	getRepo := openRepositoryInstance(t, tempDir, openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx), &blockingRepositoryObjectStore{
+		ObjectStore: baseObjects,
+		readEntered: getEntered,
+		readRelease: getRelease,
+	}, hasher)
+	getDone := make(chan error, 1)
+	go func() { getDone <- getRepo.Get(ctx, "/new.txt", filepath.Join(tempDir, "exported.txt")) }()
+	<-getEntered
+	waitCtx3, cancel3 := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer cancel3()
+	if _, err := gcRepo.GC(waitCtx3); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("GC did not wait for Get's object read: %v", err)
+	}
+	close(getRelease)
+	if err := <-getDone; err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+}
+
+func TestRepositoryCoordinatorProtectsDoctorFromGCAndDoesNotLockMetadataDB(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	baseObjects, err := local.NewStore(filepath.Join(tempDir, "objects"), filepath.Join(tempDir, "temp"), hasher)
+	if err != nil {
+		t.Fatalf("open object store: %v", err)
+	}
+	listEntered := make(chan struct{})
+	listRelease := make(chan struct{})
+	doctorRepo := openRepositoryInstance(t, tempDir, metaStore, &blockingRepositoryObjectStore{
+		ObjectStore:    baseObjects,
+		listRawEntered: listEntered,
+		listRawRelease: listRelease,
+	}, hasher)
+	gcRepo := openRepositoryInstance(t, tempDir, openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx), baseObjects, hasher)
+	doctorDone := make(chan error, 1)
+	go func() { doctorDone <- doctorRepo.Doctor(ctx) }()
+	<-listEntered
+
+	parentID := metadata.EntryID("root")
+	entry := metadata.Entry{ID: "unrelated-metadata-write", ParentID: &parentID, Name: "parallel", Kind: metadata.EntryKindDirectory, Revision: 1}
+	if _, err := metaStore.Create(ctx, entry); err != nil {
+		t.Fatalf("coordination transaction blocked an independent Metadata DB writer: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer cancel()
+	if _, err := gcRepo.GC(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("GC did not wait for Doctor reference observation: %v", err)
+	}
+	close(listRelease)
+	if err := <-doctorDone; err != nil {
+		t.Fatalf("Doctor failed: %v", err)
+	}
+}
+
+type blockingRepositoryObjectStore struct {
+	objectstore.ObjectStore
+	readEntered    chan struct{}
+	readRelease    chan struct{}
+	listRawEntered chan struct{}
+	listRawRelease chan struct{}
+	readOnce       sync.Once
+	listRawOnce    sync.Once
+}
+
+func (s *blockingRepositoryObjectStore) Open(ctx context.Context, id content.ID) (io.ReadCloser, error) {
+	rc, err := s.ObjectStore.Open(ctx, id)
+	if err != nil || s.readEntered == nil {
+		return rc, err
+	}
+	return &blockingReadCloser{ReadCloser: rc, entered: s.readEntered, release: s.readRelease, once: &s.readOnce}, nil
+}
+
+type blockingCreateMetadataStore struct {
+	metadata.MetadataStore
+	entered    chan struct{}
+	release    chan struct{}
+	entryReady chan metadata.Entry
+}
+
+func (s *blockingCreateMetadataStore) Create(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
+	s.entryReady <- entry
+	close(s.entered)
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return metadata.Entry{}, ctx.Err()
+	}
+	return s.MetadataStore.Create(ctx, entry)
+}
+
+func TestPutReplacementMetadataFailurePreservesOldEntryUntilGC(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(tempDir, "objects"), filepath.Join(tempDir, "temp"), hasher)
+	if err != nil {
+		t.Fatalf("open object store: %v", err)
+	}
+	workingRepo := openRepositoryInstance(t, tempDir, metaStore, objects, hasher)
+	oldPath := filepath.Join(tempDir, "old.txt")
+	if err := os.WriteFile(oldPath, []byte("old committed content"), 0600); err != nil {
+		t.Fatalf("write old source: %v", err)
+	}
+	if err := workingRepo.Put(ctx, oldPath, "/item.txt"); err != nil {
+		t.Fatalf("put initial content: %v", err)
+	}
+	oldEntry, err := workingRepo.Stat(ctx, "/item.txt")
+	if err != nil {
+		t.Fatalf("stat initial entry: %v", err)
+	}
+	oldID := *oldEntry.ObjectID
+
+	newPath := filepath.Join(tempDir, "new.txt")
+	if err := os.WriteFile(newPath, []byte("replacement content"), 0600); err != nil {
+		t.Fatalf("write replacement source: %v", err)
+	}
+	updateErr := errors.New("injected metadata update failure")
+	failingRepo := openRepositoryInstance(t, tempDir, &failingUpdateMetadataStore{MetadataStore: metaStore, err: updateErr}, objects, hasher)
+	if err := failingRepo.Put(ctx, newPath, "/item.txt"); !errors.Is(err, updateErr) {
+		t.Fatalf("expected injected Metadata Update failure, got %v", err)
+	}
+
+	currentEntry, err := workingRepo.Stat(ctx, "/item.txt")
+	if err != nil {
+		t.Fatalf("old Entry became unavailable after failed replacement: %v", err)
+	}
+	if currentEntry.Revision != oldEntry.Revision || currentEntry.ObjectID == nil || *currentEntry.ObjectID != oldID {
+		t.Fatalf("failed replacement changed authoritative Entry: before=%+v after=%+v", oldEntry, currentEntry)
+	}
+	if err := objects.Verify(ctx, oldID); err != nil {
+		t.Fatalf("old committed Object was not preserved: %v", err)
+	}
+	deleted, err := workingRepo.GC(ctx)
+	if err != nil {
+		t.Fatalf("GC orphan after failed replacement: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected failed replacement's orphan Object to be collected, got %d deletions", deleted)
+	}
+	if err := objects.Verify(ctx, oldID); err != nil {
+		t.Fatalf("GC deleted the still-referenced old Object: %v", err)
+	}
+}
+
+type failingUpdateMetadataStore struct {
+	metadata.MetadataStore
+	err error
+}
+
+func (s *failingUpdateMetadataStore) Update(context.Context, metadata.Entry) (metadata.Entry, error) {
+	return metadata.Entry{}, s.err
+}
+
+func (s *blockingRepositoryObjectStore) ListRaw(ctx context.Context) ([]string, error) {
+	if s.listRawEntered != nil {
+		s.listRawOnce.Do(func() { close(s.listRawEntered) })
+		select {
+		case <-s.listRawRelease:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return s.ObjectStore.ListRaw(ctx)
+}
+
+type blockingReadCloser struct {
+	io.ReadCloser
+	entered chan struct{}
+	release chan struct{}
+	once    *sync.Once
+}
+
+func (r *blockingReadCloser) Read(p []byte) (int, error) {
+	r.once.Do(func() { close(r.entered) })
+	<-r.release
+	return r.ReadCloser.Read(p)
+}
+
+func openInitializedMetadataStore(t *testing.T, dbPath string, ctx context.Context) *sqlite.Store {
+	t.Helper()
+	store, err := sqlite.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("open Metadata Store: %v", err)
+	}
+	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
+		t.Fatalf("initialize Metadata Store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close Metadata Store: %v", err)
+		}
+	})
+	return store
+}
+
+func openRepositoryInstance(t *testing.T, repoDir string, metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, hasher content.Hasher) *repository.Repository {
+	t.Helper()
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(repoDir, "coordination.db"))
+	if err != nil {
+		t.Fatalf("open Repository coordinator: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := coordinator.Close(); err != nil {
+			t.Errorf("close Repository coordinator: %v", err)
+		}
+	})
+	return repository.NewRepository(metadata.NewValidatingStore(metaStore), objStore, hasher, coordinator)
 }
 
 func (m *fixedIDMetadataStore) Create(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
@@ -56,7 +355,16 @@ func TestRepository(t *testing.T) {
 		}
 
 		validatingMetaStore := metadata.NewValidatingStore(metaStore)
-		repo := repository.NewRepository(validatingMetaStore, objStore, hasher)
+		coordinator, err := coordinatorsqlite.Open(filepath.Join(tempDir, "coordination.db"))
+		if err != nil {
+			t.Fatalf("failed to open coordinator: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := coordinator.Close(); err != nil {
+				t.Errorf("close coordinator: %v", err)
+			}
+		})
+		repo := repository.NewRepository(validatingMetaStore, objStore, hasher, coordinator)
 		return repo, tempDir, validatingMetaStore
 	}
 
@@ -245,7 +553,16 @@ func TestRepository(t *testing.T) {
 			t.Fatalf("failed to create object store: %v", err)
 		}
 
-		repo := repository.NewRepository(metaStore, objStore, hasher)
+		coordinator, err := coordinatorsqlite.Open(filepath.Join(tempDir, "coordination.db"))
+		if err != nil {
+			t.Fatalf("failed to open coordinator: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := coordinator.Close(); err != nil {
+				t.Errorf("close coordinator: %v", err)
+			}
+		})
+		repo := repository.NewRepository(metaStore, objStore, hasher, coordinator)
 
 		var sb strings.Builder
 

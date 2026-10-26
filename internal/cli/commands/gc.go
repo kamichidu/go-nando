@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/kamichidu/go-flagshim"
@@ -22,12 +23,12 @@ func (c *GcCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) con
 }
 
 // Run executes garbage collection on the repository.
-func (c *GcCommand) Run(ctx context.Context, args []string) error {
+func (c *GcCommand) Run(ctx context.Context, args []string) (runErr error) {
 	application, _, cleanup, err := cli.NewAppFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
 	cli.LogVerbose(ctx, "Running garbage collection...")
 

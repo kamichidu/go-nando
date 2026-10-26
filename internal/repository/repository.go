@@ -21,14 +21,17 @@ type Repository struct {
 	metaStore   metadata.MetadataStore
 	objectStore objectstore.ObjectStore
 	hasher      content.Hasher
+	coordinator Coordinator
 }
 
-// NewRepository creates a new Repository instance.
-func NewRepository(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, hasher content.Hasher) *Repository {
+// NewRepository creates a Repository whose protected operations use the
+// repository-wide coordinator shared by every process and instance.
+func NewRepository(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, hasher content.Hasher, coordinator Coordinator) *Repository {
 	return &Repository{
 		metaStore:   metaStore,
 		objectStore: objStore,
 		hasher:      hasher,
+		coordinator: coordinator,
 	}
 }
 
@@ -172,6 +175,12 @@ func (r *Repository) Stat(ctx context.Context, repoPath string) (metadata.Entry,
 
 // Cat streams content of the given logical path to the specified writer.
 func (r *Repository) Cat(ctx context.Context, repoPath string, w io.Writer) error {
+	return r.coordinator.Exclusive(ctx, func() error {
+		return r.cat(ctx, repoPath, w)
+	})
+}
+
+func (r *Repository) cat(ctx context.Context, repoPath string, w io.Writer) error {
 	entry, err := r.ResolvePath(ctx, repoPath)
 	if err != nil {
 		return err
@@ -199,6 +208,16 @@ func (r *Repository) Cat(ctx context.Context, repoPath string, w io.Writer) erro
 
 // GC deletes unreferenced objects from the object store.
 func (r *Repository) GC(ctx context.Context) (int, error) {
+	deletedCount := 0
+	err := r.coordinator.Exclusive(ctx, func() error {
+		var err error
+		deletedCount, err = r.gc(ctx)
+		return err
+	})
+	return deletedCount, err
+}
+
+func (r *Repository) gc(ctx context.Context) (int, error) {
 	refIDs, err := r.metaStore.ReferencedObjectIDs(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("failed to list referenced object IDs: %w", err)
@@ -235,6 +254,12 @@ func (r *Repository) GC(ctx context.Context) (int, error) {
 
 // Doctor verifies repository integrity (checking database reference matches physical object and is intact).
 func (r *Repository) Doctor(ctx context.Context) error {
+	return r.coordinator.Exclusive(ctx, func() error {
+		return r.doctor(ctx)
+	})
+}
+
+func (r *Repository) doctor(ctx context.Context) error {
 	// 1. Check root entry validity
 	root, err := r.metaStore.Root(ctx)
 	if err != nil {

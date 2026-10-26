@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,7 +26,7 @@ func (c *StatCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) c
 }
 
 // Run executes retrieving details of the repository path and outputs it.
-func (c *StatCommand) Run(ctx context.Context, args []string) error {
+func (c *StatCommand) Run(ctx context.Context, args []string) (runErr error) {
 	if len(args) < 1 {
 		return fmt.Errorf("%w: nando stat <repository-path>", cli.ErrInvalidArguments)
 	}
@@ -40,7 +41,7 @@ func (c *StatCommand) Run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
 	cli.LogVerbose(ctx, "Retrieving stat for %q", repoPath)
 
