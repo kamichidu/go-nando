@@ -2325,6 +2325,82 @@ func TestSQLiteStore(t *testing.T) {
 		}
 	})
 
+	t.Run("Move: waiting for writer lock respects context cancellation", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+		store.db.SetMaxOpenConns(2)
+
+		rootID := metadata.EntryID("root")
+		now := metadata.TimestampFromTime(time.Now().UTC())
+		entryID := metadata.EntryID("move-context")
+		_, err := store.Create(ctx, metadata.Entry{
+			ID: entryID, ParentID: &rootID, Name: "move-context.txt",
+			Kind: metadata.EntryKindFile, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create entry: %v", err)
+		}
+
+		writer, err := store.db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("failed to begin lock holder transaction: %v", err)
+		}
+		if _, err := writer.ExecContext(ctx, "UPDATE entries SET updated_at = updated_at WHERE entry_id = ?", entryID.String()); err != nil {
+			if rollbackErr := writer.Rollback(); rollbackErr != nil {
+				t.Errorf("failed to release lock holder transaction after setup error: %v", rollbackErr)
+			}
+			t.Fatalf("failed to acquire writer lock: %v", err)
+		}
+
+		deadlineCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer cancel()
+		parentID := rootID
+		_, err = store.Move(deadlineCtx, metadata.Entry{
+			ID: entryID, ParentID: &parentID, Name: "moved.txt", Revision: 1,
+		})
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("expected context deadline while waiting for SQLite writer lock, got %v", err)
+		}
+		if rollbackErr := writer.Rollback(); rollbackErr != nil {
+			t.Fatalf("failed to release lock holder transaction: %v", rollbackErr)
+		}
+
+		if _, err := store.Move(ctx, metadata.Entry{
+			ID: entryID, ParentID: &parentID, Name: "moved.txt", Revision: 1,
+		}); err != nil {
+			t.Errorf("Move did not recover after canceled lock wait: %v", err)
+		}
+	})
+
+	t.Run("Move: non-constraint SQL errors are not entry conflicts", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+
+		rootID := metadata.EntryID("root")
+		now := metadata.TimestampFromTime(time.Now().UTC())
+		entryID := metadata.EntryID("move-sql-error")
+		_, err := store.Create(ctx, metadata.Entry{
+			ID: entryID, ParentID: &rootID, Name: "move-sql-error.txt",
+			Kind: metadata.EntryKindFile, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("failed to create entry: %v", err)
+		}
+		if _, err := store.db.Exec(`CREATE TRIGGER reject_move BEFORE UPDATE ON entries
+			WHEN OLD.entry_id = 'move-sql-error'
+			BEGIN SELECT RAISE(ABORT, 'injected move failure'); END`); err != nil {
+			t.Fatalf("failed to install failure trigger: %v", err)
+		}
+
+		parentID := rootID
+		_, err = store.Move(ctx, metadata.Entry{
+			ID: entryID, ParentID: &parentID, Name: "moved.txt", Revision: 1,
+		})
+		if err == nil || errors.Is(err, metadata.ErrEntryConflict) || !strings.Contains(err.Error(), "injected move failure") {
+			t.Errorf("expected unclassified SQLite error, got %v", err)
+		}
+	})
+
 	t.Run("Timestamp: round-trip nanosecond precision", func(t *testing.T) {
 		now := time.Now().UTC()
 		ts := metadata.TimestampFromTime(now)

@@ -108,7 +108,7 @@ nodes:
   - id: REQ-GET-ATOMIC-DESTINATION
     level: system_requirement
     kind: export-invariant
-    statement: Get MUST write to a temporary destination and replace the final destination atomically only after successful completion, preserving an existing destination on failure.
+    statement: Get MUST write to a temporary file in the destination directory, set its required attributes, and atomically replace an existing regular-file destination only after successful completion; an absent destination is created, symlink and directory destinations are rejected without changing the link or its target, and failures before replacement preserve an existing regular-file destination and clean up the temporary file. A cleanup failure after successful replacement MUST identify that the destination was already published.
     provenance:
       origin: imported
   - id: REQ-DOCTOR-NONDESTRUCTIVE
@@ -213,7 +213,7 @@ nodes:
   - id: DES-DOCTOR
     level: system_design
     kind: diagnostic-contract
-    statement: Doctor checks committed metadata references, object content identity, metadata integrity, and repository-format support; repair is a separate explicit operation.
+    statement: Doctor checks Repository health by validating committed metadata references, referenced Object content identity, logical metadata invariants, and supported Repository Format before reporting healthy. It is non-destructive; repair is outside Doctor and requires a separate explicit operation. Valid unreferenced committed Objects are not Doctor findings and remain GC's responsibility.
     provenance:
       origin: imported
   - id: DES-ERROR-MODEL
@@ -388,20 +388,28 @@ nodes:
   - id: DES-PHASE4-CLEANUP-EXPORT
     level: system_design
     kind: roadmap-phase
-    statement: Phase 4 defines backend cleanup for incomplete pre-Commit staging, atomic destination replacement for get, and explicit repair behavior without Repository operation recovery or resumption.
+    statement: Phase 4 verifies failure outcomes at Object and Metadata commit boundaries, preserves Repository-owned exclusion, implements atomic Get destination replacement, and keeps Doctor non-destructive with valid unreferenced Objects assigned to GC. It introduces no generic Repair, tombstone retention, metadata compaction, persisted operation journal, or operation resumption. Incomplete staging cleanup remains backend-owned; crash-left staging is not removed unless active writers can be protected.
     provenance:
       origin: imported
     attributes:
       roadmap_phase: 4
       phase_goals:
-        - define tombstone retention or metadata compaction policy
-        - separate explicit repair operations from doctor
+        - test Object Commit and Metadata Commit failure boundaries, including replacement preservation
+        - atomically replace Get destinations only after content and attributes are ready
+        - verify Doctor is non-destructive and excludes valid unreferenced Objects
+        - verify GC partial failure can be retried without deleting reachable Objects
+        - keep Doctor and any future explicit repair operation separate
+        - retain backend ownership of incomplete pre-Commit staging cleanup
       exit_criteria:
-        - failure injection demonstrates the documented commit-boundary outcome
-        - incomplete staging cleanup is backend-owned
-        - get failure does not truncate an existing destination
-        - doctor is non-destructive by default and repair is explicit
-        - restart does not scan or resume persisted operation progress
+        - failure injection demonstrates the documented Object and Metadata commit-boundary outcomes
+        - replacement failure before Metadata Commit preserves the old Entry and Object
+        - Get uses a same-directory temporary file and atomic replacement on supported platforms
+        - Get rejects symlink and directory destinations without changing them
+        - Get failures preserve an existing regular-file destination and remove its temporary file
+        - Doctor is non-destructive and does not report valid unreferenced Objects
+        - GC partial deletion failure is safe to retry under Repository exclusion
+        - no persisted operation progress is scanned, resumed, or introduced
+        - crash-left staging cleanup is deferred until active staging can be protected
   - id: DES-PHASE6-GCS
     level: system_design
     kind: roadmap-phase
@@ -714,7 +722,11 @@ open_items:
   - id: OPEN-DELETE-RETENTION
     statement: Decide whether removed Entries are represented as tombstones, physically removed, or compacted, and define any retention policy without changing committed namespace visibility semantics.
     status: open
-    related_refs: [DES-EXPLICIT-DIRECTORY-MODEL, DES-PHASE4-CLEANUP-EXPORT]
+    related_refs: [DES-EXPLICIT-DIRECTORY-MODEL]
+  - id: OPEN-PHASE4-STAGING-CLEANUP
+    statement: Decide whether and how a backend may remove staging files left by process termination while guaranteeing it cannot remove another process's active staging file; until a safe ownership or exclusion mechanism is established, startup cleanup must not delete staging files.
+    status: open
+    related_refs: [DES-PHASE4-CLEANUP-EXPORT, REQ-NO-RESUME]
 
 representation_gaps:
   []

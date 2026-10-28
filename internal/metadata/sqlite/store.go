@@ -31,7 +31,15 @@ var ErrRepositoryFormatMissing = errors.New("repository format metadata is missi
 
 // NewStore creates a new Store instance backed by SQLite.
 func NewStore(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// Write operations read state before mutating it. Start their transactions
+	// with a RESERVED lock so concurrent writers queue before taking a read
+	// snapshot that cannot later be upgraded. beginTx retries SQLITE_BUSY with
+	// Context-aware waits instead of blocking inside SQLite's busy handler.
+	dsn := dbPath + "?_txlock=immediate&_pragma=foreign_keys%3dON"
+	if strings.Contains(dbPath, "?") {
+		dsn = dbPath + "&_txlock=immediate&_pragma=foreign_keys%3dON"
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open SQLite database at %q: %w", dbPath, err)
 	}
@@ -39,19 +47,31 @@ func NewStore(dbPath string) (*Store, error) {
 	// Limit to 1 open connection to prevent write-lock/busy contention in SQLite.
 	db.SetMaxOpenConns(1)
 
-	// Explicitly enable foreign key constraints for this connection.
-	// Since SetMaxOpenConns(1) limits the pool to exactly 1 persistent connection,
-	// executing this PRAGMA on the DB ensures it is applied to the active connection.
-	// NOTE: If the connection pool is expanded to multiple connections in the future,
-	// this PRAGMA must be applied to every connection (e.g., using a connect hook like
-	// sqlite.RegisterConnectHook or setting it in the DSN if supported by the driver).
-	_, err = db.Exec("PRAGMA foreign_keys = ON;")
-	if err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("failed to enable foreign key constraints: %w", err)
-	}
-
 	return &Store{db: db}, nil
+}
+
+func (s *Store) beginTx(ctx context.Context) (*sql.Tx, error) {
+	const retryDelay = 5 * time.Millisecond
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err == nil {
+			return tx, nil
+		}
+		var sqliteErr interface{ Code() int }
+		if !errors.As(err, &sqliteErr) || sqliteErr.Code()&0xff != 5 { // SQLITE_BUSY
+			return nil, err
+		}
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // Close closes the underlying SQLite database connection.
@@ -83,7 +103,7 @@ func (s *Store) Initialize(ctx context.Context, repoFormat repositoryformat.Form
 	if existingTables != 0 {
 		return fmt.Errorf("%w: existing database has tables but no migration history", ErrMigrationsUnsupported)
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin schema migration: %w", err)
 	}
@@ -337,7 +357,7 @@ func (s *Store) Create(ctx context.Context, entry metadata.Entry) (metadata.Entr
 			return metadata.Entry{}, fmt.Errorf("invalid object ID: %w", err)
 		}
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return metadata.Entry{}, fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -442,7 +462,7 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 			return metadata.Entry{}, fmt.Errorf("invalid object ID: %w", err)
 		}
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return metadata.Entry{}, fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -606,7 +626,7 @@ func (s *Store) Move(ctx context.Context, entry metadata.Entry) (metadata.Entry,
 		return metadata.Entry{}, fmt.Errorf("%w: entry cannot be moved to itself", metadata.ErrEntryConflict)
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return metadata.Entry{}, fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -650,7 +670,7 @@ func (s *Store) Move(ctx context.Context, entry metadata.Entry) (metadata.Entry,
 		if isNamespaceUniqueConstraintError(err) {
 			return metadata.Entry{}, fmt.Errorf("%w: entry %q already exists under parent %s", metadata.ErrEntryConflict, entry.Name, copiedParentID)
 		}
-		return metadata.Entry{}, fmt.Errorf("%w: failed to move entry: %w", metadata.ErrEntryConflict, err)
+		return metadata.Entry{}, fmt.Errorf("failed to move entry: %w", err)
 	}
 
 	rows, err := res.RowsAffected()
@@ -677,7 +697,7 @@ func (s *Store) Move(ctx context.Context, entry metadata.Entry) (metadata.Entry,
 
 // Delete deletes an entry from SQLite atomically inside a transaction, preventing non-empty directory deletion.
 func (s *Store) Delete(ctx context.Context, id metadata.EntryID) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
