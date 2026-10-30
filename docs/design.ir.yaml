@@ -24,7 +24,7 @@ nodes:
   - id: REQ-OBJECT-SSOT
     level: system_requirement
     kind: authority-invariant
-    statement: The Object Store MUST be the source of truth for committed immutable content.
+    statement: The Object Store replica set MUST own the immutable bytes identified by each content ID. The delivery mode defines which physical replica is authoritative or required for durability; physical Object placement MUST NOT determine logical Entry visibility, which remains Metadata Store authority.
     provenance:
       origin: imported
   - id: REQ-OBJECT-COMMIT
@@ -48,13 +48,13 @@ nodes:
   - id: REQ-PUT-GC-EXCLUSION
     level: system_requirement
     kind: concurrency-invariant
-    statement: In the initial single-host, single-repository deployment, process-wide Repository exclusion MUST prevent GC from deleting a Put Object between reachability evaluation and the corresponding Metadata Commit.
+    statement: A resource-scoped expiring RWLock MUST protect every content ID or temporary path used by Put, Get, upload, or download. These operations MUST hold an RLock for each resource they depend on. GC physical deletion MUST hold a WLock for the same resource ID. Lock acquisition, renewal, and release MUST be atomic through SQLite transactions; a WLock acquisition MUST exclude all RLocks and other WLocks for that resource. Lease renewal failure MUST stop the protected operation. Long-running input, upload, download, or response I/O MUST NOT hold Repository-wide exclusive coordination. An expired WLock MUST NOT authorize a stale GC worker to delete after a newer lock or access has been granted; the deletion fencing rule remains to be specified.
     provenance:
       origin: imported
   - id: REQ-READ-GC-EXCLUSION
     level: system_requirement
     kind: concurrency-invariant
-    statement: In the initial single-host, single-repository deployment, process-wide Repository exclusion MUST prevent GC from deleting an Object while an active Read is consuming it.
+    statement: Get, Cat, and download MUST hold renewable RLocks for each content ID and temporary path they still need until access ends. GC MUST acquire the corresponding WLock before physical deletion. Renewal failure MUST stop the operation and MUST NOT publish partial downloaded content. Long-running response or network I/O MUST NOT hold Repository-wide exclusive coordination.
     provenance:
       origin: imported
   - id: REQ-EXPLICIT-DIRECTORIES
@@ -72,13 +72,61 @@ nodes:
   - id: REQ-NO-RESUME
     level: system_requirement
     kind: failure-invariant
-    statement: Repository operations MUST NOT persist progress for later resumption; interruption is handled by backend cleanup or normal garbage collection according to the last completed commit boundary.
+    statement: Repository operations MUST NOT persist logical-operation progress for later resumption; interruption is handled according to the last committed boundary. GCS replication may persist content-ID-level delivery obligation and confirmation so unfinished content can be rediscovered and a fresh idempotent transfer attempted; this is not resumption of the original Put and does not create Pending Entries.
     provenance:
       origin: imported
   - id: REQ-PUT-STAGE-LEASE
     level: system_requirement
     kind: concurrency-invariant
-    statement: Put input staging MUST occur outside Repository-wide exclusive coordination and MUST NOT publish content or metadata unless its operation-scoped SQLite Lease is still valid when Commit begins under exclusive coordination. The SQLite Lease is the sole authority to Commit. Lease renewal MUST be conditional on the same unexpired operation ID and MUST NOT resurrect an expired or invalidated Lease. Expiration invalidation MUST be serialized with Commit. Each Stage MUST create its operation-ID-specific staging path exactly once and MUST write only through that already-open file; it MUST NOT reopen or recreate the path after removal. A missing staging path causes Put failure. Cleanup MAY remove staging while a Stage is writing because staging is disposable, but MUST NOT permit an expired or invalidated Lease to publish content or Metadata.
+    statement: Put input staging MUST occur outside Repository-wide exclusive coordination and MUST NOT publish content or metadata unless its operation-scoped SQLite Lease is still valid when Commit begins under exclusive coordination. This operation-scoped Lease fences Put Commit and staging cleanup only; it is not the resource RWLock and MUST NOT be used as GC protection. The SQLite Lease is the sole authority to Commit. Lease renewal MUST be conditional on the same unexpired operation ID and MUST NOT resurrect an expired or invalidated Lease. Expiration invalidation MUST be serialized with Commit. Each Stage MUST create its operation-ID-specific staging path exactly once and MUST write only through that already-open file; it MUST NOT reopen or recreate the path after removal. A missing staging path causes Put failure. Cleanup MAY remove staging while a Stage is writing because staging is disposable, but MUST NOT permit an expired or invalidated Lease to publish content or Metadata.
+    provenance:
+      origin: imported
+  - id: REQ-DELIVERY-MODES
+    level: system_requirement
+    kind: deployment-invariant
+    statement: The repository MUST support a Local delivery mode in which GCS is absent and Local is the authoritative durable Object Store, and a GCS delivery mode in which Put first commits complete content to Local and commits Metadata for immediate visibility before asynchronous GCS replication.
+    provenance:
+      origin: imported
+  - id: REQ-REPLICATION-OBLIGATION
+    level: system_requirement
+    kind: persistence-invariant
+    statement: GCS delivery obligations MUST be stored in a persistent transfer queue keyed by content ID and MUST be atomically enqueued in the same Metadata transaction that commits the Put Entry. The MetadataStore semantic API MUST expose this atomic operation without exposing SQL or SQLite transaction types; alternate adapters MUST provide equivalent transaction semantics. Queue state MUST support restart rediscovery, retry, and recording verified completion. It MUST NOT represent logical Entries as Pending or promise resumption of the original Put operation; retry from a complete committed Local Object MUST be idempotent.
+    provenance:
+      origin: imported
+  - id: REQ-GCS-PUBLICATION
+    level: system_requirement
+    kind: object-publication-invariant
+    statement: GCS upload MUST begin only after the content ID is known, MUST use a resumable upload directly to objects/{content_id}, MUST NOT create a temporary GCS Object or copy one, and MUST NOT replace an existing live Object. A transfer MUST NOT be recorded as confirmed until upload completion and the selected remote verification contract have succeeded.
+    provenance:
+      origin: imported
+  - id: REQ-LOCAL-CAPACITY-GC
+    level: system_requirement
+    kind: garbage-collection-invariant
+    statement: Capacity GC and invalid-orphan GC MUST be distinct operations. Capacity GC MUST NOT remove a Local authoritative Object in Local mode, an Object without confirmed GCS delivery in GCS mode, or any RLock-protected resource. It MAY evict a GCS-delivered Local cache Object only after the required GCS confirmation. If capacity cannot be released without violating these conditions, the requesting operation MUST fail with a capacity error. Repository GC MUST NOT delete the last known-good physical Object copy.
+    provenance:
+      origin: imported
+  - id: REQ-READ-THROUGH
+    level: system_requirement
+    kind: read-path-invariant
+    statement: In GCS delivery mode, Get and Cat MUST prefer a complete Local Object. If it is absent, the Repository MUST acquire RLocks for the content ID and shared temporary ID, download to shared temporary storage, verify the complete bytes against the content ID, and publish the Local Object without replacement before serving it. A partial download MUST never become a committed Local Object. A direct GCS-to-Get destination streaming path is not required; progress-following streaming remains an optional future design.
+    provenance:
+      origin: imported
+  - id: REQ-LOCAL-GCS-IMMUTABILITY
+    level: system_requirement
+    kind: immutability-invariant
+    statement: Local and GCS publication for a content ID MUST be no-replace. A pre-existing Object MUST be verified against the requested content ID before it can count as an idempotent success. GCS deletion MUST be conditional on the exact observed Object generation so a concurrent replacement cannot be deleted accidentally.
+    provenance:
+      origin: imported
+  - id: REQ-METADATA-PORTABILITY
+    level: system_requirement
+    kind: backend-contract
+    statement: MetadataStore implementations MUST provide the same observable operation and atomicity semantics for Entry creation, update, move, and deletion, including revision comparison and namespace/hierarchy invariants. Repository contracts MUST NOT expose SQLite transaction, SQL, or constraint details; each adapter MUST enforce state-dependent validation atomically with its mutation using backend-native mechanisms.
+    provenance:
+      origin: imported
+  - id: REQ-METADATA-BACKUP-RESPONSIBILITY
+    level: system_requirement
+    kind: operations-boundary
+    statement: Metadata backup and restoration are operator responsibilities; backup procedures MUST preserve the association between committed Entry Object IDs, Repository Format, and replication state required by the selected delivery mode.
     provenance:
       origin: imported
   - id: REQ-ENTRY-ID
@@ -219,7 +267,7 @@ nodes:
   - id: DES-OBJECT-MODEL
     level: system_design
     kind: object-model
-    statement: Object Store supports content verification, committed-object enumeration, and deletion of unreachable committed Objects without assigning logical paths.
+    statement: Object Stores own immutable content bytes identified by algorithm-namespaced content IDs, independent of logical names or paths. Local and GCS are physical replicas whose required durability role depends on delivery mode; committed immutable publication, verification, enumeration, and deletion never assign logical paths.
     provenance:
       origin: imported
   - id: DES-DOCTOR
@@ -276,7 +324,7 @@ nodes:
   - id: DES-PUT-STAGE-COMMIT
     level: system_design
     kind: put-lifecycle
-    statement: Put is divided into Stage and Commit. Stage creates one operation-ID-specific backend staging file exactly once and acquires an operation-scoped SQLite Lease before copying and hashing input outside Repository-wide exclusive coordination; different Stages may run concurrently. Stage writes only through the already-open file descriptor and never reopens or recreates the path, so cleanup or manual deletion may make the Stage fail but cannot produce a publishable replacement. Commit acquires Repository-wide exclusive coordination, validates the unexpired Lease immediately before resolving or creating destination parents, then publishes the immutable Object and commits Metadata in that order. Object publication is idempotent by content ID; Metadata mutation is database-atomic; Put does not promise end-to-end exactly-once behavior. Lease rows contain only operation_id and expires_at and never persist operation progress or results. SQLite Lease validity is the sole Commit authority; no OS lock protects staging or grants Commit permission.
+    statement: In the current Local-only implementation, Put creates one operation-ID-specific staging file and uses an operation-scoped SQLite Lease while copying and hashing outside Repository-wide exclusive coordination; Stage never reopens or recreates the path. Its coordinated Commit validates the unexpired Lease, publishes Local content, then commits Metadata. In GCS mode the target preserves Local publication first, then atomically commits the Entry and content-ID transfer-queue item through MetadataStore before asynchronous transfer. The operation-scoped Put Lease remains a Commit/staging fence; resource RWLocks alone protect resources from GC. GCS delivery status is independent of logical Entry identity and does not make Put resumable or exactly-once.
     attributes:
       lease_ttl: 30-seconds
       renewal_interval: 10-seconds
@@ -304,6 +352,92 @@ nodes:
         - lease-as-Object-availability-or-GC-protection
     provenance:
       origin: imported
+  - id: DES-DELIVERY-MODES
+    level: system_design
+    kind: storage-delivery-model
+    statement: Local delivery mode has no GCS dependency and treats Local as the durable authoritative Object copy. GCS delivery mode first persists a complete immutable Local Object and commits Metadata, making the Entry immediately visible; asynchronous transfer then establishes a GCS replica. Local data remains the only known-good copy until GCS delivery is confirmed. After confirmation, Local may act as an evictable cache while Metadata remains the authority for logical Entries and paths. A content ID can be referenced by multiple Entries and is transferred once per content identity, independent of logical names.
+    attributes:
+      modes: [local, gcs]
+      local_mode: [GCS-absent, Local-authoritative]
+      gcs_mode_put_order: [Local-Stage-and-hash, Local-no-replace-publication, Metadata-Commit, asynchronous-GCS-transfer]
+      gcs_mode_visibility: Metadata-Commit
+      pre_replication_failure: Local-physical-loss-may-lose-unreplicated-content
+      local_cache_eviction: only-after-confirmed-GCS-delivery
+      gcs_object_name: objects/{content_id}
+      gcs_upload: resumable-direct-to-final-name;no-temporary-object-or-copy
+      transfer_key: content-ID
+      shared_temporary_storage: [Put-spool, GCS-download-staging]
+      get_export_staging: destination-directory-temporary-file-per-REQ-GET-ATOMIC-DESTINATION
+      gcs_direct_get_stream: not-required
+      optional_streaming: progress-following-stream-design-may-be-considered-later
+    provenance:
+      origin: imported
+  - id: DES-REPLICATION-STATE
+    level: system_design
+    kind: replica-state-model
+    statement: GCS transfer obligation and confirmed delivery are persistent transfer-queue facts keyed by content ID in the MetadataStore authority. Put commits the Entry and ensures the queue item in one backend atomic transaction; the semantic MetadataStore API provides that operation without exposing SQL or SQLite transactions. SQLite stores both in the existing Metadata database; an alternate adapter must provide the same atomic observable result. A transfer is confirmed only after final-name upload completion and selected remote verification succeeds. Retries rediscover unconfirmed IDs after restart; repeated upload after ambiguous completion is no-replace and idempotent, and an existing Object is verified before acceptance. Queue state is not an Entry-level Pending state, Operation Record, or resumption of the original Put. Queue fields and retry policy remain open.
+    attributes:
+      confirmed_delivery_evidence_candidate: [GCS-generation, verification-result]
+      absent_or_unconfirmed_state: must-be-re-discoverable-after-restart
+      duplicate_transfer: allowed-if-no-replace-and-verified
+      no_temporary_GCS_object: true
+    provenance:
+      origin: imported
+  - id: DES-RESOURCE-LEASES
+    level: system_design
+    kind: gc-protection-protocol
+    statement: Resource locks are keyed by the same content ID or temporary ID used by the protected operation. Put, Get, upload, and download hold expiring RLocks; GC holds an expiring WLock for physical deletion. RLock and WLock acquisition, renewal, and release are atomically managed in SQLite transactions, and a WLock is exclusive against all locks for that resource. Lock rows are the sole GC protection mechanism; no parallel Lease or reservation system duplicates it. Long input, network, and response I/O occurs without Repository-wide exclusive coordination. Renewal failure stops the operation. A stale GC worker whose WLock expires must be fenced from deleting after another lock is granted; the exact deletion fence remains open.
+    attributes:
+      lock_scope: resource-ID-content-or-temporary-ID
+      lock_modes: [RLock-for-Put-Get-Cat-upload-download, WLock-for-GC-physical-delete]
+      lock_fields: [operation-ID, mode, expiry]
+      lock_storage: dedicated-resource-lock-area-in-SQLite-coordination-database;managed-by-SQLite-transactions
+      operations: [Put, GCS-upload, GCS-download, Get, Cat, GC]
+      heartbeat: renew-expiring-lock-while-resource-is-in-use
+      renewal_failure: stop-operation;do-not-publish-partial-download
+      coordination_long_io: prohibited
+      duplicate_gc_protection_mechanism: prohibited
+      stale_WLock: must-not-delete-after-expiry-and-new-grant
+    provenance:
+      origin: imported
+  - id: DES-GC-CLASSES
+    level: system_design
+    kind: garbage-collection-model
+    statement: Capacity GC and invalid-orphan GC have separate eligibility rules and outcomes. Capacity GC releases Local space only from eligible replicas and never deletes Local-mode authority, unconfirmed GCS-mode content, or RLock-protected resources; inability to reclaim safe capacity fails the requesting operation. Invalid-orphan GC reconciles malformed, corrupt, or unreferenced Local artifacts and unreferenced GCS Objects while respecting Metadata references, RLocks, and the last known-good physical copy. Physical deletion requires the resource WLock and targets the observed GCS Object generation. A WLock excludes concurrent RLocks and WLocks while valid; stale deletion fencing after expiry remains open.
+    attributes:
+      capacity_gc: [GCS-mode-only-eviction-of-confirmed-Local-cache-replicas, resource-RLock-aware]
+      invalid_orphan_gc: [Local-invalid, Local-unreferenced, GCS-unreferenced, resource-WLock-before-physical-delete]
+      Local_mode: no-capacity-eviction-of-authoritative-Objects
+      last_known_good_copy: protected-from-Repository-GC
+      gcs_delete: generation-conditional
+      shared_protection_authority: resource-RWLock-only
+    provenance:
+      origin: imported
+  - id: DES-GCS-READ-THROUGH
+    level: system_design
+    kind: read-through-protocol
+    statement: GCS delivery reads prefer Local. On a Local miss, the Repository obtains RLocks for the content ID and shared temporary ID, downloads the complete GCS Object to temporary storage, validates bytes against the content ID, and publishes Local with no-replace semantics before Get or Cat consumes it. A failed, interrupted, or partial download never becomes a visible Local Object. Get continues to use its existing atomic destination-file publication; Cat may expose a response prefix if its downstream writer fails after bytes have been written. Direct GCS-to-Get streaming is unnecessary in this design; whether any later progress-following stream should be exposed is deferred.
+    attributes:
+      local_first: true
+      download_staging: repository-shared-temp
+      publish: complete-verified-no-replace
+      get_export: existing-atomic-destination-contract
+      cat_response_rollback: unavailable-after-writer-accepted-bytes
+    provenance:
+      origin: imported
+  - id: DES-METADATA-BACKEND-PORTABILITY
+    level: system_design
+    kind: metadata-adapter-contract
+    statement: MetadataStore remains the semantic boundary for logical Entry state and the content-ID transfer queue while SQLite remains the current implementation. SQLite transactions, SQL, UNIQUE errors, and schema details do not leak through the common API. Every adapter must provide atomic conditional Create, Update, Move, and Delete semantics; expected-revision checks, sibling uniqueness, parent existence/kind, and ancestry-cycle validation are evaluated atomically with the mutation. The semantic API also atomically commits a Put Entry mutation with transfer-queue enqueue and records verified transfer completion; SQLite uses one transaction in the existing Metadata database and alternate adapters provide equivalent atomicity. Repository coordination and consistent reference enumeration required by GC must also be defined for any alternate backend. Firestore implementation details and distributed coordination are not selected here.
+    attributes:
+      current_adapter: SQLite
+      candidate_adapter: Firestore
+      exposed_api: MetadataStore
+      forbidden_contract_leaks: [SQL, SQLite-transaction-types, backend-constraint-error-codes]
+      metadata_backup_owner: operator
+      backup_scope: [Entries, Repository-Format, content-ID-transfer-queue]
+    provenance:
+      origin: imported
   - id: DES-READ-SEMANTICS
     level: system_design
     kind: read-protocol
@@ -313,7 +447,7 @@ nodes:
   - id: DES-FAILURE-BOUNDARIES
     level: system_design
     kind: failure-model
-    statement: Repository operation progress is not persisted; before Object Commit, incomplete temporary data is private backend cleanup; after Object Commit and before Metadata Commit, an unreferenced committed Object is GC-eligible; after Metadata Commit, the Entry is published.
+    statement: Logical Repository operation progress is not persisted. Before Local Object Commit, incomplete temporary data is cleanup-only; after Local Object Commit and before Metadata Commit, the unreferenced Object remains protected by the Put-held resource RLock and becomes GC-eligible only after that lock is released or expires. The operation-scoped Put Lease fences Commit/staging cleanup but is not GC protection. After Metadata Commit, the Entry is published immediately; in GCS mode a content-ID queue item is committed atomically with Entry metadata and asynchronous replication follows.
     provenance:
       origin: imported
   - id: DES-REVISION-SEMANTICS
@@ -395,7 +529,7 @@ nodes:
   - id: DES-PHASE3-EXCLUSION
     level: system_design
     kind: roadmap-phase
-    statement: Phase 3 implements Repository-owned cross-process exclusion through a dedicated SQLite coordination database per repository. BEGIN IMMEDIATE serializes protected Commit and Repository operations across processes and Repository instances; the Metadata database remains separate and is not blocked by coordination transactions. Put Stage runs outside this exclusive lock under an operation-scoped Lease; Put Commit, Get, the full Cat read, GC, and Doctor run under exclusive coordination. Put Lease heartbeats use a separate SQLite database so long coordinated reads do not block renewal. The design boundary permits a future shared/exclusive mode, but the initial implementation is exclusive-only.
+    statement: The current Phase 3 implementation provides Repository-owned cross-process exclusion through a dedicated SQLite coordination database per repository. BEGIN IMMEDIATE serializes protected Commit and Repository operations across processes and Repository instances; the Metadata database remains separate and is not blocked by coordination transactions. Put Stage runs outside this exclusive lock under an operation-scoped Lease; Put Commit, Get, the full Cat read, GC, and Doctor run under exclusive coordination. Put Lease heartbeats use a separate SQLite database so long coordinated reads do not block renewal. This is the shipped single-host baseline; the Phase 6 target replaces full-operation read exclusion with resource Leases while preserving GC safety. The design boundary permits a future shared/exclusive mode, but the current implementation is exclusive-only.
     provenance:
       origin: imported
     attributes:
@@ -420,6 +554,9 @@ nodes:
       blocking_tradeoffs:
         - long-Get-or-Cat-blocks-Put-Get-GC-and-Doctor
         - all-protected-operations-are-serialized
+      superseded_by_target:
+        phase: 6
+        target: resource-RWLocks-protect-objects-and-temporary-paths-without-holding-coordination-during-long-I-O
       exit_criteria:
         - concurrent Put Stages do not hold Repository-wide exclusive coordination
         - stale Stage cannot renew or publish after Lease expiry or invalidation
@@ -438,7 +575,7 @@ nodes:
   - id: DES-PHASE4-CLEANUP-EXPORT
     level: system_design
     kind: roadmap-phase
-    statement: Phase 4 verifies failure outcomes at Object and Metadata commit boundaries, preserves Repository-owned exclusion, implements atomic Get destination replacement, and keeps Doctor non-destructive with valid unreferenced Objects assigned to GC. It introduces no generic Repair, tombstone retention, metadata compaction, persisted operation journal, or operation resumption. Incomplete staging cleanup remains backend-owned; crash-left staging is not removed unless active writers can be protected.
+    statement: Phase 4 verifies failure outcomes at Object and Metadata commit boundaries, preserves Repository-owned exclusion, implements atomic Get destination replacement, and keeps Doctor non-destructive with valid unreferenced Objects assigned to GC. It introduces no generic Repair, tombstone retention, metadata compaction, persisted operation journal, or operation resumption. Lease-invalidated staging may be removed while a Stage still holds an open file; the Put may fail, but the removed path cannot be recreated or published by that Stage.
     provenance:
       origin: imported
     attributes:
@@ -463,16 +600,26 @@ nodes:
   - id: DES-PHASE6-GCS
     level: system_design
     kind: roadmap-phase
-    statement: Phase 6 implements GCS as an Object Store backend conforming to shared atomic publication, immutable content, verification, post-Commit visibility, enumeration, deletion, and interruption cleanup contracts.
+    statement: Phase 6 adds repository-selected Local and GCS delivery modes while keeping MetadataStore's logical namespace contract backend-independent. GCS mode commits Local content and atomically commits Metadata plus a content-ID transfer-queue item before asynchronous replication; the queue supports restart rediscovery, retry, and verified completion but does not resume the original Put. Reads prefer Local and hydrate completely verified content on misses. Resource-scoped expiring RWLocks use RLock for Put/Get/upload/download and WLock for GC physical deletion, without long Repository-wide exclusion or duplicate protection mechanisms. Capacity eviction and invalid-orphan reconciliation remain distinct. Phase 6 remains blocked on the specific fencing, queue-transition, remote-verification, capacity, mode-migration, diagnostics, and alternate-backend details listed as Open Items.
     provenance:
       origin: imported
     attributes:
       roadmap_phase: 6
       exit_criteria:
-        - local and GCS pass the shared Object Store conformance suite
-        - interruption never exposes partial committed Objects
-        - Repository Put, replacement, Read, and GC work without GCS-specific use-case branches
-        - GCS consistency facts are not generalized to all backends
+        - Local mode runs without constructing, configuring, or contacting GCS
+        - GCS Put commits Local, Entry Metadata, and a content-ID transfer-queue item in one MetadataStore atomic operation before asynchronous transfer; SQLite uses the existing Metadata database and a single SQLite transaction
+        - MetadataStore exposes backend-neutral atomic Put-and-enqueue and transfer-completion semantics; a Firestore adapter must provide equivalent transaction semantics without SQL leakage
+        - unconfirmed queue items are rediscovered after restart, retried idempotently, and marked complete only after remote verification
+        - direct resumable upload targets objects/{content_id}, uses no temporary GCS Object or copy, and never overwrites an existing live Object
+        - transfer completion is persisted only after the selected remote verification contract passes
+        - GCS-mode Get/Cat prefer Local; a miss downloads to shared temporary storage and publishes only complete content verified against its ID
+        - Local capacity GC retains unconfirmed content and RLock-protected resources, and evicts only eligible confirmed replicas under a resource WLock
+        - invalid-orphan GC protects Metadata references and resource RLocks/WLocks and can eventually collect GCS orphans using generation-conditional deletion
+        - a failed capacity reservation returns an error without deleting the last known-good physical Object
+        - MetadataStore conformance semantics include atomic revisions, namespace uniqueness, parent validation, and cycle rejection without SQL/API leakage
+        - resource RLocks protect Put/Get/upload/download and resource WLocks protect GC physical deletion; lock state is managed atomically in SQLite and no second GC protection mechanism exists
+        - Repository coordination is not held during long input, GCS network, download, or response I/O
+        - existing Local-only CAS, Get atomic export, Doctor, GC, CLI, and SQLite migration compatibility tests remain covered
   - id: DES-PHASE0-SCAFFOLDING
     level: system_design
     kind: roadmap-phase
@@ -527,6 +674,73 @@ nodes:
     provenance:
       origin: imported
 
+  - id: IMP-CURRENT-LOCAL-ONLY
+    level: implementation
+    kind: observed-implementation
+    statement: At repository revision b4dba45ae202d995c973af01154c08108e98ce1c, CLI composition constructs SQLite MetadataStore and Local ObjectStore only; repository configuration selects a repository directory but has no Local/GCS delivery-mode or bucket selection. GCS methods remain stubs.
+    provenance:
+      origin: observed
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/cli/root.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: implementation-source
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/config/config.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: implementation-source
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/objectstore/gcs/store.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: implementation-source
+  - id: IMP-CURRENT-LOCAL-GC
+    level: implementation
+    kind: observed-implementation
+    statement: At repository revision b4dba45ae202d995c973af01154c08108e98ce1c, GC compares Metadata ReferencedObjectIDs with Local ObjectStore.List and deletes valid unreferenced IDs under Repository-wide exclusion. It has no capacity target, Local-cache eviction state, GCS enumeration/deletion, or API to delete malformed raw object names; Doctor reports malformed Local object names and checks referenced Local content while ignoring valid unreferenced content.
+    provenance:
+      origin: observed
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/repository/repository.go
+        revision: b4dba45ae202d995c973af01154c08108e98e1c
+        role: implementation-source
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/objectstore/store.go
+        revision: b4dba45ae202d995c973af01154c08108e98e1c
+        role: implementation-interface
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/objectstore/local/store.go
+        revision: b4dba45ae202d995c973af01154c08108e98e1c
+        role: implementation-source
+  - id: IMP-CURRENT-LEASE-READ-GAPS
+    level: implementation
+    kind: observed-implementation
+    statement: At repository revision b4dba45ae202d995c973af01154c08108e98ce1c, put_leases.db persists only operation_id and expires_at. Put creates Local staging before acquiring its Lease; AcquireLease and RenewLease use the Lease database separately from Repository coordination, while Commit validates the Lease under Exclusive coordination. GC lease invalidation is coordinated, but active-Lease enumeration and staging removal are separate steps. Get and the full Cat stream hold Repository-wide Exclusive coordination through local object I/O; there are no resource-scoped content-ID or temporary-ID RWLocks and no transfer queue.
+    provenance:
+      origin: observed
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/coordinator/sqlite/coordinator.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: implementation-source
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/repository/put.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: implementation-source
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/repository/get.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: implementation-source
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/repository/repository.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: implementation-source
+  - id: IMP-CURRENT-METADATA-SQLITE
+    level: implementation
+    kind: observed-implementation
+    statement: At repository revision b4dba45ae202d995c973af01154c08108e98ce1c, MetadataStore is implemented by SQLite schema migration version 1 with entries, repository_format, and schema_migrations tables. SQLite performs state-dependent Create, Update, Move, and Delete checks in backend transactions; the public MetadataStore interface exposes semantic operations rather than SQL transaction types. There is no Firestore adapter or transfer-state schema.
+    provenance:
+      origin: observed
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/metadata/store.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: implementation-interface
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/metadata/sqlite/schema.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: implementation-source
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/metadata/sqlite/store.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: implementation-source
   - id: IMP-CURRENT-SHA1
     level: implementation
     kind: observed-implementation
@@ -643,6 +857,46 @@ relations:
     from: DES-PUT-STAGE-COMMIT
     type: depends_on
     to: DES-OBJECT-BACKEND-NEUTRALITY
+  - id: REL-DELIVERY-MODES
+    from: DES-DELIVERY-MODES
+    type: depends_on
+    to: REQ-DELIVERY-MODES
+  - id: REL-REPLICATION-STATE
+    from: DES-REPLICATION-STATE
+    type: depends_on
+    to: REQ-REPLICATION-OBLIGATION
+  - id: REL-REPLICATION-PUBLISH
+    from: DES-REPLICATION-STATE
+    type: depends_on
+    to: REQ-GCS-PUBLICATION
+  - id: REL-RESOURCE-LEASE-PUT
+    from: DES-RESOURCE-LEASES
+    type: depends_on
+    to: REQ-PUT-GC-EXCLUSION
+  - id: REL-RESOURCE-LEASE-READ
+    from: DES-RESOURCE-LEASES
+    type: depends_on
+    to: REQ-READ-GC-EXCLUSION
+  - id: REL-GC-CAPACITY
+    from: DES-GC-CLASSES
+    type: depends_on
+    to: REQ-LOCAL-CAPACITY-GC
+  - id: REL-GC-IMMUTABILITY
+    from: DES-GC-CLASSES
+    type: depends_on
+    to: REQ-LOCAL-GCS-IMMUTABILITY
+  - id: REL-GCS-READ-THROUGH
+    from: DES-GCS-READ-THROUGH
+    type: depends_on
+    to: REQ-READ-THROUGH
+  - id: REL-METADATA-PORTABILITY
+    from: DES-METADATA-BACKEND-PORTABILITY
+    type: depends_on
+    to: REQ-METADATA-PORTABILITY
+  - id: REL-METADATA-BACKUP
+    from: DES-METADATA-BACKEND-PORTABILITY
+    type: depends_on
+    to: REQ-METADATA-BACKUP-RESPONSIBILITY
   - id: REL-DES-NO-PENDING
     from: DES-FAILURE-BOUNDARIES
     type: depends_on
@@ -723,6 +977,30 @@ relations:
     from: DES-PHASE6-GCS
     type: depends_on
     to: DES-PHASE4-CLEANUP-EXPORT
+  - id: REL-PHASE6-DELIVERY
+    from: DES-PHASE6-GCS
+    type: depends_on
+    to: DES-DELIVERY-MODES
+  - id: REL-PHASE6-REPLICATION
+    from: DES-PHASE6-GCS
+    type: depends_on
+    to: DES-REPLICATION-STATE
+  - id: REL-PHASE6-LEASES
+    from: DES-PHASE6-GCS
+    type: depends_on
+    to: DES-RESOURCE-LEASES
+  - id: REL-PHASE6-GC
+    from: DES-PHASE6-GCS
+    type: depends_on
+    to: DES-GC-CLASSES
+  - id: REL-PHASE6-READ-THROUGH
+    from: DES-PHASE6-GCS
+    type: depends_on
+    to: DES-GCS-READ-THROUGH
+  - id: REL-PHASE6-METADATA
+    from: DES-PHASE6-GCS
+    type: depends_on
+    to: DES-METADATA-BACKEND-PORTABILITY
   - id: REL-PHASE7-AUTHORITY
     from: DES-PHASE7-SYNC
     type: depends_on
@@ -767,6 +1045,65 @@ observations:
       - uri: https://github.com/kamichidu/go-nando/blob/d3a1db2faf961a91908fae5e71620449bc947385/internal/repository/get.go
         revision: d3a1db2faf961a91908fae5e71620449bc947385
         role: inspected-source
+  - id: OBS-CURRENT-DELIVERY-MODE-GAP
+    subject: IMP-CURRENT-LOCAL-ONLY
+    activity: Inspected composition root, user configuration, and GCS adapter at the current revision; compared the fixed Local composition with the two accepted delivery modes.
+    claims: [REQ-DELIVERY-MODES, DES-DELIVERY-MODES, DES-PHASE6-GCS]
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/cli/root.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: inspected-source
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/config/config.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: inspected-source
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/objectstore/gcs/store.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: inspected-source
+  - id: OBS-CURRENT-GC-CAPACITY-GAP
+    subject: IMP-CURRENT-LOCAL-GC
+    activity: Inspected Repository GC, Doctor, and both valid-ID and raw-name Object Store enumeration APIs at the current revision; compared them with capacity and reconciliation GC requirements.
+    claims: [REQ-LOCAL-CAPACITY-GC, DES-GC-CLASSES, DES-DOCTOR]
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/repository/repository.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: inspected-source
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/objectstore/store.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: inspected-interface
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/objectstore/local/store.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: inspected-source
+  - id: OBS-CURRENT-LEASE-GC-GAP
+    subject: IMP-CURRENT-LEASE-READ-GAPS
+    activity: Inspected Lease persistence, Put ordering, GC staging cleanup and protected operations to identify linearization and long-I/O boundaries.
+    claims: [REQ-PUT-GC-EXCLUSION, REQ-READ-GC-EXCLUSION, DES-RESOURCE-LEASES]
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/coordinator/sqlite/coordinator.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: inspected-source
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/repository/put.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: inspected-source
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/repository/get.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: inspected-source
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/repository/repository.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: inspected-source
+  - id: OBS-CURRENT-METADATA-PORTABILITY
+    subject: IMP-CURRENT-METADATA-SQLITE
+    activity: Inspected MetadataStore API, SQLite schema migration, transactional mutations, repository composition, and Metadata tests at the current revision.
+    claims: [REQ-METADATA-PORTABILITY, REQ-METADATA-BACKUP-RESPONSIBILITY, DES-METADATA-BACKEND-PORTABILITY]
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/metadata/store.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: inspected-interface
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/metadata/sqlite/schema.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: inspected-source
+      - uri: https://github.com/kamichidu/go-nando/blob/b4dba45ae202d995c973af01154c08108e98ce1c/internal/metadata/sqlite/store.go
+        revision: b4dba45ae202d995c973af01154c08108e98ce1c
+        role: inspected-source
 
 open_items:
   - id: OPEN-SHA1-FORMAT-TRANSITION
@@ -785,5 +1122,53 @@ open_items:
     statement: Decide whether removed Entries are represented as tombstones, physically removed, or compacted, and define any retention policy without changing committed namespace visibility semantics.
     status: open
     related_refs: [DES-EXPLICIT-DIRECTORY-MODEL]
+  - id: OPEN-REPLICATION-QUEUE-SEMANTICS
+    statement: The queue authority and atomic enqueue boundary are decided; it belongs to MetadataStore semantics, SQLite stores it in the existing Metadata database, and Put Entry mutation plus queue insertion share one SQLite transaction. Alternate backends must expose equivalent atomic semantics. Specify queue row fields and state transitions, retry/backoff, and duplicate enqueue/completion semantics while preserving restart rediscovery and no-Pending/no-resume semantics; the semantic API must expose atomic Put-and-enqueue and completion operations without backend transaction types.
+    status: open
+    related_refs: [REQ-REPLICATION-OBLIGATION, DES-REPLICATION-STATE, DES-METADATA-BACKEND-PORTABILITY]
+  - id: OPEN-LEASE-RESOURCE-BINDING
+    statement: Decide the Put Stage order and atomic Lease resource transition. The content ID is not known until the shared temporary spool is hashed, while GC must protect both the in-progress temporary path and the completed Local Object; define how the Lease binds a temporary path to its resulting content ID without an unprotected gap, including the create-before-Lease race seen in the current implementation.
+    status: open
+    related_refs: [REQ-PUT-STAGE-LEASE, DES-PUT-STAGE-COMMIT, DES-RESOURCE-LEASES]
+  - id: OPEN-LEASE-EXPIRY-AND-HEARTBEAT
+    statement: Define Lease TTL, heartbeat cadence, clock source, renewal error/cancellation behavior, stale worker fencing, and the action when an upload API may finish after renewal failure. Specify how an expired Lease is made terminal and how a late worker is prevented from publishing Local data or recording stale replication state.
+    status: open
+    related_refs: [DES-RESOURCE-LEASES, DES-REPLICATION-STATE]
+  - id: OPEN-LEASE-AND-REMOTE-GC-DELETE
+    statement: The resource-scoped RLock/WLock policy resolves the acquisition-versus-GC eligibility race; GC must hold the resource WLock to physically delete, and normal operations hold RLocks. Specify the fencing mechanism that prevents an expired WLock holder from performing a delayed Local or GCS deletion after a newer lock/access is granted. Define the enforceable token/check boundary around filesystem unlink and generation-conditional GCS deletion without holding Repository-wide coordination over long network I/O.
+    status: open
+    related_refs: [REQ-PUT-GC-EXCLUSION, REQ-READ-GC-EXCLUSION, DES-RESOURCE-LEASES, DES-GC-CLASSES]
+  - id: OPEN-GCS-TRANSFER-VERIFICATION
+    statement: Define what proves a completed or pre-existing GCS Object contains bytes for its SHA-256 content ID. Choose whether server-validated CRC32C plus the exact spooled upload stream is sufficient, whether a read-back SHA-256 verification is required, or another evidence contract; define treatment of ambiguous completion and verification failure before recording delivery.
+    status: open
+    related_refs: [REQ-GCS-PUBLICATION, REQ-LOCAL-GCS-IMMUTABILITY, DES-REPLICATION-STATE]
+  - id: OPEN-GCS-GENERATION-AND-BUCKET-POLICY
+    statement: Define stored GCS generation identity and behavior under bucket versioning, soft delete, retention, external overwrite/delete, bucket/prefix changes, and object recreation. The target requires no-replace publication and generation-conditional deletion, but the rule for noncurrent generations and external actors is not selected.
+    status: open
+    related_refs: [REQ-GCS-PUBLICATION, REQ-LOCAL-GCS-IMMUTABILITY, DES-GC-CLASSES]
+  - id: OPEN-RESUMABLE-UPLOAD-RECOVERY
+    statement: Decide whether a resumable GCS upload session URL/offset survives process restart or is discarded and a new resumable session starts from the complete Local Object. Preserve content-ID-level rediscovery and idempotence either way, and do not silently reinterpret this as resuming the original Put operation.
+    status: open
+    related_refs: [REQ-REPLICATION-OBLIGATION, REQ-NO-RESUME, REQ-GCS-PUBLICATION]
+  - id: OPEN-CAPACITY-ADMISSION-AND-LIMITS
+    statement: Define capacity scope and admission behavior for the shared Put-spool/download-staging volume, Local object cache, and concurrent operations. Specify reservation accounting, GC trigger, required free-space headroom, concurrent upload/download limits, prioritization, and deterministic capacity errors without allowing GC to remove unconfirmed or RLock-protected content.
+    status: open
+    related_refs: [REQ-LOCAL-CAPACITY-GC, DES-GC-CLASSES, DES-DELIVERY-MODES]
+  - id: OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS
+    statement: Define Doctor health in GCS mode when Local cache is missing/corrupt, replication remains pending, or the GCS Object is missing/corrupt; distinguish valid unreferenced content from invalid orphans without making Doctor destructive. Define Get/Cat behavior if Lease renewal fails or a response writer fails after receiving a prefix; revision-change policy remains independent from GC safety.
+    status: open
+    related_refs: [REQ-READ-THROUGH, REQ-DOCTOR-NONDESTRUCTIVE, DES-DOCTOR, DES-GCS-READ-THROUGH, OPEN-READ-REVISION-CHANGE]
+  - id: OPEN-DELIVERY-CONFIG-AND-MIGRATION
+    statement: Decide where repository-owned delivery mode, bucket identity, and backend selection are persisted and whether they belong in Repository Format compatibility metadata or a separate repository configuration. Define initialization, Local-to-GCS prefill and verification, bucket changes, GCS-to-Local recovery, rollback, and behavior for existing repositories without automatic destructive migration.
+    status: open
+    related_refs: [DES-CONSTRUCTION, DES-DELIVERY-MODES, DES-PHASE1-FORMAT]
+  - id: OPEN-FIRESTORE-COORDINATION-AND-SNAPSHOT
+    statement: Define the deployment boundary for a Firestore MetadataStore behind MetadataStore semantics. The current SQLite Coordinator is process-wide only for processes sharing one local repository path; decide whether Firestore is limited to that single-host deployment or requires a shared distributed Coordinator and a consistent ReferencedObjectIDs snapshot/conditional GC contract across hosts and writers.
+    status: open
+    related_refs: [REQ-METADATA-PORTABILITY, REQ-PUT-GC-EXCLUSION, REQ-READ-GC-EXCLUSION, DES-METADATA-BACKEND-PORTABILITY, DES-REPOSITORY-BOUNDARIES]
+  - id: OPEN-METADATA-BACKUP-PROCEDURE
+    statement: Define operator backup/restore procedure and consistency boundaries for SQLite Metadata, Repository Format, content-ID transfer queue, Local objects, and repository-owned mode configuration; decide which components must be quiesced or backed up as one recoverable set.
+    status: open
+    related_refs: [REQ-METADATA-BACKUP-RESPONSIBILITY, DES-METADATA-BACKEND-PORTABILITY, DES-REPLICATION-STATE]
 representation_gaps:
   []

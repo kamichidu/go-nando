@@ -61,3 +61,8 @@ Implementation observations have no `realizes` or `satisfies` relations to targe
 At the time of migration the IR retained four open items: `OPEN-SHA1-FORMAT-TRANSITION`, `OPEN-READ-REVISION-CHANGE`, `OPEN-PATH-CACHE-UPDATE`, and `OPEN-DELETE-RETENTION`. Later implementation decisions are recorded in the canonical IR; this migration record remains a snapshot of the original source coverage.
 
 No representation gaps remain. AsciiDoc headings/navigation were presentation-only and are retired. Roadmap sequence and criteria are present in node attributes and phase dependency relations; validator enforcement of those attributes would be a separate tooling enhancement, not missing semantic representation.
+
+
+== Later storage design audit
+
+The content-ID-based Local/GCS delivery, resource RWLock, persistent transfer queue, capacity/orphan GC, metadata portability, current-source mapping, migration order, and test matrix are recorded in [storage-delivery-audit.md](storage-delivery-audit.md). The Design IR remains the sole semantic authority; the audit file is review evidence and a migration/test plan.
