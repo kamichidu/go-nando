@@ -127,6 +127,249 @@ func TestRepositoryCoordinatorProtectsPutAndCatFromGC(t *testing.T) {
 	}
 }
 
+func TestExpiredPutStageCannotRenewOrPublishAfterCleanup(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(tempDir, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := coordinator.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	}()
+	objects, err := local.NewStore(filepath.Join(tempDir, "objects"), filepath.Join(tempDir, "temp"), content.NewHasher())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const operationID = "b6b70b74-7a9f-4c92-8862-d73437644e7f"
+	if err := coordinator.AcquireLease(ctx, operationID, 40*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	session, err := objects.BeginStage(ctx, operationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active, err := coordinator.RenewLease(ctx, operationID, 40*time.Millisecond); err != nil || !active {
+		t.Fatalf("renew active Stage Lease: active=%v err=%v", active, err)
+	}
+	staged, err := session.Stage(ctx, strings.NewReader("stale staged bytes"))
+	if err != nil {
+		t.Fatalf("stage input: %v", err)
+	}
+	time.Sleep(55 * time.Millisecond)
+	ids, err := coordinator.InvalidateExpiredLeases(ctx)
+	if err != nil || len(ids) != 1 || ids[0] != operationID {
+		t.Fatalf("invalidate expired Lease: ids=%v err=%v", ids, err)
+	}
+	if err := objects.CleanupStaging(ctx, operationID); err != nil {
+		t.Fatalf("cleanup failed to remove disposable Stage: %v", err)
+	}
+	if active, err := coordinator.RenewLease(ctx, operationID, time.Second); err != nil || active {
+		t.Fatalf("expired Lease was resurrected: active=%v err=%v", active, err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.ForgetExpiredLease(ctx, operationID); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	err = coordinator.ExclusiveWithLease(ctx, operationID, func() error {
+		called = true
+		_, err := objects.Publish(ctx, staged)
+		return err
+	})
+	if !errors.Is(err, coordinatorsqlite.ErrLeaseExpired) || called {
+		t.Fatalf("stale Stage entered Commit: callback=%v err=%v", called, err)
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, "temp", operationID+".content")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cleaned expired Stage path reappeared: %v", err)
+	}
+}
+
+func TestPutStageRunsOutsideRepositoryWideExclusion(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	baseObjects, err := local.NewStore(filepath.Join(tempDir, "objects"), filepath.Join(tempDir, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageEntered := make(chan struct{})
+	stageRelease := make(chan struct{})
+	putRepo := openRepositoryInstance(t, tempDir, metaStore, &blockingStageObjectStore{
+		ObjectStore: baseObjects,
+		entered:     stageEntered,
+		release:     stageRelease,
+	}, hasher)
+	gcRepo := openRepositoryInstance(t, tempDir, openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx), baseObjects, hasher)
+	source := filepath.Join(tempDir, "stage-outside-lock.txt")
+	if err := os.WriteFile(source, []byte("stage does not hold repository lock"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	putDone := make(chan error, 1)
+	go func() { putDone <- putRepo.Put(ctx, source, "/staged.txt") }()
+	<-stageEntered
+	gcDone := make(chan error, 1)
+	go func() {
+		_, err := gcRepo.GC(ctx)
+		gcDone <- err
+	}()
+	select {
+	case err := <-gcDone:
+		if err != nil {
+			t.Fatalf("GC during Stage: %v", err)
+		}
+	case <-time.After(time.Second):
+		close(stageRelease)
+		if err := <-putDone; err != nil {
+			t.Logf("Put completed after timeout cleanup: %v", err)
+		}
+		if err := <-gcDone; err != nil {
+			t.Logf("GC completed after timeout cleanup: %v", err)
+		}
+		t.Fatal("GC blocked while Put was only staging input")
+	}
+	close(stageRelease)
+	if err := <-putDone; err != nil {
+		t.Fatalf("Put after concurrent Stage and GC: %v", err)
+	}
+	entry, err := putRepo.Stat(ctx, "/staged.txt")
+	if err != nil || entry.ObjectID == nil {
+		t.Fatalf("Put result missing after Stage: entry=%+v err=%v", entry, err)
+	}
+}
+
+func TestGCRetriesExpiredStageCleanupAfterFailure(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	baseObjects, err := local.NewStore(filepath.Join(tempDir, "objects"), filepath.Join(tempDir, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(tempDir, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := coordinator.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	}()
+	const operationID = "cccf55dc-19db-4df1-bc32-9f774ffea271"
+	if err := coordinator.AcquireLease(ctx, operationID, 30*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	session, err := baseObjects.BeginStage(ctx, operationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active, err := coordinator.RenewLease(ctx, operationID, 30*time.Millisecond); err != nil || !active {
+		t.Fatalf("renew test Lease: active=%v err=%v", active, err)
+	}
+	if _, err := session.Stage(ctx, strings.NewReader("staging to clean")); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(45 * time.Millisecond)
+	failure := errors.New("injected staging cleanup failure")
+	objects := &failStagingCleanupOnceObjectStore{ObjectStore: baseObjects, err: failure}
+	repo := openRepositoryInstance(t, tempDir, metaStore, objects, hasher)
+	if _, err := repo.GC(ctx); !errors.Is(err, failure) {
+		t.Fatalf("expected staging cleanup error before GC, got %v", err)
+	}
+	if active, err := coordinator.RenewLease(ctx, operationID, time.Second); err != nil || active {
+		t.Fatalf("cleanup failure left an active Lease: active=%v err=%v", active, err)
+	}
+	if _, err := repo.GC(ctx); err != nil {
+		t.Fatalf("GC did not retry invalidated staging cleanup: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, "temp", operationID+".content")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging content remains after cleanup retry: %v", err)
+	}
+}
+
+func TestGCCleansStagingWithoutLease(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(tempDir, "objects"), filepath.Join(tempDir, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const operationID = "e2441842-c0eb-4a95-ae50-946902331c34"
+	session, err := objects.BeginStage(ctx, operationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	repo := openRepositoryInstance(t, tempDir, metaStore, objects, hasher)
+	if _, err := repo.GC(ctx); err != nil {
+		t.Fatalf("GC cleanup of stage without a Lease: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, "temp", operationID+".content")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging without a Lease remains after cleanup: %v", err)
+	}
+}
+
+type blockingStageObjectStore struct {
+	objectstore.ObjectStore
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingStageObjectStore) BeginStage(ctx context.Context, operationID string) (objectstore.StageSession, error) {
+	session, err := s.ObjectStore.BeginStage(ctx, operationID)
+	if err != nil {
+		return nil, err
+	}
+	return blockingStageSession{StageSession: session, entered: s.entered, release: s.release}, nil
+}
+
+type blockingStageSession struct {
+	objectstore.StageSession
+	entered chan struct{}
+	release chan struct{}
+}
+
+type failStagingCleanupOnceObjectStore struct {
+	objectstore.ObjectStore
+	err    error
+	failed bool
+}
+
+func (s *failStagingCleanupOnceObjectStore) CleanupStaging(ctx context.Context, operationID string) error {
+	if !s.failed {
+		s.failed = true
+		return s.err
+	}
+	return s.ObjectStore.CleanupStaging(ctx, operationID)
+}
+
+func (s *failStagingCleanupOnceObjectStore) ListStaging(ctx context.Context) ([]string, error) {
+	return s.ObjectStore.ListStaging(ctx)
+}
+
+func (s blockingStageSession) Stage(ctx context.Context, src io.Reader) (objectstore.StagedObject, error) {
+	close(s.entered)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-s.release:
+		return s.StageSession.Stage(ctx, src)
+	}
+}
+
 func TestRepositoryCoordinatorProtectsDoctorFromGCAndDoesNotLockMetadataDB(t *testing.T) {
 	ctx := context.Background()
 	tempDir := t.TempDir()

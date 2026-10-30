@@ -58,6 +58,6 @@ Implementation observations have no `realizes` or `satisfies` relations to targe
 
 == Open decisions
 
-The IR retains four open items: `OPEN-SHA1-FORMAT-TRANSITION`, `OPEN-READ-REVISION-CHANGE`, `OPEN-PATH-CACHE-UPDATE`, and `OPEN-DELETE-RETENTION`.
+At the time of migration the IR retained four open items: `OPEN-SHA1-FORMAT-TRANSITION`, `OPEN-READ-REVISION-CHANGE`, `OPEN-PATH-CACHE-UPDATE`, and `OPEN-DELETE-RETENTION`. Later implementation decisions are recorded in the canonical IR; this migration record remains a snapshot of the original source coverage.
 
 No representation gaps remain. AsciiDoc headings/navigation were presentation-only and are retired. Roadmap sequence and criteria are present in node attributes and phase dependency relations; validator enforcement of those attributes would be a separate tooling enhancement, not missing semantic representation.

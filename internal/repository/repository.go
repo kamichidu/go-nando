@@ -208,6 +208,9 @@ func (r *Repository) cat(ctx context.Context, repoPath string, w io.Writer) erro
 
 // GC deletes unreferenced objects from the object store.
 func (r *Repository) GC(ctx context.Context) (int, error) {
+	if err := r.cleanupExpiredStaging(ctx); err != nil {
+		return 0, fmt.Errorf("clean expired Put staging before GC: %w", err)
+	}
 	deletedCount := 0
 	err := r.coordinator.Exclusive(ctx, func() error {
 		var err error

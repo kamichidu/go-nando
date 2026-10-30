@@ -14,15 +14,37 @@ var ErrObjectNotFound = errors.New("object not found")
 // ErrHashMismatch is returned when the object's content hash does not match its identifier.
 var ErrHashMismatch = errors.New("object hash mismatch")
 
+// ErrStagingNotFound indicates that an operation's one-time staging file has
+// already been removed and cannot be recreated.
+var ErrStagingNotFound = errors.New("staging file not found")
+
 // CommitResult holds the content ID and persisted size of a committed object.
 type CommitResult struct {
 	ID   content.ID
 	Size int64
 }
 
+// StagedObject is an immutable backend-owned handle produced by Stage.
+// Repository code must not interpret its representation.
+type StagedObject interface {
+	ID() content.ID
+	Size() int64
+}
+
+// StageSession owns one operation-ID-specific temporary file opened for a
+// single Stage attempt. Stage must never reopen or recreate the file path.
+type StageSession interface {
+	Stage(ctx context.Context, src io.Reader) (StagedObject, error)
+	Close() error
+}
+
 // ObjectStore defines the interface for interacting with the content-addressable object store.
 type ObjectStore interface {
 	Commit(ctx context.Context, src io.Reader) (CommitResult, error)
+	BeginStage(ctx context.Context, operationID string) (StageSession, error)
+	Publish(ctx context.Context, staged StagedObject) (CommitResult, error)
+	CleanupStaging(ctx context.Context, operationID string) error
+	ListStaging(ctx context.Context) ([]string, error)
 	Open(ctx context.Context, id content.ID) (io.ReadCloser, error)
 	Exists(ctx context.Context, id content.ID) (bool, error)
 	Delete(ctx context.Context, id content.ID) error

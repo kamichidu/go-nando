@@ -75,6 +75,12 @@ nodes:
     statement: Repository operations MUST NOT persist progress for later resumption; interruption is handled by backend cleanup or normal garbage collection according to the last completed commit boundary.
     provenance:
       origin: imported
+  - id: REQ-PUT-STAGE-LEASE
+    level: system_requirement
+    kind: concurrency-invariant
+    statement: Put input staging MUST occur outside Repository-wide exclusive coordination and MUST NOT publish content or metadata unless its operation-scoped SQLite Lease is still valid when Commit begins under exclusive coordination. The SQLite Lease is the sole authority to Commit. Lease renewal MUST be conditional on the same unexpired operation ID and MUST NOT resurrect an expired or invalidated Lease. Expiration invalidation MUST be serialized with Commit. Each Stage MUST create its operation-ID-specific staging path exactly once and MUST write only through that already-open file; it MUST NOT reopen or recreate the path after removal. A missing staging path causes Put failure. Cleanup MAY remove staging while a Stage is writing because staging is disposable, but MUST NOT permit an expired or invalidated Lease to publish content or Metadata.
+    provenance:
+      origin: imported
   - id: REQ-ENTRY-ID
     level: system_requirement
     kind: identity-invariant
@@ -142,7 +148,7 @@ nodes:
         release_failure: discard-connection-and-report-ErrRelease;operation-may-have-completed;attach-to-panic-when-panicking
         scope: all-processes-and-Repository-instances-for-one-repository
         filesystem: local-filesystem-only
-        protected_operations: [Put, Get, Cat, GC, Doctor]
+        protected_operations: [Put-Commit, Get, Cat, GC, Doctor]
         mode: exclusive-for-all-protected-operations
         shared-mode: future-extension-boundary-only
         metadata-database: separate-from-coordination-database
@@ -156,6 +162,12 @@ nodes:
         tradeoffs:
           - long-Get-or-Cat-blocks-Put-Get-GC-and-Doctor
           - exclusive-serialization-sacrifices-concurrent-reads
+      put_staging_lease:
+        storage: separate-SQLite-database
+        filename: put-leases.db
+        rationale: lease-heartbeat-must-not-be-blocked-by-long-coordinated-reads
+        persistent_fields: [operation_id, expires_at]
+        prohibited_fields: [input-progress, content-result, metadata-result, resumable-state]
   - id: DES-CLI-BOUNDARY
     level: system_design
     kind: responsibility-model
@@ -261,6 +273,37 @@ nodes:
       failed_or_aborted_commit: lease-may-expire-naturally
     provenance:
       origin: imported
+  - id: DES-PUT-STAGE-COMMIT
+    level: system_design
+    kind: put-lifecycle
+    statement: Put is divided into Stage and Commit. Stage creates one operation-ID-specific backend staging file exactly once and acquires an operation-scoped SQLite Lease before copying and hashing input outside Repository-wide exclusive coordination; different Stages may run concurrently. Stage writes only through the already-open file descriptor and never reopens or recreates the path, so cleanup or manual deletion may make the Stage fail but cannot produce a publishable replacement. Commit acquires Repository-wide exclusive coordination, validates the unexpired Lease immediately before resolving or creating destination parents, then publishes the immutable Object and commits Metadata in that order. Object publication is idempotent by content ID; Metadata mutation is database-atomic; Put does not promise end-to-end exactly-once behavior. Lease rows contain only operation_id and expires_at and never persist operation progress or results. SQLite Lease validity is the sole Commit authority; no OS lock protects staging or grants Commit permission.
+    attributes:
+      lease_ttl: 30-seconds
+      renewal_interval: 10-seconds
+      lease_kind: operation-lifecycle-fence-distinct-from-optional-per-hash-transfer-Lease
+      expiry_clock: SQLite-database-UTC-unix-milliseconds
+      cancellation: stop-renewal;invalidate-own-lease;clean-own-staging;do-not-resume
+      expiry_invalidation: under-Repository-exclusive-coordination-before-staging-cleanup
+      renewal_condition: operation-id-matches-and-lease-is-unexpired
+      staging_creation: one-time-O_EXCL-operation-ID-path-before-Lease-acquisition
+      staging_write: existing-open-file-descriptor-only;never-reopen-or-recreate-path
+      commit_fencing: validate-lease-after-exclusive-acquisition-before-Commit-mutations
+      expired_or_invalidated_lease: terminal-cannot-be-renewed
+      cleanup:
+        trigger: before-each-Put-Stage-and-before-GC
+        actions:
+          - atomically-set-expired-lease-expiry-to-zero-before-filesystem-removal
+          - cleanup-may-remove-staging-during-active-Stage;Put-may-fail
+          - retain-invalidated-lease-row-if-staging-removal-fails;retry-removal-later
+          - remove-invalidated-lease-row-only-after-staging-collection-succeeds
+          - remove-orphan-staging-with-no-active-lease;never-recreate-a-removed-path
+          - Lease-invalidation-and-Commit-lease-validation-are-serialized-by-Repository-coordination;filesystem-removal-follows-invalidation
+          - retry-after-crash-or-removal-error-is-idempotent
+      unsupported:
+        - external-deletion-or-recreation-of-put-leases-db-while-in-use
+        - lease-as-Object-availability-or-GC-protection
+    provenance:
+      origin: imported
   - id: DES-READ-SEMANTICS
     level: system_design
     kind: read-protocol
@@ -352,19 +395,22 @@ nodes:
   - id: DES-PHASE3-EXCLUSION
     level: system_design
     kind: roadmap-phase
-    statement: Phase 3 implements Repository-owned cross-process exclusion through a dedicated SQLite coordination database per repository. BEGIN IMMEDIATE serializes protected operations across processes and Repository instances; the Metadata database remains separate and is not blocked by coordination transactions. Put, Get, the full Cat read, GC, and Doctor run under exclusive coordination. The design boundary permits a future shared/exclusive mode, but the initial implementation is exclusive-only.
+    statement: Phase 3 implements Repository-owned cross-process exclusion through a dedicated SQLite coordination database per repository. BEGIN IMMEDIATE serializes protected Commit and Repository operations across processes and Repository instances; the Metadata database remains separate and is not blocked by coordination transactions. Put Stage runs outside this exclusive lock under an operation-scoped Lease; Put Commit, Get, the full Cat read, GC, and Doctor run under exclusive coordination. Put Lease heartbeats use a separate SQLite database so long coordinated reads do not block renewal. The design boundary permits a future shared/exclusive mode, but the initial implementation is exclusive-only.
     provenance:
       origin: imported
     attributes:
       roadmap_phase: 3
-      persistent_operation_state: prohibited
-      lease_role: optional-duplicate-transfer-optimization
+      persistent_operation_progress: prohibited
+      ephemeral_lease_record_fields: [operation_id, expires_at]
+      optional_hash_lease_role: duplicate-transfer-suppression-only
+      put_stage_lease_role: operation-scoped-staging-fence-and-cleanup-eligibility
       coordination_database: dedicated-SQLite-coordination.db
       coordination_transaction: BEGIN-IMMEDIATE
       transaction_release: ROLLBACK-on-success-error-cancel-or-panic
       release_failure: discard-connection-and-report-ErrRelease;operation-may-have-completed;attach-to-panic-when-panicking
       coordination_scope: all-processes-and-instances-sharing-one-repository
-      protected_operations: [Put, Get, Cat, GC, Doctor]
+      protected_operations: [Put-Commit, Get, Cat, GC, Doctor]
+      put_lease_database: put-leases.db
       initial_lock_mode: exclusive
       filesystem_scope: local-filesystem-only
       unsupported_conditions:
@@ -375,6 +421,10 @@ nodes:
         - long-Get-or-Cat-blocks-Put-Get-GC-and-Doctor
         - all-protected-operations-are-serialized
       exit_criteria:
+        - concurrent Put Stages do not hold Repository-wide exclusive coordination
+        - stale Stage cannot renew or publish after Lease expiry or invalidation
+        - Lease cleanup invalidates before removal and is safe to retry after interruption
+        - Put Commit lease validation and expiry invalidation serialize under Repository coordination
         - multiple-Repository-instance and multi-process tests protect Put through Object Commit and Metadata Commit
         - active Cat and Get remain protected from GC deletion for the full Object read
         - Doctor reference and Object observations cannot race with GC or Put
@@ -409,7 +459,7 @@ nodes:
         - Doctor is non-destructive and does not report valid unreferenced Objects
         - GC partial deletion failure is safe to retry under Repository exclusion
         - no persisted operation progress is scanned, resumed, or introduced
-        - crash-left staging cleanup is deferred until active staging can be protected
+        - expired staging is reclaimed after Lease invalidation; active Stage may fail but cannot recreate or Commit it
   - id: DES-PHASE6-GCS
     level: system_design
     kind: roadmap-phase
@@ -581,6 +631,18 @@ relations:
     from: DES-FAILURE-BOUNDARIES
     type: depends_on
     to: REQ-METADATA-ORDER
+  - id: REL-PUT-STAGE-LEASE
+    from: DES-PUT-STAGE-COMMIT
+    type: depends_on
+    to: REQ-PUT-STAGE-LEASE
+  - id: REL-PUT-STAGE-COORDINATION
+    from: DES-PUT-STAGE-COMMIT
+    type: depends_on
+    to: DES-PHASE3-EXCLUSION
+  - id: REL-PUT-STAGE-OBJECT-BACKEND
+    from: DES-PUT-STAGE-COMMIT
+    type: depends_on
+    to: DES-OBJECT-BACKEND-NEUTRALITY
   - id: REL-DES-NO-PENDING
     from: DES-FAILURE-BOUNDARIES
     type: depends_on
@@ -723,10 +785,5 @@ open_items:
     statement: Decide whether removed Entries are represented as tombstones, physically removed, or compacted, and define any retention policy without changing committed namespace visibility semantics.
     status: open
     related_refs: [DES-EXPLICIT-DIRECTORY-MODEL]
-  - id: OPEN-PHASE4-STAGING-CLEANUP
-    statement: Decide whether and how a backend may remove staging files left by process termination while guaranteeing it cannot remove another process's active staging file; until a safe ownership or exclusion mechanism is established, startup cleanup must not delete staging files.
-    status: open
-    related_refs: [DES-PHASE4-CLEANUP-EXPORT, REQ-NO-RESUME]
-
 representation_gaps:
   []

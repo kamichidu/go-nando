@@ -25,6 +25,26 @@ func (s *Store) Commit(ctx context.Context, src io.Reader) (objectstore.CommitRe
 	return objectstore.CommitResult{}, ErrNotImplemented
 }
 
+// BeginStage is not implemented yet.
+func (s *Store) BeginStage(ctx context.Context, operationID string) (objectstore.StageSession, error) {
+	return nil, ErrNotImplemented
+}
+
+// Publish is not implemented yet.
+func (s *Store) Publish(ctx context.Context, staged objectstore.StagedObject) (objectstore.CommitResult, error) {
+	return objectstore.CommitResult{}, ErrNotImplemented
+}
+
+// CleanupStaging is not implemented yet.
+func (s *Store) CleanupStaging(ctx context.Context, operationID string) error {
+	return ErrNotImplemented
+}
+
+// ListStaging is not implemented yet.
+func (s *Store) ListStaging(ctx context.Context) ([]string, error) {
+	return nil, ErrNotImplemented
+}
+
 // Open is not implemented yet.
 func (s *Store) Open(ctx context.Context, id content.ID) (io.ReadCloser, error) {
 	if err := id.Validate(); err != nil {

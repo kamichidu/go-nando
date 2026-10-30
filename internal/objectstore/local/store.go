@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/google/uuid"
 	"github.com/kamichidu/go-nando/internal/content"
 	"github.com/kamichidu/go-nando/internal/objectstore"
 )
@@ -38,119 +39,30 @@ func NewStore(objectsDir, tempDir string, hasher content.Hasher) (*Store, error)
 	}, nil
 }
 
-// Commit writes an object to the store atomically by deriving the hash from the exact persisted bytes.
-// tempDir and objectsDir must reside on the same filesystem for atomic publication.
-func (s *Store) Commit(ctx context.Context, src io.Reader) (result objectstore.CommitResult, retErr error) {
-	// Create a temporary file inside s.tempDir
-	tempFile, err := os.CreateTemp(s.tempDir, "nando-obj-*")
-	if err != nil {
-		return objectstore.CommitResult{}, fmt.Errorf("failed to create temporary file: %w", err)
-	}
-	tempName := tempFile.Name()
-
-	// Ensure cleanup on failure
-	cleanup := true
-	closed := false
-	defer func() {
-		if cleanup {
-			if !closed {
-				if err := tempFile.Close(); err != nil {
-					retErr = errors.Join(retErr, fmt.Errorf("failed to close temporary file during cleanup: %w", err))
-				}
-			}
-			if err := removeStagingFile(tempName); err != nil {
-				retErr = errors.Join(retErr, fmt.Errorf("failed to remove temporary file during cleanup: %w", err))
-			}
-		}
-	}()
-
-	written, err := io.Copy(tempFile, src)
-	if err != nil {
-		return objectstore.CommitResult{}, fmt.Errorf("failed to write to temporary file: %w", err)
-	}
-
-	// Flush to disk
-	if err := tempFile.Sync(); err != nil {
-		return objectstore.CommitResult{}, fmt.Errorf("failed to sync temporary file: %w", err)
-	}
-
-	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
-		return objectstore.CommitResult{}, fmt.Errorf("failed to seek temporary file for hashing: %w", err)
-	}
-	id, err := s.hasher.Sum(ctx, tempFile)
-	if err != nil {
-		return objectstore.CommitResult{}, fmt.Errorf("failed to hash temporary object: %w", err)
-	}
-	if err := id.Validate(); err != nil {
-		return objectstore.CommitResult{}, fmt.Errorf("hasher returned invalid object ID: %w", err)
-	}
-	if err := tempFile.Close(); err != nil {
-		return objectstore.CommitResult{}, fmt.Errorf("failed to close temporary file: %w", err)
-	}
-	closed = true
-
-	destPath := filepath.Join(s.objectsDir, id.String())
-
-	// Check if already exists
-	exists, err := s.Exists(ctx, id)
+// Commit stages and atomically publishes an object. Repository Put uses the
+// explicit Stage/Publish lifecycle so input hashing can run outside its
+// repository-wide exclusion.
+func (s *Store) Commit(ctx context.Context, src io.Reader) (objectstore.CommitResult, error) {
+	operationID := uuid.NewString()
+	session, err := s.BeginStage(ctx, operationID)
 	if err != nil {
 		return objectstore.CommitResult{}, err
 	}
-
-	if exists {
-		// Verify existing matches
-		if err := s.Verify(ctx, id); err != nil {
-			return objectstore.CommitResult{}, fmt.Errorf("existing object %s is corrupt: %w", id.String(), err)
-		}
-		// Existing valid object can be reused. Clean up the temp file.
-		if err := removeStagingFile(tempName); err != nil {
-			return objectstore.CommitResult{}, fmt.Errorf("failed to remove reused temporary object: %w", err)
-		}
-		cleanup = false
-		return objectstore.CommitResult{
-			ID:   id,
-			Size: written,
-		}, nil
+	staged, stageErr := session.Stage(ctx, src)
+	closeErr := session.Close()
+	if stageErr != nil || closeErr != nil {
+		cleanupErr := s.CleanupStaging(context.Background(), operationID)
+		return objectstore.CommitResult{}, errors.Join(stageErr, closeErr, cleanupErr)
 	}
-
-	// Publish temp file to final destination path (exclusive creation).
-	// This ensures that we do not overwrite an existing file.
-	published, err := publishNoReplace(tempName, destPath)
-	if err != nil {
-		return objectstore.CommitResult{}, fmt.Errorf("failed to publish object: %w", err)
+	result, publishErr := s.Publish(ctx, staged)
+	cleanupErr := s.CleanupStaging(context.Background(), operationID)
+	if publishErr != nil {
+		return objectstore.CommitResult{}, errors.Join(publishErr, cleanupErr)
 	}
-
-	if !published {
-		// Already exists! Verify it.
-		if err := s.Verify(ctx, id); err != nil {
-			return objectstore.CommitResult{}, fmt.Errorf("existing object %s is corrupt: %w", id.String(), err)
-		}
-		if err := removeStagingFile(tempName); err != nil {
-			return objectstore.CommitResult{}, fmt.Errorf("failed to remove duplicate temporary object: %w", err)
-		}
-		cleanup = false
-		return objectstore.CommitResult{
-			ID:   id,
-			Size: written,
-		}, nil
+	if cleanupErr != nil {
+		return result, fmt.Errorf("object committed but staging cleanup failed: %w", cleanupErr)
 	}
-
-	if err := removeStagingFile(tempName); err != nil {
-		return objectstore.CommitResult{}, fmt.Errorf("object was published but temporary link cleanup failed: %w", err)
-	}
-
-	cleanup = false
-	return objectstore.CommitResult{
-		ID:   id,
-		Size: written,
-	}, nil
-}
-
-func removeStagingFile(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
+	return result, nil
 }
 
 // Open retrieves the reader for the given object.

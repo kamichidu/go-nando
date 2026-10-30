@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -109,6 +111,205 @@ func TestExclusiveReleasesAfterErrorAndPanic(t *testing.T) {
 	}
 	if err := coordinator.Exclusive(context.Background(), func() error { return nil }); err != nil {
 		t.Fatalf("lock was not released after callback cancellation: %v", err)
+	}
+}
+
+func TestPutLeaseRenewalInvalidationAndCrashRetry(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "coordination.db")
+	first := openCoordinator(t, dbPath)
+	second := openCoordinator(t, dbPath)
+	const operationID = "9f3eaa4e-2fcf-43f5-a09e-a5f41003f44c"
+
+	if err := first.AcquireLease(context.Background(), operationID, 40*time.Millisecond); err != nil {
+		t.Fatalf("acquire lease: %v", err)
+	}
+	if renewed, err := second.RenewLease(context.Background(), operationID, 80*time.Millisecond); err != nil || !renewed {
+		t.Fatalf("renew active lease across instances: renewed=%v err=%v", renewed, err)
+	}
+	if err := first.ExclusiveWithLease(context.Background(), operationID, func() error { return nil }); err != nil {
+		t.Fatalf("active lease failed fenced Commit: %v", err)
+	}
+
+	time.Sleep(120 * time.Millisecond)
+	ids, err := first.InvalidateExpiredLeases(context.Background())
+	if err != nil || !slices.Contains(ids, operationID) {
+		t.Fatalf("invalidate expired lease: ids=%v err=%v", ids, err)
+	}
+	if renewed, err := second.RenewLease(context.Background(), operationID, time.Second); err != nil || renewed {
+		t.Fatalf("invalidated lease was resurrected: renewed=%v err=%v", renewed, err)
+	}
+	callbackRan := false
+	err = second.ExclusiveWithLease(context.Background(), operationID, func() error {
+		callbackRan = true
+		return nil
+	})
+	if !errors.Is(err, sqlite.ErrLeaseExpired) || callbackRan {
+		t.Fatalf("expired lease was allowed to Commit: callback=%v err=%v", callbackRan, err)
+	}
+
+	if err := first.Close(); err != nil {
+		t.Fatalf("close coordinator before cleanup retry: %v", err)
+	}
+	first = openCoordinator(t, dbPath)
+	defer func() {
+		if err := first.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	}()
+	ids, err = first.InvalidateExpiredLeases(context.Background())
+	if err != nil || !slices.Contains(ids, operationID) {
+		t.Fatalf("invalidated lease was not retained for crash retry: ids=%v err=%v", ids, err)
+	}
+	if err := first.ForgetExpiredLease(context.Background(), operationID); err != nil {
+		t.Fatalf("forget cleaned lease: %v", err)
+	}
+}
+
+func TestPutLeaseRenewalRacingExpirationCannotResurrectLease(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "coordination.db")
+	first := openCoordinator(t, dbPath)
+	second := openCoordinator(t, dbPath)
+	defer func() {
+		if err := first.Close(); err != nil {
+			t.Errorf("close first coordinator: %v", err)
+		}
+	}()
+	defer func() {
+		if err := second.Close(); err != nil {
+			t.Errorf("close second coordinator: %v", err)
+		}
+	}()
+	const operationID = "63f5ef21-e2dc-49c1-9c8d-4d6b71b4118f"
+	if err := first.AcquireLease(context.Background(), operationID, 25*time.Millisecond); err != nil {
+		t.Fatalf("acquire lease: %v", err)
+	}
+	time.Sleep(40 * time.Millisecond)
+
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	var renewed bool
+	var renewalErr error
+	var invalidated []string
+	var invalidationErr error
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		<-start
+		renewed, renewalErr = second.RenewLease(context.Background(), operationID, time.Second)
+	}()
+	go func() {
+		defer wait.Done()
+		<-start
+		invalidated, invalidationErr = first.InvalidateExpiredLeases(context.Background())
+	}()
+	close(start)
+	wait.Wait()
+	if renewalErr != nil || invalidationErr != nil {
+		t.Fatalf("race operations failed: renew=%v invalidate=%v", renewalErr, invalidationErr)
+	}
+	if renewed == slices.Contains(invalidated, operationID) {
+		t.Fatalf("lease has inconsistent race outcome: renewed=%v invalidated=%v", renewed, invalidated)
+	}
+	if renewed {
+		if err := first.ExclusiveWithLease(context.Background(), operationID, func() error { return nil }); err != nil {
+			t.Fatalf("renewed lease should remain valid: %v", err)
+		}
+		return
+	}
+	if active, err := second.RenewLease(context.Background(), operationID, time.Second); err != nil || active {
+		t.Fatalf("lease renewed after expiration invalidation: active=%v err=%v", active, err)
+	}
+	if err := first.ExclusiveWithLease(context.Background(), operationID, func() error { return nil }); !errors.Is(err, sqlite.ErrLeaseExpired) {
+		t.Fatalf("invalidated lease unexpectedly allowed Commit: %v", err)
+	}
+}
+
+func TestPutLeaseRenewalDoesNotWaitForLongRepositoryReadLock(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "coordination.db")
+	reader := openCoordinator(t, dbPath)
+	renewer := openCoordinator(t, dbPath)
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Errorf("close reader coordinator: %v", err)
+		}
+	}()
+	defer func() {
+		if err := renewer.Close(); err != nil {
+			t.Errorf("close renewal coordinator: %v", err)
+		}
+	}()
+	const operationID = "2697db17-50fb-4499-a01a-25f6b47ba7cd"
+	if err := reader.AcquireLease(context.Background(), operationID, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	readDone := make(chan error, 1)
+	go func() {
+		readDone <- reader.Exclusive(context.Background(), func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+
+	renewCtx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	renewDone := make(chan error, 1)
+	go func() {
+		active, err := renewer.RenewLease(renewCtx, operationID, time.Second)
+		if err == nil && !active {
+			err = errors.New("Lease was not active during renewal")
+		}
+		renewDone <- err
+	}()
+	select {
+	case err := <-renewDone:
+		if err != nil {
+			t.Fatalf("Lease renewal during coordinated read: %v", err)
+		}
+	case <-renewCtx.Done():
+		t.Fatal("Lease renewal was blocked by the long Repository read lock")
+	}
+	close(release)
+	if err := <-readDone; err != nil {
+		t.Fatalf("coordinated read callback: %v", err)
+	}
+}
+
+func TestPutLeaseAcrossProcesses(t *testing.T) {
+	if os.Getenv("GO_NANDO_LEASE_HELPER") == "1" {
+		coordinator, err := sqlite.Open(os.Getenv("GO_NANDO_LEASE_DB"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := coordinator.Close(); err != nil {
+				t.Errorf("close helper coordinator: %v", err)
+			}
+		}()
+		active, err := coordinator.RenewLease(context.Background(), os.Getenv("GO_NANDO_LEASE_OPERATION"), time.Second)
+		if err != nil || !active {
+			t.Fatalf("child process could not renew shared Put Lease: active=%v err=%v", active, err)
+		}
+		return
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "coordination.db")
+	coordinator := openCoordinator(t, dbPath)
+	const operationID = "32635c02-5633-4611-a0b4-26b118df5ac4"
+	if err := coordinator.AcquireLease(context.Background(), operationID, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestPutLeaseAcrossProcesses$")
+	command.Env = append(os.Environ(),
+		"GO_NANDO_LEASE_HELPER=1",
+		"GO_NANDO_LEASE_DB="+dbPath,
+		"GO_NANDO_LEASE_OPERATION="+operationID,
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("child process Lease renewal failed: %v\n%s", err, output)
 	}
 }
 

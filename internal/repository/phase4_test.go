@@ -403,11 +403,11 @@ type commitFailureObjectStore struct {
 	publishBeforeError bool
 }
 
-func (s *commitFailureObjectStore) Commit(ctx context.Context, src io.Reader) (objectstore.CommitResult, error) {
+func (s *commitFailureObjectStore) Publish(ctx context.Context, staged objectstore.StagedObject) (objectstore.CommitResult, error) {
 	if !s.publishBeforeError {
 		return objectstore.CommitResult{}, s.err
 	}
-	result, err := s.ObjectStore.Commit(ctx, src)
+	result, err := s.ObjectStore.Publish(ctx, staged)
 	if err != nil {
 		return result, err
 	}

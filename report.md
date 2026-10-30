@@ -87,4 +87,89 @@ race suiteは並列実行・`-p 1`ともに完走。race付き同時Moveテス�
 
 ## 最終状態
 
-Design IR、通常・race uncached全体suite、lint、Windows build/test cross-compile、diff checkが通過。Phase 4実装にSQLite競合の最小修正と回帰テストを加えた。Windows runtime上での置換テストは未実行。ローカルの全変更をレビュー後にcommit/pushする。
+Design IR、通常・race uncached全体suite、lint、Windows build/test cross-compile、diff checkが通過。Phase 4実装にSQLite競合の最小修正と回帰テストを加えた。Windows runtime上での置換テストは未実行。このPhase 4一式はcommit `95c7d97b40a2d85be3aeb6cefeb9781eddfdc320` としてorigin/mainへpush済み。
+
+---
+
+## Put Stage / Commit と操作Lease
+
+### 設計
+
+`docs/design.ir.yaml`を先に更新し、Design IR v1alpha1 validator `VALID` を確認してから実装した。PutのStage/Commit分割、operation_id/expires_atのみを持つLease、renewal timing、expiry fencing、cleanup retryを定義した。Lease heartbeatをPhase 3の`coordination.db`に置くと、全Read期間保持する`BEGIN IMMEDIATE`で長時間Cat/Getがrenewalを止める。この競合を避けるためLease記録を別の`put-leases.db`に分離し、CommitのLease検証と期限失効は既存Coordinator排他で直列化する。
+
+期限はSQLite database clockのUnix millisecondsで比較する。Lease TTLは30秒、heartbeatは10秒ごと。StageはLeaseを取得する前にoperation ID固有のstaging pathを`O_EXCL`で一度だけ作成してfile descriptorを保持し、Lease取得後も同じdescriptorからcopy/hashする。pathがcleanupや手動削除で消えた後は再open/createしない。削除時に既にwrite中なら開いたinodeへの書き込みは完了し得るが、pathがないためPublishできずPutは失敗する。期限切れLeaseはRepository Coordinator排他下で先に`expires_at=0`へ無効化し、その後stagingを削除する。削除失敗時はinvalidated Lease行を保持し、次回Put/GCで再試行する。Stage fileだけ残りLeaseが存在しないクラッシュ残骸も列挙してcleanup対象にする。
+
+Local Object Storeはoperation ID別のstaging fileを使う。OS依存file lockやbackend-private Stage lockは設けず、stagingは削除されてもPutが失敗するだけの一時領域として扱う。Stageのcopy/hashはRepository全体のexclusive lock外、親Directory作成・Object publish・Metadata commitは内側。GC/Doctor/Get/Catの既存排他境界を維持した。GCSは既存stubのままで、新しいStage APIも未実装。
+
+### 主な変更
+
+- `internal/repository/put.go`: Stage/Commit分割、期限付きLease renewal、Commit開始時のlease検証、後処理時の`ErrPutCommitted`分類。
+- `internal/coordinator/sqlite/coordinator.go`: `put-leases.db`、条件付きrenewal、排他下のexpiry invalidation、cleanup完了後の行削除。
+- `internal/objectstore/store.go`, `internal/objectstore/local/stage.go`: backend-owned Stage session、immutable staged handle、publish、operation別cleanup。
+- `internal/objectstore/local/stage.go`: one-shot staging file、既存descriptorへのStage、path不在時のPublish拒否、staging列挙・cleanup。
+- `internal/repository/repository.go`: GC前にexpired staging cleanup。
+- `docs/design.ir.yaml`: normative Stage/Lease/fencing/cleanup契約とPhase 3 coordination記述。
+
+### 回帰・競合テスト
+
+- 複数Coordinator instance/process間のLease更新とexpiry race。失効後renewalが成功しないこと。
+- 長時間Repository exclusive read中にLease renewalが独立DBで進むこと。
+- active Stage中にcleanupがunlinkしても、完了したstagingがPublishできず、Stage pathが再生成されないこと。
+- expiry後のstale StageがCommit callbackへ入らず、cleanup後に同じIDで遅れて始めたStageもrenewできないこと。
+- cleanup失敗後にinvalidated Leaseを保持し、次のGCで再試行できること。
+- Put Stage中はGCが進み、Put Commitに入ると従来どおりCoordinator排他が効くこと。
+- 別processのStage sessionがpath削除後に再生成しないこと。
+
+### 最終検証と実測
+
+| Check | 結果 | wall-clock |
+|---|---:|---:|
+| `go test -count=1 ./...` | pass | 2.11秒 |
+| `go test -race -count=1 ./...` | pass | 6.95秒 |
+| `go test -race -p 1 -count=1 ./...` | pass | 17.38秒 |
+| Lease race/process tests, race, count=5 | pass | 7.98秒 |
+| Local Stage isolation and cleanup race tests, race, count=1 | pass | 3.45秒 wall-clock (orphan staging test追加前) |
+| `golangci-lint run ./...` | 0 issues | 2.08秒 |
+| Design IR validator | `VALID` | 0.57秒 |
+| Windows amd64 build | pass | 0.74秒 |
+| Windows coordinator/local-objectstore/repository test cross-compile | pass | 0.61/0.52/0.75秒 |
+| macOS arm64 build and local-objectstore test cross-compile | pass | 0.79/0.51秒 |
+| `git diff --check` | pass | 上記cross-build列の末尾で実行 |
+
+### 残課題・境界
+
+- Windows/macOSのnative runtime実行環境はないため、open staging file unlink/cleanup挙動はLinuxで実測し、他OSはcross-compileまで。
+- crash cleanupは次回PutまたはGCが呼ばれた時に遅延実行される。常駐cleanup workerやstartup掃除は追加していない。
+- GCS backendは未実装stubのため、Stage API/Lease cleanupを実装していない。
+- `put-leases.db`の現在の初期schemaはidempotentな単一table作成で、schema migration ledgerはない。将来Lease schemaを変更する場合は互換運用を別途設計する。
+- Leaseはstaging再利用/Put全体exactly-once、Object availability、GC保護を保証しない。Object Commit後・Metadata commit前のfailureは既存GCへ委ねる。
+
+今回のStage/Commit一式はローカル作業ツリーに残し、commit/pushしていない。
+
+### Stage cleanup lockless修正
+
+OS依存のstaging lockを削除し、SQLite LeaseをCommit権限の唯一の根拠とした。Local `BeginStage` はoperation IDごとのpathを`O_EXCL`で一度作り、sessionはそのfile descriptorを保持する。Stageはdescriptorを再openせずにcopy/hashし、StageSessionは一度だけ使用できる。cleanupまたは手動削除後はStage/Publishがpath不在を検出して失敗する。cleanupが既に実行中のwriteと重なり、開いたinodeへのwriteが完了しても、unlink済みpathをPublishできない。
+
+RepositoryはStage path作成後にLeaseを取得し、Stage直前にconditional renewalする。Commit内のLease検証/Object publish/Metadata commitと、失効Leaseの無効化は同じRepository Coordinatorで直列化する。失効Leaseを先に無効化し、その後stagingを削除する。削除失敗時はLease行を削除せず、staging pathを列挙して次回Put/GCで再試行する。staging pathだけが残った場合も、active Lease一覧にないoperation IDとしてcleanupする。cleanupが新しいLease取得との競合中にpathを削除した場合は、そのPutが失敗することを許容する。
+
+削除したもの:
+
+- `internal/objectstore/local/stage_lock_unix.go`
+- `internal/objectstore/local/stage_lock_windows.go`
+- `ErrStagingInUse`とOS lock helper/API
+
+追加・更新したテストは、進行中Stage中のunlink、unlink後のPublish拒否、手動削除後の再生成防止、複数プロセスでのactive Stage unlink、失効Lease fencing、cleanup失敗後の再試行を確認する。失敗したStageのpartial fileはStage自身が消さず、RepositoryのLease無効化後cleanupに委ねる。
+
+今回の修正ゲート実測:
+
+| Check | 結果 | wall-clock |
+|---|---:|---:|
+| `go test -count=1 ./...` | pass | 2.21秒 |
+| `go test -race -count=1 ./...` | pass | 6.68秒 |
+| `golangci-lint run ./...` | 0 issues | 1.37秒 |
+| Design IR validator | `VALID` | 0.56秒 |
+| Windows amd64 `go build ./...` | pass | 0.49秒 |
+| Windows local Object Store test cross-compile | pass | 0.55秒 |
+| `git diff --check` | pass | 0.00秒 |
+
+全体テストはLinux上で実行した。Windows cross-buildはpassしたが、native Windowsのopen-file削除/再試行 semanticsは未実測。変更は未commit。
