@@ -4,7 +4,7 @@
 
 `docs/design.ir.yaml` is the sole semantic design authority. This file is an audit record, source mapping, migration sequence, and test plan; it does not override or add requirements to the IR. No Go implementation was changed for this audit.
 
-Audit baseline: `main` at `b4dba45ae202d995c973af01154c08108e98ce1c`. The checkout has no `README.md` and no `docs/index.adoc`, although `GEMINI.md` names `docs/index.adoc` in its reading order. `docs/design-ir-migration.md` identifies `docs/design.ir.yaml` as the direct design authority. No replacement AsciiDoc index was created.
+Audit baseline: `main` at `04f4e8991f0f7cd12c87a01fcd5a690558e5cf64`. The checkout has no `README.md` and no `docs/index.adoc`, although `GEMINI.md` names `docs/index.adoc` in its reading order. `docs/design-ir-migration.md` identifies `docs/design.ir.yaml` as the direct design authority. No replacement AsciiDoc index was created.
 
 == Inspected implementation and current behavior
 
@@ -53,52 +53,46 @@ The corresponding current-source facts and comparisons are recorded in `docs/des
 == Accepted target summarized from the IR
 
 * Local mode has no GCS dependency; Local is the authoritative durable Object copy.
-* GCS mode commits a complete Local Object, then atomically commits the Entry and a content-ID transfer-queue item through MetadataStore. SQLite stores the queue in the existing Metadata database and shares the Entry transaction; a Firestore candidate must provide the same atomic semantic API. The Entry is immediately visible, and transfer follows asynchronously. Before confirmation Local may be the only known-good physical copy; physical loss at that time may lose the content.
-* GCS uploads use the final key `objects/{content_id}` through resumable upload after hashing. No temporary GCS Object or copy is introduced. Local and GCS publication are no-replace; existing content must be checked before it counts as idempotent success.
-* The persistent SQLite transfer queue is content-ID keyed. Restart rediscovery/retry and verified completion are required; queue state is neither an Entry Pending state nor a resumed Put operation. Queue field/state/retry policy details remain open.
-* Get/Cat prefer Local. On a miss, hold RLocks, download to shared repository temp, validate the full content ID, then publish Local without replacement before consuming the Object. Direct GCS-to-Get streaming is unnecessary; progressive streaming remains a future option. Get keeps its existing atomic export destination behavior.
-* A dedicated resource-lock area in the SQLite coordination database is the only GC protection mechanism. Resource-scoped expiring RWLocks protect the same content IDs and temporary IDs: Put/Get/upload/download hold RLock; GC physical deletion holds WLock. SQLite transactions atomically manage lock acquisition/update/release. Long I/O does not hold Repository-wide exclusive coordination. Fencing of a stale WLock deletion after expiry is still open. The current operation-scoped Put staging Lease remains a Commit/cleanup fence, not a second GC protection mechanism.
-* Capacity GC is distinct from invalid/orphan reconciliation. Capacity GC cannot evict Local authority in Local mode, unconfirmed GCS-mode content, or leased resources; it may evict confirmed Local cache content. Failed safe reclamation returns a capacity error. The Repository does not delete the last known-good physical copy. Orphan reconciliation also covers GCS and uses generation-conditional deletion.
-* MetadataStore remains the semantic API; SQLite remains the current implementation. Firestore is a candidate only if it can meet the same atomic operation contracts without SQL/SQLite leakage. Metadata backups are an operator responsibility.
+* GCS mode publishes a complete Local Object, then atomically commits the Entry and idempotent content-ID queue item in one MetadataStore operation. SQLite stores both in the existing Metadata DB and one transaction. A Firestore adapter must preserve this semantic atomicity without exposing backend transaction types. The Entry is immediately visible; transfer follows asynchronously. Before GCS confirmation, Local may be the only known-good physical copy, and physical loss may lose content.
+* GCS uploads use resumable upload directly to final key `objects/{content_id}`, with no temporary Object or copy. A successful GCS API response is authoritative. Ambiguous results and existing-name/precondition responses converge through final-object lookup and API attributes. Persist generation and the API metadata needed for later conditional operations. Do not add independent full-object SHA-256 read-back; Local hash verification remains required, and arbitrary external GCS corruption is not guaranteed to be detected.
+* A single Resource Lease model has resource ID, operation ID, RLock/WLock, expiry, and extensible information; one operation may protect multiple resources. RLocks are shared, WLocks exclusive. Local and GCS follow the same Lease transitions. Heartbeat through operation completion and release afterward. Put acquires temp RLock before Stage creation, then content-ID RLock after hashing while retaining the temp lock through Local Publish and Metadata Commit. The Lease is the Put Commit validity check; there is no separate Put Operation Lease.
+* Resource Lease records live in a dedicated area of the SQLite coordination database and are the only GC protection mechanism. GC obtains and renews WLock, then rechecks references, replica state, and deletion eligibility. Long I/O does not hold Repository-wide exclusive coordination.
+* If renewal fails or a Lease expires, the operation stops and performs no later Publish, Metadata Commit, or queue confirmation. Already-sent I/O may finish late. This can make an Object unavailable: a read 404 fails locally and does not mutate Entry Metadata or propagate a repository-wide state change. No fencing token, Deleting state, Local/GCS-specific transition, or long Coordinator critical section is required. This is an accepted availability boundary, not an implementation blocker.
+* Capacity GC and invalid/orphan GC remain distinct. Capacity GC preserves Local authority in Local mode, unconfirmed content in GCS mode, and RLock-protected resources; it may evict confirmed Local cache copies. GC rechecks eligibility under WLock and does not intentionally delete the last known-good copy. An already-sent delete may still finish late after expiry.
+* The persistent queue is content-ID keyed, idempotently enqueued with Put, rediscovered after restart, and retried from complete Local content. It is not a Pending Entry or resumed Put. Queue row details and retry scheduling remain open. Metadata backups remain an operator responsibility.
 
-== Findings that block implementation decisions
+== Remaining open decisions
 
-The following are not silently resolved by the target model; each appears as an `OPEN-*` item in the IR. The user-selected RWLock protocol and SQLite-backed MetadataStore transfer queue are treated as decisions, not as open architecture choices.
+These are the unresolved decisions retained as `OPEN-*` nodes in the IR; resolved Lease/fencing/read-back/session questions have been removed.
 
-. **Expired WLock fencing:** RLock/WLock resolves acquisition-versus-GC eligibility: normal accesses hold RLock and physical deletion requires WLock for the same resource ID. The remaining question is how an expired GC WLock holder is prevented from completing a delayed filesystem/GCS delete after another lock/access is granted. GCS generation preconditions protect object generations but do not alone fence a stale repository worker; local unlink has no native fencing token.
-. **RWLock and Put staging order:** current Put creates the temp path before acquiring its operation-scoped Lease. The target resource RLock must protect that temporary ID, then bind protection to the content ID after hashing without a gap. The operation-scoped Lease continues to fence Commit/staging cleanup only; resource RWLocks alone protect from GC. The current API/schema do not model protected-resource references.
-. **Lock expiry while I/O is in flight:** renewal failure must stop work, but an already accepted GCS resumable request may finish remotely. Specify whether a worker that lost its RLock may record a verified queue completion, how partial download cleanup works, and how stale operations are fenced. RLock/WLock TTL, heartbeat interval, and clock are not chosen.
-. **Transfer queue details:** owner and atomicity are decided: the MetadataStore semantic contract owns a content-ID queue; SQLite stores it in the existing Metadata database and Put Entry mutation plus queue insertion use one SQLite transaction. A Firestore adapter must provide the equivalent atomic observable result through its backend-native transaction. Queue row fields, state transitions, retry/backoff, idempotent enqueue for shared content IDs, and verified completion update semantics remain to be specified. A crash after upload but before completion update must rediscover and safely retry/verify.
-. **Remote verification:** GCS upload completion and a transport checksum do not by themselves define the required SHA-256 identity proof. Pre-existing objects and ambiguous upload completion need a selected verification rule before Local capacity GC may trust a receipt.
-. **GCS generations and bucket policy:** no-replace upload and generation-conditional deletion are required. Bucket versioning, soft delete, retention, external overwrite/delete, bucket/prefix changes, and recreation of an object name affect whether a receipt proves a usable replica and are not specified.
-. **Capacity admission:** Put spool and GCS download staging share repository temp. No capacity ceiling, free-space reserve, concurrent-work reservation, upload/download limit, eviction priority, or capacity error mapping exists. Concurrent operations can otherwise all pass a free-space check and exhaust the volume.
-. **Doctor and response semantics:** current Doctor validates Local references and ignores valid orphans. In GCS mode it is not decided whether a missing Local cache with valid GCS is healthy, whether pending replication is a finding, or how remote corruption is reported. Cat cannot retract bytes already written if a Lease expires or the downstream writer fails.
-. **Mode configuration and repository migration:** current config has no mode or bucket. It is undecided whether mode/bucket identity belongs in Repository Format or separate repository-owned config and how existing Local repositories are prefetched, rolled back, moved between buckets, or returned to Local mode.
-. **Firestore and resource coordination:** current SQLite Coordinator and the accepted resource-lock store are local-path/process coordination. A Firestore Metadata adapter alone does not coordinate writers on other hosts. The deployment boundary, resource-lock authority, and consistent reference enumeration / GC contract for alternate Metadata backends must be decided. The queue API must remain backend-neutral and its atomic Entry-plus-enqueue contract must be provided by each adapter.
-. **Backup/restore:** operator responsibility is accepted, but no procedure defines how Metadata, Repository Format, delivery mode, and the transfer queue form a recoverable backup set.
+. **Queue details:** define queue row fields, retry/backoff scheduling, and completion update details. Authority and atomic Put-and-enqueue semantics are decided.
+. **Lease timing values:** choose expiry duration, heartbeat cadence, and clock source; lifecycle behavior and renewal-failure consequences are decided.
+. **GCS bucket policy:** define behavior under versioning, soft delete, retention, external overwrite/delete, bucket or prefix changes, and object recreation. Generation retention and conditional operations are required; arbitrary external corruption detection is not.
+. **Capacity admission:** Put spool and GCS download staging share repository temp. Capacity ceiling, free-space reserve, concurrent reservation/limits, eviction priority, and deterministic capacity error mapping remain unspecified.
+. **Doctor and Cat:** define GCS-mode Doctor findings for missing Local cache, pending transfer, or missing/corrupt GCS content. Cat can leave an already-written response prefix after downstream writer failure.
+. **Mode migration:** current config has no mode or bucket. Decide persistent location, Local-to-GCS prefill, bucket changes, GCS-to-Local recovery, rollback, and safe behavior for existing repositories.
+. **Firestore deployment:** current SQLite coordination is local-path/process scoped. A Firestore MetadataStore must define distributed coordination and consistent reference enumeration if deployed across hosts; adapter must retain atomic Entry-plus-queue semantics.
+. **Backup/restore:** define the recoverable set and quiescence boundary for Metadata, Repository Format, delivery configuration, transfer queue, and Local objects.
+. **Read revision policy:** decide whether a revision change during streaming returns the opened content or retries; this remains independent from Lease/GC safety.
 
-The GCS JSON API documents resumable insert with `ifGenerationMatch`, including `0` for no live destination object, and generation-matched deletion preconditions. These API mechanisms support the required no-replace/conditional-delete shape but do not decide this repository's verification, versioning, or external-mutation policy: [Objects: insert](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/insert), [request preconditions](https://docs.cloud.google.com/storage/docs/request-preconditions), [Objects: delete](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/delete).
+The GCS JSON API supports resumable insert with `ifGenerationMatch` and generation-matched deletion preconditions. These mechanisms support no-replace and conditional-delete behavior; they do not promise detection of arbitrary external corruption: [Objects: insert](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/insert), [request preconditions](https://docs.cloud.google.com/storage/docs/request-preconditions), [Objects: delete](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/delete).
 
 == Implementation readiness
 
-The architecture-level decisions requested for this revision are settled: GC protection uses only the resource-scoped expiring RWLock (RLock for Put/Get/upload/download, WLock for physical deletion), stored in a dedicated area of the SQLite coordination database; GCS transfer obligations use a content-ID queue owned by MetadataStore semantics and stored in the existing SQLite Metadata database. Put Entry mutation and queue enqueue share one SQLite transaction, while a future Firestore adapter must provide an equivalent backend-neutral atomic operation. The current operation-scoped Put staging Lease remains only a Commit/staging fence and is not a second GC protection mechanism.
-
-Implementation is **not ready for physical GC deletion or end-to-end Phase 6** until the Open Items below specify expired-WLock fencing, Put temporary-ID to content-ID lock transition, queue transitions/retry policy, remote verification, and capacity/mode/diagnostic boundaries. Work on the MetadataStore conformance/API shape and queue schema migration can proceed as a separately reviewable design/implementation slice, but must not claim full GCS delivery or safe GC until those remaining contracts are resolved.
+The architecture decisions are settled for one Lease model, Put ordering, GC WLock/re-evaluation, delayed in-flight I/O behavior, GCS API-confirmed transfer, and atomic SQLite queue registration. Physical GC and Phase 6 implementation are **not blocked on absolute fencing**. They must preserve the accepted availability boundary: a late request may yield a localized 404/read failure without Metadata mutation. Remaining Open Items concern queue details, timing values, capacity policy, mode migration, Doctor/Cat reporting, GCS bucket policy, backups, and Firestore deployment. Work can proceed in slices that respect those boundaries; unresolved operational choices must not be filled with stronger guarantees.
 
 == Migration and implementation sequence
 
-This is a design/migration order, not authorization to modify implementation in this task.
+This sequence maps dependencies; it does not authorize implementation in this design task.
 
-. **Resolve remaining contract details:** specify RWLock expiry/fencing and Put temp-to-content resource binding; queue fields/transitions/retry policy; remote verification; capacity admission; mode/bucket migration; Doctor semantics; and Firestore deployment/coordination boundary.
-. **Specify backend-neutral Metadata conformance:** define atomic Put-and-enqueue and transfer-completion semantic operations, in addition to existing Entry semantics and consistent reference enumeration. SQLite implements them using the existing Metadata database and a shared transaction; do not expose SQL or transaction types. Define conformance tests before a Firestore adapter.
-. **Add repository-owned delivery configuration and migrations:** preserve current Local-only repositories as Local mode unless an explicit migration is requested. Select Repository Format versus separate config. Define migration/rollback and backup before adding the queue schema.
-. **Preserve and isolate Local mode:** retain current Local no-replace CAS and existing CLI behavior; add a test proving Local mode never constructs/calls GCS. Do not change local SHA-256 format in this workstream.
-. **Implement durable GCS delivery obligation:** after Local publication, atomically commit the Entry and content-ID queue item in MetadataStore. Implement final-name resumable no-replace upload and verification; mark the queue item complete only after the chosen verification boundary. Retry precondition collisions by verifying the existing object.
-. **Implement Lease/Coordinator resource protocol:** protect temporary paths and content IDs, bind Put spool to the known content ID without a gap, coordinate Lease acquisition with GC eligibility, and stop on renewal failure. Keep all long copy/network/response I/O outside Coordinator critical sections.
-. **Implement Local-first GCS reads:** RLock cache/download resources, hydrate through shared temp, hash/verify before Local no-replace publication, then serve. Preserve Get destination atomicity; document Cat prefix-on-error behavior.
-. **Split GC:** capacity eviction (confirmed GCS replicas only) and invalid/orphan reconciliation (Local invalid/unreferenced and GCS unreferenced). Add backend APIs for raw-invalid cleanup and remote generation-conditional deletion only after ownership contracts are approved.
-. **Define Doctor/CLI/operations:** mode-aware diagnostics, capacity errors, transfer visibility, backup/restore procedures, and stable CLI exit/output behavior.
-. **Compatibility gate:** run existing Local CAS, migration, atomic Get, Doctor, CLI and Metadata semantics tests unchanged where still normative; revise only tests whose prior whole-operation Coordinator timing is explicitly superseded by approved Lease semantics.
+. **Preserve current Local behavior:** Local mode remains GCS-independent, retains no-replace publication and existing object hash verification, and should be covered by composition tests.
+. **Add unified Resource Lease semantics:** replace current Put-specific lease target with one multi-resource Lease model. Acquire temp RLock before Stage creation; acquire content-ID RLock after hashing while keeping temp protected; heartbeat, validate before Publish/Commit/state confirmation, and release on completion. Implement identical transitions for Local/GCS.
+. **Add the MetadataStore queue contract:** atomically mutate the Put Entry and enqueue its content ID. SQLite uses the existing Metadata DB transaction. Add migration and adapter-neutral semantic operations; Firestore conformance must use native transaction semantics.
+. **Implement content-ID uploader:** retry unconfirmed queue IDs from complete Local objects; publish directly to final GCS key with resumable API and no-replace precondition. Treat success responses as authoritative and reconcile ambiguous/precondition responses through final-object API attributes. Persist generation/required API metadata.
+. **Implement Local-first GCS reads:** hold content/temp RLocks, hydrate via shared temp, hash-verify bytes, and Local-publish without replacement before serving. Preserve Get atomic destination behavior. 404 remains a local operation failure; Cat may have emitted a prefix on downstream error.
+. **Implement GC classes:** capacity eviction of confirmed Local cache only; invalid/orphan reconciliation of Local/GCS candidates. Acquire and renew WLock, recheck references/replica/deletion eligibility after acquisition, and honor the documented possibility of a sent delete completing late. Add invalid-raw Local deletion APIs only with explicit ownership checks.
+. **Resolve remaining operation/config choices:** mode and bucket migration, capacity admission, Doctor/Cat output, backups, and Firestore deployment/coordination.
+. **Compatibility gate:** retain current Local CAS, migration, atomic Get, Doctor, CLI, and Metadata semantics tests where still normative. Rewrite full-operation lock timing assertions only to match the decided Lease semantics; add delayed-I/O/404 tests that assert no Metadata mutation.
 
 == Existing implementation to target mapping
 
@@ -106,7 +100,7 @@ This is a design/migration order, not authorization to modify implementation in 
 | Current source | Target responsibility or required change (design only)
 
 | `internal/cli/root.go`, `internal/config/config.go`, `internal/app/init.go`
-| Repository-owned mode/bucket selection and composition; exact persisted location and initialization/migration still open.
+| Repository-owned mode/bucket selection and composition; exact persisted location and initialization/migration remain open.
 
 | `internal/repository/put.go`
 | Preserve local spool/hash and Local publication before Metadata; add durable content-ID delivery discovery and async uploader only using the decided same-transaction Metadata queue contract.
@@ -118,7 +112,7 @@ This is a design/migration order, not authorization to modify implementation in 
 | Implement direct final-name resumable upload, Local-miss download, content verification, no-replace preconditions, object/generation listing and conditional deletion. Current adapter has no behavior to preserve.
 
 | `internal/coordinator/sqlite/coordinator.go`, `internal/repository/coordinator.go`
-| Retain current Put staging Lease as a Commit/cleanup fence. Implement resource RWLock R/W modes in a dedicated area of the SQLite coordination database, with SQLite-transaction atomicity, shared content/temp IDs, and stale-WLock fencing without long network I/O; do not add another GC protection mechanism. Local SQLite is not a multi-host Firestore coordinator.
+| Replace current Put-specific Lease with the single multi-resource RLock/WLock model in the dedicated SQLite coordination area. Acquire temp RLock before Stage, add content-ID RLock after hashing, heartbeat through completion, validate before Publish/Commit, and release. GC WLock rechecks eligibility; a delayed sent delete may complete late as documented. No second GC protection mechanism. Local SQLite is not a multi-host Firestore coordinator.
 
 | `internal/repository/repository.go` (Get/Cat/GC/Doctor)
 | Replace full-read Coordinator hold with resource RLocks and WLocks; route local misses to hydration; split capacity and orphan GC; define mode-aware Doctor after Open Items are decided.
@@ -142,16 +136,16 @@ This is a design/migration order, not authorization to modify implementation in 
 | Same bytes under multiple logical names create one content-ID queue item; Put atomically commits Entry and queue item in one Metadata operation; restart re-discovers unconfirmed IDs; restart after upload-before-completion retries by verify/no-replace; duplicate enqueue is idempotent; failure before local publish leaves no metadata; metadata replacement preserves old entry until commit.
 
 | Resumable GCS upload
-| direct final key only; interrupted session; ambiguous completion; existing correct object; existing wrong/corrupt object; duplicate concurrent uploader; generation precondition conflict; checksum mismatch. No partial/final invalid object is accepted as confirmed.
+| direct final key only; interrupted session; successful response; ambiguous response resolved by object lookup/API attributes; existing-name precondition handled idempotently; duplicate uploader; generation precondition conflict; required generation/API attributes persisted. Do not require full-object read-back SHA-256 or promise detection of arbitrary external GCS corruption.
 
 | Lease/GC races
-| RLock first excludes GC WLock; WLock first makes a new operation wait/recheck; Put temp-to-content binding has no gap; RLock/WLock expiry/renewal; renewal failure; expired WLock fencing against delayed unlink/GCS delete; multiple processes and lock modes.
+| temp RLock is acquired before Stage creation; content-ID RLock is added after hash while temp lock remains held; RLock sharing/WLock exclusivity; WLock rechecks eligibility; heartbeat/release; renewal failure blocks subsequent Publish/Commit/queue confirmation; request sent before expiry may complete late; subsequent read 404 fails locally with Metadata unchanged; Local and GCS follow same transitions.
 
 | Local capacity
 | Confirmed versus unconfirmed replica; active Put/Get/Cat/upload/download RLocks; insufficient space; shared temp exhaustion; simultaneous reservations; Local mode never evicts authority; last-known-good copy remains; capacity failure is classified and observable.
 
 | Read-through/Get/Cat
-| Local hit never calls GCS; Local miss complete download/hash mismatch/short read/cancel/retry; duplicate downloads; GC racing download/publication; no partial object becomes visible; Get destination remains old on fetch failure and atomically changes on success; Cat writer failure/lease expiry returns error with documented possible prefix.
+| Local hit never calls GCS; Local miss complete download/hash mismatch/short read/cancel/retry; duplicate downloads; GC racing download/publication; no partial object becomes visible; Get destination remains old on fetch failure and atomically changes on success; read 404 is local and does not mutate Metadata; Cat writer failure may leave a response prefix.
 
 | GC/Doctor
 | Local invalid raw names and malformed files; referenced missing/corrupt objects; valid unreferenced Local object; GCS orphan; shared content ID referenced by several entries; active upload/download/read RLocks and GC WLock; GCS generation changed before delete; delete timeout/ambiguous result/retry; Doctor behavior per mode and pending delivery. GC is idempotently retryable.
@@ -160,12 +154,12 @@ This is a design/migration order, not authorization to modify implementation in 
 | SQLite migration and golden compatibility; atomic expected-revision Create/Update/Move/Delete; sibling uniqueness; parent kind/existence; ancestry cycle; consistent ReferencedObjectIDs under GC; Firestore conformance and cross-host Coordinator test only if that deployment is approved.
 
 | Backup/restore and CLI
-| restore preserves format, delivery mode, content-ID queue/verification state and reference IDs; GCS/local missing replica diagnosis; capacity error mapping; transfer visibility/output stability; no credentials or bucket secrets persisted to logs.
+| restore preserves format, delivery mode, content-ID queue/verification state and reference IDs; GCS/local missing replica diagnosis; delayed-delete 404 remains local and leaves Metadata unchanged; capacity error mapping; transfer visibility/output stability; no credentials or bucket secrets persisted to logs.
 |===
 
 == Validation during this design task
 
-* `DESIGN_IR_REPO=/home/kusogaki/workspaces/design-ir ./tools/validate-design-ir.sh` — `VALID` (0.625 s).
-* `go test -count=1 ./...` — passed (2.787 s wall clock).
+* `DESIGN_IR_REPO=/home/kusogaki/workspaces/design-ir ./tools/validate-design-ir.sh` — `VALID`.
+* `go test ./...` — passed.
 * `git diff --check` — passed. No tests or Go files were modified.
 * GCS API references were checked against current primary Google Cloud documentation linked above; no library-specific implementation choice is assumed.

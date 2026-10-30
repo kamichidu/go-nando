@@ -24,13 +24,13 @@ The model uses Design IR v1alpha1 schema repository revision `455ed318b7bc409d3e
 | EntryID/parent-child identity, namespace constraints, committed-only state, revision, Unix-nanosecond timestamp representation, path-cache authority: `REQ-ENTRY-ID`, `REQ-NAMESPACE-UNIQUENESS`, `REQ-META-COMMITTED-ONLY`, `REQ-REVISION`, `DES-METADATA-MODEL`, `DES-REVISION-SEMANTICS`, `DES-TIMESTAMP-REPRESENTATION`; cache strategy is `OPEN-PATH-CACHE-UPDATE`.
 
 | `object-store.adoc`
-| CAS authority, atomic Commit, post-Commit Open/Exists, backend-private layout, verification/enumeration/deletion, Lease semantics and local/GCS status: `REQ-OBJECT-SSOT`, `REQ-OBJECT-COMMIT`, `DES-OBJECT-MODEL`, `DES-OBJECT-BACKEND-NEUTRALITY`, `DES-OBJECT-CONSISTENCY`, `DES-LEASE`, `DES-IDENTITY-TARGET`, `DES-PHASE6-GCS`; current GCS state is `IMP-CURRENT-GCS-STUB` with `OBS-GCS-PLACEHOLDER`.
+| CAS authority, atomic Commit, post-Commit Open/Exists, backend-private layout, verification/enumeration/deletion, unified Resource Lease state transitions and local/GCS status: `REQ-OBJECT-SSOT`, `REQ-OBJECT-COMMIT`, `DES-OBJECT-MODEL`, `DES-OBJECT-BACKEND-NEUTRALITY`, `DES-OBJECT-CONSISTENCY`, `DES-LEASE`, `DES-IDENTITY-TARGET`, `DES-PHASE6-GCS`; current GCS state is `IMP-CURRENT-GCS-STUB` with `OBS-GCS-PLACEHOLDER`.
 
 | `consistency-model.adoc`
 | Read consistency versus availability versus GC safety, Put ordering/exclusion, replacement, interruption outcomes and backend conformance: `REQ-OBJECT-COMMIT`, `REQ-METADATA-ORDER`, `REQ-PUT-GC-EXCLUSION`, `REQ-READ-GC-EXCLUSION`, `REQ-REPLACEMENT`, `REQ-NO-RESUME`, `DES-READ-SEMANTICS`, `DES-FAILURE-BOUNDARIES`, `DES-OBJECT-CONSISTENCY`; Read behavior after revision change is `OPEN-READ-REVISION-CHANGE`.
 
 | `state-machine.adoc`
-| Committed Entry lifecycle/revisions, Object lifecycle, failure boundaries, replacement and optional Lease lifecycle: corresponding `REQ-*` and `DES-*` nodes; interruption is not resumed.
+| Committed Entry lifecycle/revisions, Object lifecycle, failure boundaries, replacement and unified Resource Lease lifecycle: corresponding `REQ-*` and `DES-*` nodes; interruption is not resumed.
 
 | `roadmap.adoc`
 | Phase 0–7 status/goals, phase ordering, exit criteria, cross-cutting validation and deferred optimizations: `DES-PHASE0-SCAFFOLDING`, `DES-PHASE1-FORMAT`, `DES-PHASE2-CAS`, `DES-PHASE3-EXCLUSION`, `DES-PHASE4-CLEANUP-EXPORT`, `DES-PHASE5-DIRECTORIES`, `DES-PHASE6-GCS`, `DES-PHASE7-SYNC`, `DES-CROSS-CUTTING-VALIDATION`, `DES-DEFERRED-OPTIMIZATIONS`. The stable directory contract is separately represented by `DES-EXPLICIT-DIRECTORY-MODEL`. Phase order is also represented by `depends_on` relations. Exit criteria, status, phase numbers and checklist values are retained in roadmap-node attributes.
@@ -65,4 +65,4 @@ No representation gaps remain. AsciiDoc headings/navigation were presentation-on
 
 == Later storage design audit
 
-The content-ID-based Local/GCS delivery, resource RWLock, persistent transfer queue, capacity/orphan GC, metadata portability, current-source mapping, migration order, and test matrix are recorded in [storage-delivery-audit.md](storage-delivery-audit.md). The Design IR remains the sole semantic authority; the audit file is review evidence and a migration/test plan.
+The content-ID-based Local/GCS delivery, single Resource Lease model, persistent transfer queue, capacity/orphan GC, metadata portability, current-source mapping, migration order, and test matrix are recorded in [storage-delivery-audit.md](storage-delivery-audit.md). The Design IR remains the sole semantic authority; the audit file is review evidence and a migration/test plan.
