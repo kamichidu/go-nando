@@ -4,6 +4,7 @@ go 1.25.1
 
 require (
 	cloud.google.com/go/storage v1.50.0
+	github.com/BurntSushi/toml v1.6.0
 	github.com/google/uuid v1.6.0
 	github.com/kamichidu/go-flagshim v0.0.0-20260706215804-c7cec50d3e31
 	golang.org/x/sys v0.46.0

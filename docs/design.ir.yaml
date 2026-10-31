@@ -242,6 +242,26 @@ nodes:
         corruption_or_verification_failure: 5
     provenance:
       origin: imported
+  - id: DES-RUNTIME-CONFIGURATION
+    level: system_design
+    kind: user-configuration
+    statement: >-
+      Per-user runtime configuration is TOML at $XDG_CONFIG_HOME/nando/config.toml on Linux, macOS, and Windows when XDG_CONFIG_HOME is set; otherwise it is ~/.config/nando/config.toml on Linux/macOS and %USERPROFILE%/.config/nando/config.toml on Windows. Do not use os.UserConfigDir, macOS Application Support, Windows AppData, or conf.d for the new config location. Repository data is independent: $XDG_DATA_HOME/nando when set, otherwise ~/.local/share/nando on Linux/macOS and %USERPROFILE%/.local/share/nando on Windows. CLI arguments override TOML values, which override these defaults. A missing implicit config uses defaults; a missing explicit --config or malformed existing TOML is an error. Runtime keys are repository, verbose, daemon_endpoint, daemon_token_file, daemon_ca_cert, daemon_tls_cert, and daemon_tls_key; repository delivery settings remain repository-owned in repository.json. If a previous os.UserConfigDir-based initialized repository exists and the new default data repository does not, require explicit repository selection to prevent silently opening a different repository.
+    attributes:
+      format: TOML
+      config_filename: config.toml
+      config_subdirectories: unsupported
+      config_directory: XDG_CONFIG_HOME/nando-or-home/.config/nando
+      default_data_directory: XDG_DATA_HOME/nando-or-home/.local/share/nando
+      data_and_config_separate: true
+      precedence: [CLI-arguments, TOML-config, platform-defaults]
+      implicit_missing_config: defaults
+      explicit_missing_config: error
+      malformed_config: error
+      migration_guard: require-explicit-selection-when-legacy-repository-detected
+      active_keys: [repository, verbose, daemon_endpoint, daemon_token_file, daemon_ca_cert, daemon_tls_cert, daemon_tls_key]
+    provenance:
+      origin: human-authored
   - id: DES-APPLICATION-BOUNDARY
     level: system_design
     kind: responsibility-model
@@ -343,7 +363,7 @@ nodes:
   - id: DES-CONSTRUCTION
     level: system_design
     kind: composition-root
-    statement: The executable composition root reads persisted Repository Format metadata and Repository settings, validates their meaning and compatibility before use, then composes the metadata backend, object backend, digest algorithm, and Repository. Repository settings own Local/GCS delivery mode, GCS bucket, and capacity policy; they are distinct from per-user runtime configuration. No new general settings framework is implied. The SQLite adapter owns schema migrations and persistence of Repository Format values.
+    statement: The executable composition root reads persisted Repository Format metadata and Repository settings, validates their meaning and compatibility before use, then composes the metadata backend, object backend, digest algorithm, and Repository. Repository settings own Local/GCS delivery mode, GCS bucket, and capacity policy; they are distinct from per-user runtime TOML configuration, which owns repository selection and client/daemon runtime options only. The SQLite adapter owns schema migrations and persistence of Repository Format values.
     attributes:
       current_backends: [SQLite, local filesystem Object Store]
       planned_backend_selection: repository-owned-configuration
@@ -1153,6 +1173,14 @@ relations:
     from: DES-DAEMON-RUNTIME
     type: depends_on
     to: DES-REPOSITORY-BOUNDARIES
+  - id: REL-CLI-RUNTIME-CONFIGURATION
+    from: DES-CLI-BOUNDARY
+    type: depends_on
+    to: DES-RUNTIME-CONFIGURATION
+  - id: REL-DAEMON-RUNTIME-CONFIGURATION
+    from: DES-DAEMON-RUNTIME
+    type: depends_on
+    to: DES-RUNTIME-CONFIGURATION
   - id: REL-DAEMON-RESOURCE-SESSIONS
     from: DES-DAEMON-RUNTIME
     type: depends_on

@@ -4,23 +4,27 @@ import (
 	"errors"
 	"os"
 	"path"
-	"path/filepath"
+	"runtime"
 	"strings"
+
+	"github.com/kamichidu/go-nando/internal/config"
 )
 
 // ErrInvalidPath is returned when a logical path is invalid or attempts to escape root.
 var ErrInvalidPath = errors.New("invalid logical repository path")
 
-// DefaultRepositoryDir returns the default directory path for storing the nando repository.
-// Under macOS: ~/Library/Application Support/nando
-// Under Windows: %APPDATA%\nando
-// Under Linux: ~/.config/nando (or $XDG_CONFIG_HOME/nando)
+// DefaultRepositoryDir returns the XDG-style data directory, separate from
+// per-user configuration on every supported platform.
 func DefaultRepositoryDir() (string, error) {
-	base, err := os.UserConfigDir()
+	env := map[string]string{
+		"HOME": os.Getenv("HOME"), "USERPROFILE": os.Getenv("USERPROFILE"),
+		"XDG_CONFIG_HOME": os.Getenv("XDG_CONFIG_HOME"), "XDG_DATA_HOME": os.Getenv("XDG_DATA_HOME"),
+	}
+	resolved, err := config.ResolvePaths(runtime.GOOS, env)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "nando"), nil
+	return resolved.DataDir, nil
 }
 
 // NormalizeLogicalPath cleans and converts any path to a standardized, absolute, case-sensitive logical path.

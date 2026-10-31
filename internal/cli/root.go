@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/kamichidu/go-flagshim"
@@ -20,7 +21,6 @@ import (
 	"github.com/kamichidu/go-nando/internal/objectstore"
 	"github.com/kamichidu/go-nando/internal/objectstore/gcs"
 	"github.com/kamichidu/go-nando/internal/objectstore/local"
-	"github.com/kamichidu/go-nando/internal/paths"
 	"github.com/kamichidu/go-nando/internal/repository"
 	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
 	"github.com/kamichidu/go-nando/pkg/controlrpc"
@@ -34,6 +34,7 @@ type GlobalFlags struct {
 	Repository       string
 	ConfigFile       string
 	Verbose          bool
+	VerboseSet       bool
 	DaemonEndpoint   string
 	DaemonTokenFile  string
 	DaemonCACertFile string
@@ -63,7 +64,7 @@ func (c *RootCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) c
 	fs.Alias("repository", "r")
 	fs.StringVar(&c.flags.ConfigFile, "config", "", "configuration file path")
 	fs.Alias("config", "c")
-	fs.BoolVar(&c.flags.Verbose, "verbose", false, "enable verbose output")
+	fs.Var(trackedBoolFlag{value: &c.flags.Verbose, wasSet: &c.flags.VerboseSet}, "verbose", "enable or disable verbose output")
 	fs.Alias("verbose", "v")
 	fs.StringVar(&c.flags.DaemonEndpoint, "daemon-endpoint", "", "daemon control endpoint (unix:///path or tcp://host:port)")
 	fs.StringVar(&c.flags.DaemonTokenFile, "daemon-token-file", "", "private bearer-token file for TCP daemon access")
@@ -80,7 +81,14 @@ func NewDaemonClientFromContext(ctx context.Context) (*controlrpc.Client, error)
 	if err != nil {
 		return nil, err
 	}
+	cfg, err := ResolveConfigFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
 	endpoint := flags.DaemonEndpoint
+	if endpoint == "" {
+		endpoint = cfg.DaemonEndpoint
+	}
 	if endpoint == "" {
 		endpoint, err = controlrpc.DefaultEndpoint(repoDir)
 		if err != nil {
@@ -88,15 +96,23 @@ func NewDaemonClientFromContext(ctx context.Context) (*controlrpc.Client, error)
 		}
 	}
 	var token string
-	if flags.DaemonTokenFile != "" {
-		token, err = controlrpc.ReadTokenFile(flags.DaemonTokenFile)
+	tokenFile := flags.DaemonTokenFile
+	if tokenFile == "" {
+		tokenFile = cfg.DaemonTokenFile
+	}
+	if tokenFile != "" {
+		token, err = controlrpc.ReadTokenFile(tokenFile)
 		if err != nil {
 			return nil, fmt.Errorf("read daemon bearer token: %w", err)
 		}
 	}
 	var caPEM []byte
-	if flags.DaemonCACertFile != "" {
-		caPEM, err = os.ReadFile(flags.DaemonCACertFile)
+	caCertFile := flags.DaemonCACertFile
+	if caCertFile == "" {
+		caCertFile = cfg.DaemonCACert
+	}
+	if caCertFile != "" {
+		caPEM, err = os.ReadFile(caCertFile)
 		if err != nil {
 			return nil, fmt.Errorf("read daemon CA certificate: %w", err)
 		}
@@ -114,6 +130,23 @@ func (c *RootCommand) Run(ctx context.Context, args []string) error {
 	// If no subcommand was parsed, show usage.
 	return flag.ErrHelp
 }
+
+type trackedBoolFlag struct {
+	value  *bool
+	wasSet *bool
+}
+
+func (f trackedBoolFlag) String() string { return strconv.FormatBool(*f.value) }
+func (f trackedBoolFlag) Set(value string) error {
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return err
+	}
+	*f.value = parsed
+	*f.wasSet = true
+	return nil
+}
+func (trackedBoolFlag) IsBoolFlag() bool { return true }
 
 // MapError translates internal errors to specific process exit codes.
 func (c *RootCommand) MapError(err error) int {
@@ -165,35 +198,56 @@ func (c *RootCommand) MapError(err error) int {
 	return 1 // General error
 }
 
-// ResolveRepositoryAndVerbose resolves configuration based on CLI -> Config File -> Default priority.
+// ResolveConfigFromContext loads explicit or default TOML user configuration.
+func ResolveConfigFromContext(ctx context.Context) (*config.Config, error) {
+	flags := flagshim.MustFlagFromContext[GlobalFlags](ctx)
+	cfg, _, err := config.LoadOptionalConfig(flags.ConfigFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load configuration file: %w", err)
+	}
+	return cfg, nil
+}
+
+// ResolveRepositoryAndVerbose applies CLI -> TOML config -> XDG data default.
 func ResolveRepositoryAndVerbose(ctx context.Context) (string, bool, error) {
 	gFlags := flagshim.MustFlagFromContext[GlobalFlags](ctx)
-
-	// 1. Set Default
-	repoDir, err := paths.DefaultRepositoryDir()
+	cfg, err := ResolveConfigFromContext(ctx)
 	if err != nil {
-		return "", false, fmt.Errorf("failed to determine default user configuration directory: %w", err)
+		return "", false, err
 	}
-	verbose := false
-
-	// 2. Load Config File if provided
-	if gFlags.ConfigFile != "" {
-		cfg, err := config.LoadConfig(gFlags.ConfigFile)
-		if err != nil {
-			return "", false, fmt.Errorf("failed to load configuration file: %w", err)
-		}
-		if cfg.Repository != "" {
-			repoDir = cfg.Repository
-		}
-		verbose = cfg.Verbose
+	resolvedPaths, err := config.DefaultPaths()
+	if err != nil {
+		return "", false, fmt.Errorf("failed to determine XDG-style data directory: %w", err)
 	}
-
-	// 3. Override with CLI Options
+	repoDir := resolvedPaths.DataDir
+	if cfg.Repository != "" {
+		repoDir = cfg.Repository
+	}
 	if gFlags.Repository != "" {
 		repoDir = gFlags.Repository
 	}
-	if gFlags.Verbose {
-		verbose = true
+	verbose := cfg.Verbose
+	if gFlags.VerboseSet {
+		verbose = gFlags.Verbose
+	}
+	if cfg.Repository == "" && gFlags.Repository == "" {
+		legacyDir, err := config.DefaultLegacyRepositoryDir()
+		if err != nil {
+			return "", false, fmt.Errorf("failed to resolve legacy repository location: %w", err)
+		}
+		legacyDB := filepath.Join(legacyDir, "metadata.sqlite")
+		newDB := filepath.Join(repoDir, "metadata.sqlite")
+		if filepath.Clean(legacyDir) != filepath.Clean(repoDir) {
+			if _, err := os.Stat(newDB); errors.Is(err, os.ErrNotExist) {
+				if _, legacyErr := os.Stat(legacyDB); legacyErr == nil {
+					return "", false, fmt.Errorf("legacy repository found at %q; set repository in config.toml or pass --repository to select it explicitly", legacyDir)
+				} else if !errors.Is(legacyErr, os.ErrNotExist) {
+					return "", false, fmt.Errorf("inspect legacy repository location %q: %w", legacyDir, legacyErr)
+				}
+			} else if err != nil {
+				return "", false, err
+			}
+		}
 	}
 
 	return repoDir, verbose, nil

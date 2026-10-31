@@ -3,6 +3,15 @@ package commands_test
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -152,6 +161,212 @@ func TestPutUsesDaemonResourceSession(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("daemon did not exit after cancellation")
 	}
+}
+
+func TestTOMLConfigSelectsRepositoryAndSharedDaemonEndpoint(t *testing.T) {
+	repoDir := filepath.Join(t.TempDir(), "configured-repository")
+	socketDir := t.TempDir()
+	// Use a test-owned absolute socket path as the configured endpoint.
+	endpoint := "unix://" + filepath.Join(socketDir, "configured.sock")
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	configText := fmt.Sprintf("repository = %q\nverbose = true\ndaemon_endpoint = %q\ndaemon_token_file = \"\"\ndaemon_ca_cert = \"\"\ndaemon_tls_cert = \"\"\ndaemon_tls_key = \"\"\n", repoDir, endpoint)
+	if err := os.WriteFile(configPath, []byte(configText), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--config", configPath, "init"}); code != 0 {
+		t.Fatalf("TOML-selected init: code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "[verbose]") {
+		t.Fatalf("TOML verbose=true did not affect CLI behavior: stderr=%q", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "metadata.sqlite")); err != nil {
+		t.Fatalf("TOML repository path was not used: %v", err)
+	}
+
+	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
+	daemonResult := make(chan int, 1)
+	go func() {
+		var daemonOut, daemonErr bytes.Buffer
+		daemonResult <- executeCLI(daemonCtx, &daemonOut, &daemonErr, []string{"--config", configPath, "daemon"})
+	}()
+	defer func() {
+		cancelDaemon()
+		select {
+		case <-daemonResult:
+		case <-time.After(5 * time.Second):
+			t.Error("configured daemon did not stop")
+		}
+	}()
+	client, err := controlrpc.NewClient(controlrpc.ClientConfig{Endpoint: endpoint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var ready struct {
+			Version string `json:"version"`
+		}
+		if err := client.Call(context.Background(), controlrpc.MethodPing, struct{}{}, &ready); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	var ready struct {
+		Version string `json:"version"`
+	}
+	if err := client.Call(context.Background(), controlrpc.MethodPing, struct{}{}, &ready); err != nil {
+		t.Fatalf("daemon did not listen on TOML endpoint %q: %v", endpoint, err)
+	}
+	source := filepath.Join(t.TempDir(), "input.txt")
+	if err := os.WriteFile(source, []byte("TOML config integration"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--config", configPath, "put", source, "/configured.txt"}); code != 0 {
+		t.Fatalf("CLI did not share TOML repository/endpoint: code=%d stderr=%q", code, stderr.String())
+	}
+	var entry controlrpc.Entry
+	if err := client.Call(context.Background(), controlrpc.MethodStat, map[string]string{"path": "/configured.txt"}, &entry); err != nil || entry.Size != int64(len("TOML config integration")) {
+		t.Fatalf("configured repository state: entry=%+v err=%v", entry, err)
+	}
+	overrideEndpoint := "unix://" + filepath.Join(t.TempDir(), "cli-override.sock")
+	stdout.Reset()
+	stderr.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--config", configPath, "--daemon-endpoint", overrideEndpoint, "stat", "/configured.txt"}); code == 0 || !strings.Contains(stderr.String(), strings.TrimPrefix(overrideEndpoint, "unix://")) {
+		t.Fatalf("CLI endpoint did not override TOML endpoint: code=%d stderr=%q", code, stderr.String())
+	}
+
+	cliOverride := filepath.Join(t.TempDir(), "cli-override")
+	stdout.Reset()
+	stderr.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--config", configPath, "--repository", cliOverride, "--verbose=false", "init"}); code != 0 {
+		t.Fatalf("CLI repository override over TOML: code=%d stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "[verbose]") {
+		t.Fatalf("CLI verbose=false did not override TOML verbose=true: stderr=%q", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(cliOverride, "metadata.sqlite")); err != nil {
+		t.Fatalf("CLI repository override was ignored: %v", err)
+	}
+}
+
+func TestLegacyDefaultRepositoryRequiresExplicitSelection(t *testing.T) {
+	home := t.TempDir()
+	configHome := filepath.Join(home, ".config")
+	dataHome := filepath.Join(home, ".local", "share")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	legacyRepo := filepath.Join(configHome, "nando")
+	var stdout, stderr bytes.Buffer
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", legacyRepo, "init"}); code != 0 {
+		t.Fatalf("prepare legacy initialized repository: code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"stat", "/"}); code == 0 || !strings.Contains(stderr.String(), legacyRepo) {
+		t.Fatalf("legacy repository was not guarded: code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", legacyRepo, "init"}); code != 0 {
+		t.Fatalf("explicit legacy repository selection failed: code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestTOMLConfigTCPAuthenticationAndTLS(t *testing.T) {
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	certPEM, certPath, keyPath := writeCommandTestCertificate(t)
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("nando-test-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := "tcp://" + probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "tcp-config.toml")
+	configText := fmt.Sprintf("repository = %q\nverbose = false\ndaemon_endpoint = %q\ndaemon_token_file = %q\ndaemon_ca_cert = %q\ndaemon_tls_cert = %q\ndaemon_tls_key = %q\n", repoDir, endpoint, tokenPath, certPath, certPath, keyPath)
+	if err := os.WriteFile(configPath, []byte(configText), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--config", configPath, "init"}); code != 0 {
+		t.Fatalf("init configured TCP repository: code=%d stderr=%q", code, stderr.String())
+	}
+	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
+	daemonResult := make(chan int, 1)
+	go func() {
+		var daemonOut, daemonErr bytes.Buffer
+		daemonResult <- executeCLI(daemonCtx, &daemonOut, &daemonErr, []string{"--config", configPath, "daemon"})
+	}()
+	defer func() {
+		cancelDaemon()
+		select {
+		case <-daemonResult:
+		case <-time.After(5 * time.Second):
+			t.Error("configured TCP daemon did not stop")
+		}
+	}()
+	source := filepath.Join(t.TempDir(), "input")
+	if err := os.WriteFile(source, []byte("TLS configured Resource"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		stdout.Reset()
+		stderr.Reset()
+		code := executeCLI(context.Background(), &stdout, &stderr, []string{"--config", configPath, "put", source, "/secure.txt"})
+		if code == 0 {
+			return
+		}
+		lastErr = fmt.Errorf("CLI put returned %d: %s", code, stderr.String())
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("TOML TLS/auth settings did not connect daemon and CLI: %v (CA bytes=%d)", lastErr, len(certPEM))
+}
+
+func writeCommandTestCertificate(t *testing.T) ([]byte, string, string) {
+	t.Helper()
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "127.0.0.1"},
+		NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true, IsCA: true,
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	dir := t.TempDir()
+	certPath, keyPath := filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key")
+	if err := os.WriteFile(certPath, certPEM, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return certPEM, certPath, keyPath
 }
 
 func TestCLI(t *testing.T) {

@@ -37,7 +37,18 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
+	cfg, err := cli.ResolveConfigFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	globalFlags := flagshim.MustFlagFromContext[cli.GlobalFlags](ctx)
 	endpoint := c.listen
+	if endpoint == "" {
+		endpoint = globalFlags.DaemonEndpoint
+	}
+	if endpoint == "" {
+		endpoint = cfg.DaemonEndpoint
+	}
 	if endpoint == "" {
 		endpoint, err = controlrpc.DefaultEndpoint(repoDir)
 		if err != nil {
@@ -56,17 +67,33 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 	}
 	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
+	tokenFile := c.tokenFile
+	if tokenFile == "" {
+		tokenFile = globalFlags.DaemonTokenFile
+	}
+	if tokenFile == "" {
+		tokenFile = cfg.DaemonTokenFile
+	}
 	var token string
-	if c.tokenFile != "" {
-		token, err = controlrpc.ReadTokenFile(c.tokenFile)
+	if tokenFile != "" {
+		token, err = controlrpc.ReadTokenFile(tokenFile)
 		if err != nil {
 			return fmt.Errorf("read daemon bearer token: %w", err)
 		}
 	}
 	return daemon.Serve(ctx, application, repoDir, controlrpc.ListenConfig{
 		Endpoint: endpoint,
-		CertFile: c.tlsCert,
-		KeyFile:  c.tlsKey,
+		CertFile: firstNonEmpty(c.tlsCert, cfg.DaemonTLSCert),
+		KeyFile:  firstNonEmpty(c.tlsKey, cfg.DaemonTLSKey),
 		Token:    token,
 	})
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
