@@ -11,21 +11,21 @@ import (
 	"sort"
 	"time"
 
+	"github.com/kamichidu/go-nando/internal/coordinator"
 	sqlitedriver "modernc.org/sqlite"
 )
 
-// Coordinator serializes operations by holding a SQLite IMMEDIATE writer
-// transaction on the repository's dedicated coordination database.
+// Coordinator stores cross-process resource leases and short-lived exclusive
+// coordination transactions in the repository's dedicated SQLite database.
 type Coordinator struct {
-	db     *sql.DB
-	leases *sql.DB
+	db *sql.DB
 }
 
-type ResourceLockMode string
+type ResourceLockMode = coordinator.LockMode
 
 const (
-	RLock ResourceLockMode = "R"
-	WLock ResourceLockMode = "W"
+	RLock = coordinator.RLock
+	WLock = coordinator.WLock
 )
 
 var (
@@ -39,8 +39,8 @@ var (
 	// cleanly released. If returned after the callback succeeds, the callback's
 	// operation may already have completed.
 	ErrRelease = errors.New("coordination lock release failed")
-	// ErrLeaseExpired identifies a Put whose staging Lease is no longer active.
-	ErrLeaseExpired        = errors.New("put staging lease expired or was invalidated")
+	// ErrLeaseExpired identifies a Resource Lease set that is no longer active.
+	ErrLeaseExpired        = errors.New("resource lease expired or was invalidated")
 	ErrResourceLockExpired = errors.New("resource lock expired or was invalidated")
 )
 
@@ -71,24 +71,12 @@ func Open(dbPath string) (*Coordinator, error) {
 	)`); err != nil {
 		return nil, errors.Join(fmt.Errorf("initialize resource lock table: %w", err), db.Close())
 	}
-	leasePath := filepath.Join(filepath.Dir(absPath), "put-leases.db")
-	leases, err := sql.Open("sqlite", leasePath+"?_txlock=immediate&_pragma=busy_timeout%3d0")
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("open Put Lease database %q: %w", leasePath, err), db.Close())
-	}
-	leases.SetMaxOpenConns(1)
-	if _, err := leases.Exec(`CREATE TABLE IF NOT EXISTS put_leases (
-		operation_id TEXT PRIMARY KEY,
-		expires_at INTEGER NOT NULL
-	)`); err != nil {
-		return nil, errors.Join(fmt.Errorf("initialize Put Lease database: %w", err), leases.Close(), db.Close())
-	}
-	return &Coordinator{db: db, leases: leases}, nil
+	return &Coordinator{db: db}, nil
 }
 
 // Close closes the database connection pool.
 func (c *Coordinator) Close() error {
-	return errors.Join(c.db.Close(), c.leases.Close())
+	return c.db.Close()
 }
 
 // AcquireResourceLock atomically acquires a shared RLock or exclusive WLock
@@ -241,19 +229,36 @@ func (c *Coordinator) withCoordinationTransaction(ctx context.Context, operation
 // it and releases its OS lock; release errors are returned with ErrRelease or
 // attached to a re-thrown panic.
 func (c *Coordinator) Exclusive(ctx context.Context, operation func() error) (err error) {
-	return c.exclusive(ctx, "", false, operation)
+	return c.exclusive(ctx, operation)
 }
 
-// ExclusiveWithLease validates a Put Lease after acquiring Repository
-// exclusion and before allowing any Commit-side mutation.
+// ExclusiveWithLease is retained as a compatibility name. Resource Leases
+// provide exclusion; this method validates them without holding a long-lived
+// SQLite writer transaction around the callback.
 func (c *Coordinator) ExclusiveWithLease(ctx context.Context, operationID string, operation func() error) error {
 	if operationID == "" {
 		return errors.New("put lease operation ID is empty")
 	}
-	return c.exclusive(ctx, operationID, true, operation)
+	if operation == nil {
+		return errors.New("coordination operation is nil")
+	}
+	active, err := c.ValidateResourceLocks(ctx, operationID)
+	if err != nil {
+		return err
+	}
+	if !active {
+		return fmt.Errorf("%w: %s", ErrLeaseExpired, operationID)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%w: %w", ErrOperation, err)
+	}
+	if err := operation(); err != nil {
+		return fmt.Errorf("%w: %w", ErrOperation, err)
+	}
+	return nil
 }
 
-func (c *Coordinator) exclusive(ctx context.Context, operationID string, validateLease bool, operation func() error) (err error) {
+func (c *Coordinator) exclusive(ctx context.Context, operation func() error) (err error) {
 	if operation == nil {
 		return errors.New("coordination operation is nil")
 	}
@@ -285,19 +290,6 @@ func (c *Coordinator) exclusive(ctx context.Context, operationID string, validat
 		return fmt.Errorf("%w: begin exclusive coordination transaction: %w", ErrAcquire, err)
 	}
 	transactionOpen = true
-	if validateLease {
-		var valid int
-		if err := c.leases.QueryRowContext(ctx, `SELECT EXISTS (
-			SELECT 1 FROM put_leases
-			WHERE operation_id = ? AND expires_at > CAST(unixepoch('subsec') * 1000 AS INTEGER)
-		)`, operationID).Scan(&valid); err != nil {
-			return fmt.Errorf("validate Put Lease: %w", err)
-		}
-		if valid == 0 {
-			return fmt.Errorf("%w: %s", ErrLeaseExpired, operationID)
-		}
-	}
-
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("%w: canceled before callback: %w", ErrOperation, err)
 	}
@@ -307,17 +299,12 @@ func (c *Coordinator) exclusive(ctx context.Context, operationID string, validat
 	return nil
 }
 
-// AcquireLease creates one operation-scoped Lease. The database clock defines
-// expiry so processes on the same host use one time source.
+// AcquireLease is a compatibility wrapper for the Put temporary-resource RLock.
 func (c *Coordinator) AcquireLease(ctx context.Context, operationID string, ttl time.Duration) error {
 	if operationID == "" || ttl <= 0 {
 		return errors.New("put lease requires a non-empty operation ID and positive TTL")
 	}
-	return c.withLeaseTransaction(ctx, func(conn *sql.Conn) error {
-		_, err := conn.ExecContext(ctx, `INSERT INTO put_leases (operation_id, expires_at)
-			VALUES (?, CAST(unixepoch('subsec') * 1000 AS INTEGER) + ?)`, operationID, ttlMilliseconds(ttl))
-		return err
-	})
+	return c.AcquireResourceLock(ctx, "temp:"+operationID, operationID, RLock, ttl)
 }
 
 // RenewLease extends only a still-unexpired Lease belonging to operationID.
@@ -326,67 +313,67 @@ func (c *Coordinator) RenewLease(ctx context.Context, operationID string, ttl ti
 	if operationID == "" || ttl <= 0 {
 		return false, errors.New("put lease requires a non-empty operation ID and positive TTL")
 	}
-	active := false
-	err := c.withLeaseTransaction(ctx, func(conn *sql.Conn) error {
-		result, err := conn.ExecContext(ctx, `UPDATE put_leases
-			SET expires_at = CAST(unixepoch('subsec') * 1000 AS INTEGER) + ?
-			WHERE operation_id = ? AND expires_at > CAST(unixepoch('subsec') * 1000 AS INTEGER)`,
-			ttlMilliseconds(ttl), operationID)
+	return c.RenewResourceLocks(ctx, operationID, ttl)
+}
+
+// InvalidateLease is a compatibility wrapper for Resource Lease invalidation.
+func (c *Coordinator) InvalidateLease(ctx context.Context, operationID string) error {
+	return c.InvalidateResourceLocks(ctx, operationID)
+}
+
+func (c *Coordinator) InvalidateResourceLocks(ctx context.Context, operationID string) error {
+	if operationID == "" {
+		return errors.New("resource lock operation ID is empty")
+	}
+	return c.withCoordinationTransaction(ctx, func(conn *sql.Conn) error {
+		_, err := conn.ExecContext(ctx, "UPDATE resource_locks SET expires_at = 0 WHERE operation_id = ?", operationID)
+		return err
+	})
+}
+
+// InvalidateExpiredLeases is a compatibility wrapper for Resource Lease cleanup.
+func (c *Coordinator) InvalidateExpiredLeases(ctx context.Context) ([]string, error) {
+	return c.InvalidateExpiredResourceLocks(ctx)
+}
+
+func (c *Coordinator) InvalidateExpiredResourceLocks(ctx context.Context) ([]string, error) {
+	var operationIDs []string
+	err := c.withCoordinationTransaction(ctx, func(conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, `SELECT DISTINCT operation_id FROM resource_locks WHERE expires_at=0 OR expires_at<=CAST(unixepoch('subsec')*1000 AS INTEGER)`)
 		if err != nil {
 			return err
 		}
-		rows, err := result.RowsAffected()
-		active = rows == 1
-		return err
-	})
-	return active, err
-}
-
-// InvalidateLease prevents a canceled or failed Stage from renewing or
-// committing. Invalidation is ordered against Commit by Repository exclusion.
-func (c *Coordinator) InvalidateLease(ctx context.Context, operationID string) error {
-	if operationID == "" {
-		return errors.New("put lease operation ID is empty")
-	}
-	return c.withLeaseTransaction(ctx, func(conn *sql.Conn) error {
-		_, err := conn.ExecContext(ctx, "UPDATE put_leases SET expires_at = 0 WHERE operation_id = ?", operationID)
-		return err
-	})
-}
-
-// InvalidateExpiredLeases serializes Lease invalidation with Commit and keeps
-// invalidated rows until their backend staging has been collected.
-func (c *Coordinator) InvalidateExpiredLeases(ctx context.Context) ([]string, error) {
-	var operationIDs []string
-	err := c.Exclusive(ctx, func() error {
-		return c.withLeaseTransaction(ctx, func(conn *sql.Conn) error {
-			rows, err := conn.QueryContext(ctx, `UPDATE put_leases SET expires_at = 0
-				WHERE expires_at = 0 OR expires_at <= CAST(unixepoch('subsec') * 1000 AS INTEGER)
-				RETURNING operation_id`)
-			if err != nil {
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
 				return err
 			}
-			defer rows.Close()
-			for rows.Next() {
-				var operationID string
-				if err := rows.Scan(&operationID); err != nil {
-					return err
-				}
-				operationIDs = append(operationIDs, operationID)
+			operationIDs = append(operationIDs, id)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		for _, id := range operationIDs {
+			if _, err := conn.ExecContext(ctx, "UPDATE resource_locks SET expires_at=0 WHERE operation_id=?", id); err != nil {
+				return err
 			}
-			return rows.Err()
-		})
+		}
+		return nil
 	})
 	sort.Strings(operationIDs)
 	return operationIDs, err
 }
 
-// ActiveLeaseIDs returns operation IDs whose Lease is currently unexpired.
+// ActiveLeaseIDs is a compatibility wrapper for active Resource Lease operations.
 func (c *Coordinator) ActiveLeaseIDs(ctx context.Context) ([]string, error) {
+	return c.ActiveResourceOperationIDs(ctx)
+}
+
+func (c *Coordinator) ActiveResourceOperationIDs(ctx context.Context) ([]string, error) {
 	var operationIDs []string
-	err := c.withLeaseTransaction(ctx, func(conn *sql.Conn) error {
-		rows, err := conn.QueryContext(ctx, `SELECT operation_id FROM put_leases
-			WHERE expires_at > CAST(unixepoch('subsec') * 1000 AS INTEGER)`)
+	err := c.withCoordinationTransaction(ctx, func(conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, `SELECT operation_id FROM resource_locks GROUP BY operation_id HAVING min(expires_at)>CAST(unixepoch('subsec')*1000 AS INTEGER)`)
 		if err != nil {
 			return err
 		}
@@ -407,59 +394,23 @@ func (c *Coordinator) ActiveLeaseIDs(ctx context.Context) ([]string, error) {
 	return operationIDs, nil
 }
 
-// ForgetExpiredLease removes only an already invalidated Lease, after its
-// backend staging area has been removed successfully.
+// ForgetExpiredLease is a compatibility wrapper for cleaned Resource Leases.
 func (c *Coordinator) ForgetExpiredLease(ctx context.Context, operationID string) error {
+	return c.ForgetExpiredResourceLocks(ctx, operationID)
+}
+
+func (c *Coordinator) ForgetExpiredResourceLocks(ctx context.Context, operationID string) error {
 	if operationID == "" {
-		return errors.New("put lease operation ID is empty")
+		return errors.New("resource lock operation ID is empty")
 	}
-	return c.withLeaseTransaction(ctx, func(conn *sql.Conn) error {
-		_, err := conn.ExecContext(ctx, "DELETE FROM put_leases WHERE operation_id = ? AND expires_at = 0", operationID)
+	return c.withCoordinationTransaction(ctx, func(conn *sql.Conn) error {
+		_, err := conn.ExecContext(ctx, "DELETE FROM resource_locks WHERE operation_id = ? AND expires_at = 0", operationID)
 		return err
 	})
 }
 
 func ttlMilliseconds(ttl time.Duration) int64 {
 	return (ttl.Milliseconds() + 1)
-}
-
-func (c *Coordinator) withLeaseTransaction(ctx context.Context, operation func(*sql.Conn) error) (retErr error) {
-	conn, err := c.leases.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	transactionOpen := false
-	defer func() {
-		panicValue := recover()
-		var releaseErr error
-		if transactionOpen {
-			if rollbackErr := rollbackAndDiscardOnFailure(conn); rollbackErr != nil {
-				releaseErr = errors.Join(releaseErr, fmt.Errorf("rollback Put Lease transaction: %w", rollbackErr))
-			}
-		}
-		if closeErr := conn.Close(); closeErr != nil {
-			releaseErr = errors.Join(releaseErr, closeErr)
-		}
-		if panicValue != nil {
-			if releaseErr != nil {
-				panic(errors.Join(fmt.Errorf("put lease operation panicked: %v", panicValue), releaseErr))
-			}
-			panic(panicValue)
-		}
-		retErr = errors.Join(retErr, releaseErr)
-	}()
-	if err := beginImmediate(ctx, conn); err != nil {
-		return err
-	}
-	transactionOpen = true
-	if err := operation(conn); err != nil {
-		return err
-	}
-	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
-		return fmt.Errorf("commit Put Lease transaction: %w", err)
-	}
-	transactionOpen = false
-	return nil
 }
 
 func rollbackAndDiscardOnFailure(conn *sql.Conn) error {

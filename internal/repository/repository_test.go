@@ -26,7 +26,7 @@ type fixedIDMetadataStore struct {
 	metadata.MetadataStore
 }
 
-func TestRepositoryCoordinatorProtectsPutAndCatFromGC(t *testing.T) {
+func TestResourceLeasesProtectPutAndReadsFromGC(t *testing.T) {
 	ctx := context.Background()
 	tempDir := t.TempDir()
 	hasher := content.NewHasher()
@@ -93,10 +93,8 @@ func TestRepositoryCoordinatorProtectsPutAndCatFromGC(t *testing.T) {
 	catDone := make(chan error, 1)
 	go func() { catDone <- catRepo.Cat(ctx, "/new.txt", io.Discard) }()
 	<-readEntered
-	waitCtx2, cancel2 := context.WithTimeout(ctx, 150*time.Millisecond)
-	defer cancel2()
-	if _, err := gcRepo.GC(waitCtx2); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("GC did not wait for the full Cat read: %v", err)
+	if deleted, err := gcRepo.GC(ctx); err != nil || deleted != 0 {
+		t.Fatalf("GC should preserve the referenced Object during Cat: deleted=%d err=%v", deleted, err)
 	}
 	close(readRelease)
 	if err := <-catDone; err != nil {
@@ -116,10 +114,8 @@ func TestRepositoryCoordinatorProtectsPutAndCatFromGC(t *testing.T) {
 	getDone := make(chan error, 1)
 	go func() { getDone <- getRepo.Get(ctx, "/new.txt", filepath.Join(tempDir, "exported.txt")) }()
 	<-getEntered
-	waitCtx3, cancel3 := context.WithTimeout(ctx, 150*time.Millisecond)
-	defer cancel3()
-	if _, err := gcRepo.GC(waitCtx3); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("GC did not wait for Get's object read: %v", err)
+	if deleted, err := gcRepo.GC(ctx); err != nil || deleted != 0 {
+		t.Fatalf("GC should preserve the referenced Object during Get: deleted=%d err=%v", deleted, err)
 	}
 	close(getRelease)
 	if err := <-getDone; err != nil {
@@ -200,8 +196,13 @@ func TestPutStageRunsOutsideRepositoryWideExclusion(t *testing.T) {
 	}
 	stageEntered := make(chan struct{})
 	stageRelease := make(chan struct{})
+	leaseChecker, err := coordinatorsqlite.Open(filepath.Join(tempDir, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer leaseChecker.Close()
 	putRepo := openRepositoryInstance(t, tempDir, metaStore, &blockingStageObjectStore{
-		ObjectStore: baseObjects,
+		ObjectStore: &assertStageLeaseObjectStore{ObjectStore: baseObjects, t: t, coordinator: leaseChecker},
 		entered:     stageEntered,
 		release:     stageRelease,
 	}, hasher)
@@ -328,6 +329,21 @@ type blockingStageObjectStore struct {
 	release chan struct{}
 }
 
+type assertStageLeaseObjectStore struct {
+	objectstore.ObjectStore
+	t           *testing.T
+	coordinator *coordinatorsqlite.Coordinator
+}
+
+func (s *assertStageLeaseObjectStore) BeginStage(ctx context.Context, operationID string) (objectstore.StageSession, error) {
+	s.t.Helper()
+	active, err := s.coordinator.ValidateResourceLocks(ctx, operationID)
+	if err != nil || !active {
+		return nil, fmt.Errorf("Stage began without active temp Resource RLock: active=%v err=%v", active, err)
+	}
+	return s.ObjectStore.BeginStage(ctx, operationID)
+}
+
 func (s *blockingStageObjectStore) BeginStage(ctx context.Context, operationID string) (objectstore.StageSession, error) {
 	session, err := s.ObjectStore.BeginStage(ctx, operationID)
 	if err != nil {
@@ -370,7 +386,7 @@ func (s blockingStageSession) Stage(ctx context.Context, src io.Reader) (objects
 	}
 }
 
-func TestRepositoryCoordinatorProtectsDoctorFromGCAndDoesNotLockMetadataDB(t *testing.T) {
+func TestDoctorDoesNotLockMetadataDBOrBlockGC(t *testing.T) {
 	ctx := context.Background()
 	tempDir := t.TempDir()
 	hasher := content.NewHasher()
@@ -396,10 +412,8 @@ func TestRepositoryCoordinatorProtectsDoctorFromGCAndDoesNotLockMetadataDB(t *te
 	if _, err := metaStore.Create(ctx, entry); err != nil {
 		t.Fatalf("coordination transaction blocked an independent Metadata DB writer: %v", err)
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
-	defer cancel()
-	if _, err := gcRepo.GC(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("GC did not wait for Doctor reference observation: %v", err)
+	if deleted, err := gcRepo.GC(ctx); err != nil || deleted != 0 {
+		t.Fatalf("GC should not block on non-destructive Doctor: deleted=%d err=%v", deleted, err)
 	}
 	close(listRelease)
 	if err := <-doctorDone; err != nil {

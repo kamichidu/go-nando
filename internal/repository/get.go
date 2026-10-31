@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/kamichidu/go-nando/internal/coordinator"
 	"github.com/kamichidu/go-nando/internal/metadata"
 )
 
@@ -18,9 +19,7 @@ var ErrDestinationPublished = errors.New("export destination was published")
 
 // Get exports a file from the repository to the local filesystem.
 func (r *Repository) Get(ctx context.Context, repoPath string, localPath string) error {
-	return r.coordinator.Exclusive(ctx, func() error {
-		return r.get(ctx, repoPath, localPath)
-	})
+	return r.get(ctx, repoPath, localPath)
 }
 
 func (r *Repository) get(ctx context.Context, repoPath string, localPath string) (retErr error) {
@@ -34,7 +33,12 @@ func (r *Repository) get(ctx context.Context, repoPath string, localPath string)
 	if entry.ObjectID == nil {
 		return fmt.Errorf("file entry %s has no associated object ID", entry.ID)
 	}
+	return r.withResourceLease(ctx, contentResourceID(entry.ObjectID.String()), coordinator.RLock, func(readCtx context.Context) error {
+		return r.getWithEntry(readCtx, entry, localPath)
+	})
+}
 
+func (r *Repository) getWithEntry(ctx context.Context, entry metadata.Entry, localPath string) (retErr error) {
 	parentDir := filepath.Dir(localPath)
 	if err := os.MkdirAll(parentDir, 0755); err != nil {
 		return fmt.Errorf("failed to create local destination directory %q: %w", parentDir, err)

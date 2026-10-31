@@ -276,57 +276,36 @@ func TestPutLeaseRenewalRacingExpirationCannotResurrectLease(t *testing.T) {
 	}
 }
 
-func TestPutLeaseRenewalDoesNotWaitForLongRepositoryReadLock(t *testing.T) {
+func TestResourceLeaseRenewalDoesNotHoldRepositoryWideLock(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "coordination.db")
 	reader := openCoordinator(t, dbPath)
 	renewer := openCoordinator(t, dbPath)
-	defer func() {
-		if err := reader.Close(); err != nil {
-			t.Errorf("close reader coordinator: %v", err)
-		}
-	}()
-	defer func() {
-		if err := renewer.Close(); err != nil {
-			t.Errorf("close renewal coordinator: %v", err)
-		}
-	}()
+	defer reader.Close()
+	defer renewer.Close()
 	const operationID = "2697db17-50fb-4499-a01a-25f6b47ba7cd"
-	if err := reader.AcquireLease(context.Background(), operationID, time.Second); err != nil {
+	if err := reader.AcquireResourceLock(context.Background(), "content:read", "reader-op", sqlite.RLock, time.Second); err != nil {
 		t.Fatal(err)
 	}
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	readDone := make(chan error, 1)
-	go func() {
-		readDone <- reader.Exclusive(context.Background(), func() error {
-			close(entered)
-			<-release
-			return nil
-		})
-	}()
-	<-entered
-
-	renewCtx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	if err := reader.AcquireResourceLock(context.Background(), "temp:put", operationID, sqlite.RLock, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
-	renewDone := make(chan error, 1)
+	done := make(chan error, 1)
 	go func() {
-		active, err := renewer.RenewLease(renewCtx, operationID, time.Second)
+		active, err := renewer.RenewResourceLocks(ctx, operationID, time.Second)
 		if err == nil && !active {
 			err = errors.New("Lease was not active during renewal")
 		}
-		renewDone <- err
+		done <- err
 	}()
 	select {
-	case err := <-renewDone:
+	case err := <-done:
 		if err != nil {
-			t.Fatalf("Lease renewal during coordinated read: %v", err)
+			t.Fatalf("Lease renewal alongside unrelated read: %v", err)
 		}
-	case <-renewCtx.Done():
-		t.Fatal("Lease renewal was blocked by the long Repository read lock")
-	}
-	close(release)
-	if err := <-readDone; err != nil {
-		t.Fatalf("coordinated read callback: %v", err)
+	case <-ctx.Done():
+		t.Fatal("resource Lease renewal was blocked by unrelated read activity")
 	}
 }
 

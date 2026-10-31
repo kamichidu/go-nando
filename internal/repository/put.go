@@ -8,22 +8,24 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/kamichidu/go-nando/internal/coordinator"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/objectstore"
 	"github.com/kamichidu/go-nando/internal/paths"
 )
 
 const (
-	putLeaseTTL       = 30 * time.Second
-	putLeaseRenewal   = 10 * time.Second
-	putCleanupTimeout = 5 * time.Second
+	resourceLeaseTTL       = 30 * time.Second
+	resourceLeaseHeartbeat = 5 * time.Second
+	putCleanupTimeout      = 5 * time.Second
 )
 
-// ErrPutCommitted indicates the Metadata Commit completed but post-commit Lease
-// or staging cleanup failed. Callers must not assume retrying is side-effect free.
+// ErrPutCommitted indicates the Metadata Commit completed but post-commit
+// staging cleanup or Resource Lease release failed. Retrying may duplicate work.
 var ErrPutCommitted = errors.New("Put metadata committed but staging cleanup failed")
 
 // Put imports a local file into the repository under the specified logical repository path.
@@ -57,7 +59,35 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 		return fmt.Errorf("clean expired Put staging: %w", err)
 	}
 	operationID := uuid.NewString()
-	session, err := r.objectStore.BeginStage(ctx, operationID)
+	if err := r.coordinator.AcquireResourceLock(ctx, temporaryResourceID(operationID), operationID, coordinator.RLock, resourceLeaseTTL); err != nil {
+		return fmt.Errorf("acquire temp RLock before Stage: %w", err)
+	}
+	metadataCommitted := false
+	defer func() {
+		cleanupErr := r.finishPutResources(operationID)
+		if cleanupErr != nil {
+			if metadataCommitted {
+				retErr = errors.Join(retErr, fmt.Errorf("%w: %w", ErrPutCommitted, cleanupErr))
+			} else {
+				retErr = errors.Join(retErr, fmt.Errorf("clean failed Put staging: %w", cleanupErr))
+			}
+		}
+	}()
+	leaseCtx, stopHeartbeat, err := r.startLeaseHeartbeat(ctx, operationID)
+	if err != nil {
+		return fmt.Errorf("start Resource Lease heartbeat: %w", err)
+	}
+	defer func() {
+		heartbeatErr := stopHeartbeat()
+		if heartbeatErr != nil {
+			if metadataCommitted {
+				retErr = errors.Join(retErr, fmt.Errorf("%w: %w", ErrPutCommitted, heartbeatErr))
+			} else {
+				retErr = errors.Join(retErr, heartbeatErr)
+			}
+		}
+	}()
+	session, err := r.objectStore.BeginStage(leaseCtx, operationID)
 	if err != nil {
 		return fmt.Errorf("begin Object Store Stage: %w", err)
 	}
@@ -67,28 +97,14 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 			retErr = errors.Join(retErr, session.Close())
 		}
 	}()
-	if err := r.coordinator.AcquireLease(ctx, operationID, putLeaseTTL); err != nil {
-		cleanupErr := r.objectStore.CleanupStaging(context.Background(), operationID)
-		closeErr := session.Close()
-		sessionOwned = false
-		return errors.Join(fmt.Errorf("acquire Put staging Lease: %w", err), closeErr, cleanupErr)
-	}
-	metadataCommitted := false
-	defer func() {
-		cleanupErr := r.finishPutLease(operationID)
-		if cleanupErr != nil {
-			if metadataCommitted {
-				retErr = errors.Join(retErr, fmt.Errorf("%w: %w", ErrPutCommitted, cleanupErr))
-			} else {
-				retErr = errors.Join(retErr, fmt.Errorf("clean failed Put staging: %w", cleanupErr))
-			}
-		}
-	}()
 
-	staged, err := r.stagePutInput(ctx, operationID, session, file)
+	staged, err := r.stagePutInput(leaseCtx, session, file)
 	sessionOwned = false
 	if err != nil {
 		return err
+	}
+	if err := r.coordinator.AcquireResourceLock(leaseCtx, contentResourceID(staged.ID().String()), operationID, coordinator.RLock, resourceLeaseTTL); err != nil {
+		return fmt.Errorf("acquire content ID RLock after hash: %w", err)
 	}
 
 	contentType := mime.TypeByExtension(filepath.Ext(localPath))
@@ -98,14 +114,17 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 	baseName := path.Base(normalized)
 	now := metadata.TimestampFromTime(time.Now().UTC())
 
-	err = r.coordinator.ExclusiveWithLease(ctx, operationID, func() error {
-		// Parent resolution and every persistent or externally visible mutation
-		// belong to the exclusive Commit half of Put.
-		parentID, err := r.resolveOrCreateParentDirectories(ctx, normalized)
+	err = func() error {
+		// Parent resolution, Object publication, and Metadata mutation happen
+		// while both resource RLocks remain active, without a long SQLite writer lock.
+		parentID, err := r.resolveOrCreateParentDirectories(leaseCtx, normalized)
 		if err != nil {
 			return err
 		}
-		res, err := r.objectStore.Publish(ctx, staged)
+		if err := r.validateLease(leaseCtx, operationID); err != nil {
+			return err
+		}
+		res, err := r.objectStore.Publish(leaseCtx, staged)
 		if err != nil {
 			return fmt.Errorf("publish staged object: %w", err)
 		}
@@ -116,7 +135,10 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 			return fmt.Errorf("object store published unexpected staged content: got %s/%d, want %s/%d", res.ID, res.Size, staged.ID(), staged.Size())
 		}
 
-		existing, err := r.metaStore.GetChild(ctx, parentID, baseName)
+		if err := r.validateLease(leaseCtx, operationID); err != nil {
+			return err
+		}
+		existing, err := r.metaStore.GetChild(leaseCtx, parentID, baseName)
 		if err == nil {
 			if existing.Kind == metadata.EntryKindDirectory {
 				return fmt.Errorf("cannot replace directory %s with a file: %w", repoPath, metadata.ErrEntryConflict)
@@ -126,7 +148,7 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 			existing.Mtime = metadata.TimestampFromTime(localStat.ModTime())
 			existing.Mode = uint32(localStat.Mode())
 			existing.ContentType = contentType
-			if _, err := r.metaStore.Update(ctx, existing); err != nil {
+			if _, err := r.metaStore.Update(leaseCtx, existing); err != nil {
 				return fmt.Errorf("failed to update entry metadata: %w", err)
 			}
 		} else if errors.Is(err, metadata.ErrEntryNotFound) {
@@ -144,7 +166,7 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 				CreatedAt:   now,
 				UpdatedAt:   now,
 			}
-			if _, err := r.metaStore.Create(ctx, created); err != nil {
+			if _, err := r.metaStore.Create(leaseCtx, created); err != nil {
 				return fmt.Errorf("failed to create entry metadata: %w", err)
 			}
 		} else {
@@ -152,69 +174,104 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 		}
 		metadataCommitted = true
 		return nil
-	})
+	}()
 	return err
 }
 
-func (r *Repository) stagePutInput(ctx context.Context, operationID string, session objectstore.StageSession, input *os.File) (objectstore.StagedObject, error) {
-	stageCtx, cancelStage := context.WithCancel(ctx)
-	defer cancelStage()
+func (r *Repository) stagePutInput(ctx context.Context, session objectstore.StageSession, input *os.File) (objectstore.StagedObject, error) {
+	staged, stageErr := session.Stage(ctx, input)
+	return staged, errors.Join(stageErr, session.Close())
+}
 
-	stopRenewal := make(chan struct{})
-	renewalDone := make(chan error, 1)
+var errResourceLeaseLost = errors.New("Resource Lease expired or was invalidated")
+
+func temporaryResourceID(operationID string) string { return "temp:" + operationID }
+func contentResourceID(contentID string) string     { return "content:" + contentID }
+
+func (r *Repository) validateLease(ctx context.Context, operationID string) error {
+	active, err := r.coordinator.ValidateResourceLocks(ctx, operationID)
+	if err != nil {
+		return err
+	}
+	if !active {
+		return fmt.Errorf("%w: %s", errResourceLeaseLost, operationID)
+	}
+	return ctx.Err()
+}
+
+func (r *Repository) withResourceLease(ctx context.Context, resourceID string, mode coordinator.LockMode, operation func(context.Context) error) (retErr error) {
+	operationID := uuid.NewString()
+	if err := r.coordinator.AcquireResourceLock(ctx, resourceID, operationID, mode, resourceLeaseTTL); err != nil {
+		return err
+	}
+	leaseCtx, stopHeartbeat, err := r.startLeaseHeartbeat(ctx, operationID)
+	if err != nil {
+		return errors.Join(err, r.releaseResourceLocks(operationID))
+	}
+	defer func() {
+		retErr = errors.Join(retErr, stopHeartbeat())
+		releaseCtx, cancel := context.WithTimeout(context.Background(), putCleanupTimeout)
+		defer cancel()
+		retErr = errors.Join(retErr, r.coordinator.ReleaseResourceLocks(releaseCtx, operationID))
+	}()
+	if err := r.validateLease(leaseCtx, operationID); err != nil {
+		return err
+	}
+	return operation(leaseCtx)
+}
+
+func (r *Repository) startLeaseHeartbeat(ctx context.Context, operationID string) (context.Context, func() error, error) {
+	active, err := r.coordinator.RenewResourceLocks(ctx, operationID, resourceLeaseTTL)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !active {
+		return nil, nil, fmt.Errorf("%w: %s", errResourceLeaseLost, operationID)
+	}
+	operationCtx, cancel := context.WithCancel(ctx)
+	stop := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		ticker := time.NewTicker(putLeaseRenewal)
+		ticker := time.NewTicker(resourceLeaseHeartbeat)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
-				cancelStage()
-				renewalDone <- ctx.Err()
+			case <-operationCtx.Done():
+				done <- operationCtx.Err()
 				return
-			case <-stopRenewal:
-				renewalDone <- nil
+			case <-stop:
+				done <- nil
 				return
 			case <-ticker.C:
-				active, err := r.coordinator.RenewLease(ctx, operationID, putLeaseTTL)
-				if err != nil {
-					cancelStage()
-					renewalDone <- fmt.Errorf("renew Put staging Lease: %w", err)
+				ok, renewErr := r.coordinator.RenewResourceLocks(operationCtx, operationID, resourceLeaseTTL)
+				if renewErr != nil {
+					cancel()
+					done <- fmt.Errorf("renew Resource Lease: %w", renewErr)
 					return
 				}
-				if !active {
-					cancelStage()
-					renewalDone <- fmt.Errorf("%w: %s", errPutLeaseLost, operationID)
+				if !ok {
+					cancel()
+					done <- fmt.Errorf("%w: %s", errResourceLeaseLost, operationID)
 					return
 				}
 			}
 		}
 	}()
-
-	active, renewErr := r.coordinator.RenewLease(ctx, operationID, putLeaseTTL)
-	if renewErr != nil || !active {
-		close(stopRenewal)
-		renewerErr := <-renewalDone
-		closeErr := session.Close()
-		if renewErr != nil {
-			return nil, errors.Join(fmt.Errorf("validate Put Lease before Stage: %w", renewErr), renewerErr, closeErr)
+	var once sync.Once
+	stopFn := func() error {
+		once.Do(func() { close(stop) })
+		err := <-done
+		cancel()
+		if errors.Is(err, context.Canceled) && ctx.Err() == nil {
+			return nil
 		}
-		return nil, errors.Join(fmt.Errorf("%w: %s", errPutLeaseLost, operationID), renewerErr, closeErr)
+		return err
 	}
-
-	staged, stageErr := session.Stage(stageCtx, input)
-	close(stopRenewal)
-	renewerErr := <-renewalDone
-	closeErr := session.Close()
-	if stageErr != nil || renewerErr != nil || closeErr != nil {
-		return nil, errors.Join(stageErr, renewerErr, closeErr)
-	}
-	return staged, nil
+	return operationCtx, stopFn, nil
 }
 
-var errPutLeaseLost = errors.New("Put staging Lease expired or was invalidated")
-
 func (r *Repository) cleanupExpiredStaging(ctx context.Context) error {
-	operationIDs, err := r.coordinator.InvalidateExpiredLeases(ctx)
+	operationIDs, err := r.coordinator.InvalidateExpiredResourceLocks(ctx)
 	if err != nil {
 		return err
 	}
@@ -222,13 +279,13 @@ func (r *Repository) cleanupExpiredStaging(ctx context.Context) error {
 		if err := r.objectStore.CleanupStaging(ctx, operationID); err != nil {
 			return fmt.Errorf("cleanup staging for operation %s: %w", operationID, err)
 		}
-		if err := r.coordinator.ForgetExpiredLease(ctx, operationID); err != nil {
-			return fmt.Errorf("forget cleaned Put Lease %s: %w", operationID, err)
+		if err := r.coordinator.ForgetExpiredResourceLocks(ctx, operationID); err != nil {
+			return fmt.Errorf("forget cleaned Resource Leases for %s: %w", operationID, err)
 		}
 	}
-	activeIDs, err := r.coordinator.ActiveLeaseIDs(ctx)
+	activeIDs, err := r.coordinator.ActiveResourceOperationIDs(ctx)
 	if err != nil {
-		return fmt.Errorf("list active Put Leases: %w", err)
+		return fmt.Errorf("list active Resource Lease operations: %w", err)
 	}
 	active := make(map[string]struct{}, len(activeIDs))
 	for _, operationID := range activeIDs {
@@ -242,31 +299,29 @@ func (r *Repository) cleanupExpiredStaging(ctx context.Context) error {
 		if _, ok := active[operationID]; ok {
 			continue
 		}
-		if err := r.coordinator.Exclusive(ctx, func() error {
-			return r.coordinator.InvalidateLease(ctx, operationID)
-		}); err != nil {
-			return fmt.Errorf("invalidate orphan Put Lease %s: %w", operationID, err)
+		if err := r.coordinator.InvalidateResourceLocks(ctx, operationID); err != nil {
+			return fmt.Errorf("invalidate orphan Resource Leases for %s: %w", operationID, err)
 		}
 		if err := r.objectStore.CleanupStaging(ctx, operationID); err != nil {
 			return fmt.Errorf("cleanup orphan Put staging %s: %w", operationID, err)
 		}
-		if err := r.coordinator.ForgetExpiredLease(ctx, operationID); err != nil {
-			return fmt.Errorf("forget orphan Put Lease %s: %w", operationID, err)
+		if err := r.coordinator.ForgetExpiredResourceLocks(ctx, operationID); err != nil {
+			return fmt.Errorf("forget orphan Resource Leases for %s: %w", operationID, err)
 		}
 	}
 	return nil
 }
 
-func (r *Repository) finishPutLease(operationID string) error {
+func (r *Repository) finishPutResources(operationID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), putCleanupTimeout)
 	defer cancel()
-	if err := r.coordinator.Exclusive(ctx, func() error {
-		return r.coordinator.InvalidateLease(ctx, operationID)
-	}); err != nil {
-		return err
-	}
-	if err := r.objectStore.CleanupStaging(ctx, operationID); err != nil {
-		return err
-	}
-	return r.coordinator.ForgetExpiredLease(ctx, operationID)
+	cleanupErr := r.objectStore.CleanupStaging(ctx, operationID)
+	releaseErr := r.coordinator.ReleaseResourceLocks(ctx, operationID)
+	return errors.Join(cleanupErr, releaseErr)
+}
+
+func (r *Repository) releaseResourceLocks(operationID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), putCleanupTimeout)
+	defer cancel()
+	return r.coordinator.ReleaseResourceLocks(ctx, operationID)
 }

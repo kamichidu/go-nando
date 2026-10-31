@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kamichidu/go-nando/internal/content"
+	"github.com/kamichidu/go-nando/internal/coordinator"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/objectstore"
 	"github.com/kamichidu/go-nando/internal/paths"
@@ -175,9 +176,7 @@ func (r *Repository) Stat(ctx context.Context, repoPath string) (metadata.Entry,
 
 // Cat streams content of the given logical path to the specified writer.
 func (r *Repository) Cat(ctx context.Context, repoPath string, w io.Writer) error {
-	return r.coordinator.Exclusive(ctx, func() error {
-		return r.cat(ctx, repoPath, w)
-	})
+	return r.cat(ctx, repoPath, w)
 }
 
 func (r *Repository) cat(ctx context.Context, repoPath string, w io.Writer) error {
@@ -194,16 +193,17 @@ func (r *Repository) cat(ctx context.Context, repoPath string, w io.Writer) erro
 		return fmt.Errorf("file entry %s has no associated object ID", entry.ID)
 	}
 
-	rc, err := r.objectStore.Open(ctx, *entry.ObjectID)
-	if err != nil {
-		return fmt.Errorf("failed to open object from store: %w", err)
-	}
-	defer rc.Close()
-
-	if _, err := io.Copy(w, rc); err != nil {
-		return fmt.Errorf("failed to stream object data: %w", err)
-	}
-	return nil
+	return r.withResourceLease(ctx, contentResourceID(entry.ObjectID.String()), coordinator.RLock, func(readCtx context.Context) error {
+		rc, err := r.objectStore.Open(readCtx, *entry.ObjectID)
+		if err != nil {
+			return fmt.Errorf("failed to open object from store: %w", err)
+		}
+		defer rc.Close()
+		if _, err := io.Copy(w, rc); err != nil {
+			return fmt.Errorf("failed to stream object data: %w", err)
+		}
+		return nil
+	})
 }
 
 // GC deletes unreferenced objects from the object store.
@@ -211,12 +211,7 @@ func (r *Repository) GC(ctx context.Context) (int, error) {
 	if err := r.cleanupExpiredStaging(ctx); err != nil {
 		return 0, fmt.Errorf("clean expired Put staging before GC: %w", err)
 	}
-	deletedCount := 0
-	err := r.coordinator.Exclusive(ctx, func() error {
-		var err error
-		deletedCount, err = r.gc(ctx)
-		return err
-	})
+	deletedCount, err := r.gc(ctx)
 	return deletedCount, err
 }
 
@@ -245,21 +240,53 @@ func (r *Repository) gc(ctx context.Context) (int, error) {
 			return deletedCount, fmt.Errorf("object store returned invalid object ID: %w", err)
 		}
 		if !refSet[id.String()] {
-			if err := r.objectStore.Delete(ctx, id); err != nil {
-				return deletedCount, fmt.Errorf("failed to delete unreferenced object %s: %w", id.String(), err)
+			opID := uuid.NewString()
+			if err := r.coordinator.AcquireResourceLock(ctx, contentResourceID(id.String()), opID, coordinator.WLock, resourceLeaseTTL); err != nil {
+				return deletedCount, fmt.Errorf("acquire GC WLock for %s: %w", id, err)
 			}
-			deletedCount++
+			deleted, err := r.deleteIfUnreferenced(ctx, opID, id)
+			if deleted {
+				deletedCount++
+			}
+			if err != nil {
+				return deletedCount, err
+			}
 		}
 	}
 
 	return deletedCount, nil
 }
 
+func (r *Repository) deleteIfUnreferenced(ctx context.Context, operationID string, id content.ID) (deleted bool, retErr error) {
+	defer func() {
+		retErr = errors.Join(retErr, r.releaseResourceLocks(operationID))
+	}()
+	leaseCtx, stopHeartbeat, err := r.startLeaseHeartbeat(ctx, operationID)
+	if err != nil {
+		return false, err
+	}
+	defer func() { retErr = errors.Join(retErr, stopHeartbeat()) }()
+	refs, err := r.metaStore.ReferencedObjectIDs(leaseCtx)
+	if err != nil {
+		return false, fmt.Errorf("recheck Metadata references under GC WLock: %w", err)
+	}
+	for _, ref := range refs {
+		if ref == id {
+			return false, nil
+		}
+	}
+	if err := r.validateLease(leaseCtx, operationID); err != nil {
+		return false, err
+	}
+	if err := r.objectStore.Delete(leaseCtx, id); err != nil {
+		return false, fmt.Errorf("failed to delete unreferenced object %s: %w", id, err)
+	}
+	return true, nil
+}
+
 // Doctor verifies repository integrity (checking database reference matches physical object and is intact).
 func (r *Repository) Doctor(ctx context.Context) error {
-	return r.coordinator.Exclusive(ctx, func() error {
-		return r.doctor(ctx)
-	})
+	return r.doctor(ctx)
 }
 
 func (r *Repository) doctor(ctx context.Context) error {
@@ -363,16 +390,22 @@ func (r *Repository) doctor(ctx context.Context) error {
 	for _, e := range allEntries {
 		if e.Kind == metadata.EntryKindFile && e.ObjectID != nil {
 			id := *e.ObjectID
-			exists, err := r.objectStore.Exists(ctx, id)
-			if err != nil {
-				return fmt.Errorf("doctor failed: failed to check object existence for ID %s: %w", id.String(), err)
-			}
-			if !exists {
-				return fmt.Errorf("doctor failed: referenced object %s is missing from object store", id.String())
-			}
+			err := r.withResourceLease(ctx, contentResourceID(id.String()), coordinator.RLock, func(readCtx context.Context) error {
+				exists, err := r.objectStore.Exists(readCtx, id)
+				if err != nil {
+					return fmt.Errorf("doctor failed: failed to check object existence for ID %s: %w", id.String(), err)
+				}
+				if !exists {
+					return fmt.Errorf("doctor failed: referenced object %s is missing from object store", id.String())
+				}
 
-			if err := r.objectStore.Verify(ctx, id); err != nil {
-				return fmt.Errorf("doctor failed: verification failed for referenced object %s: %w", id.String(), err)
+				if err := r.objectStore.Verify(readCtx, id); err != nil {
+					return fmt.Errorf("doctor failed: verification failed for referenced object %s: %w", id.String(), err)
+				}
+				return nil
+			})
+			if err != nil {
+				return err
 			}
 		}
 	}
