@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"strings"
 	"time"
@@ -268,7 +269,133 @@ func (r *Repository) gc(ctx context.Context) (int, error) {
 		}
 	}
 
+	if lister, ok := r.objectStore.(interface {
+		ListRaw(context.Context) ([]string, error)
+	}); ok {
+		deleted, err := r.gcInvalidLocalObjects(ctx, lister)
+		deletedCount += deleted
+		if err != nil {
+			return deletedCount, err
+		}
+	}
+
+	if r.settings.DeliveryMode == DeliveryModeGCS {
+		deleted, err := r.gcGCSOrphans(ctx, refSet)
+		deletedCount += deleted
+		if err != nil {
+			return deletedCount, err
+		}
+	}
+
 	return deletedCount, nil
+}
+
+func (r *Repository) gcInvalidLocalObjects(ctx context.Context, lister interface {
+	ListRaw(context.Context) ([]string, error)
+}) (int, error) {
+	deleter, ok := r.objectStore.(interface {
+		DeleteRaw(context.Context, string) error
+	})
+	if !ok {
+		return 0, nil
+	}
+	names, err := lister.ListRaw(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to list raw Local objects: %w", err)
+	}
+	deleted := 0
+	for _, name := range names {
+		if _, err := content.ParseID(name); err == nil {
+			continue
+		}
+		removed, err := r.deleteInvalidLocalObject(ctx, deleter, name)
+		if removed {
+			deleted++
+		}
+		if err != nil {
+			return deleted, err
+		}
+	}
+	return deleted, nil
+}
+
+func (r *Repository) deleteInvalidLocalObject(ctx context.Context, deleter interface {
+	DeleteRaw(context.Context, string) error
+}, name string) (bool, error) {
+	removed := false
+	err := r.withResourceLease(ctx, "raw:"+name, coordinator.WLock, func(leaseCtx context.Context, operationID string) error {
+		if err := r.validateLease(leaseCtx, operationID); err != nil {
+			return err
+		}
+		if err := deleter.DeleteRaw(leaseCtx, name); err != nil {
+			if errors.Is(err, objectstore.ErrObjectNotFound) || errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return fmt.Errorf("delete invalid Local object %q: %w", name, err)
+		}
+		removed = true
+		return nil
+	})
+	return removed, err
+}
+
+func (r *Repository) gcGCSOrphans(ctx context.Context, refSet map[string]bool) (int, error) {
+	if r.replica == nil {
+		return 0, errors.New("GCS delivery is configured without a replica store")
+	}
+	replicas, err := r.replica.ListReplicas(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("list GCS replicas for orphan GC: %w", err)
+	}
+	deleted := 0
+	for _, replica := range replicas {
+		id := replica.ID
+		if err := id.Validate(); err != nil {
+			return deleted, fmt.Errorf("GCS returned invalid replica ID: %w", err)
+		}
+		if replica.Generation <= 0 || refSet[id.String()] {
+			continue
+		}
+		removed := false
+		err := r.withResourceLease(ctx, contentResourceID(id.String()), coordinator.WLock, func(leaseCtx context.Context, operationID string) error {
+			refs, err := r.metaStore.ReferencedObjectIDs(leaseCtx)
+			if err != nil {
+				return fmt.Errorf("recheck Metadata references before GCS orphan deletion: %w", err)
+			}
+			for _, ref := range refs {
+				if ref == id {
+					return nil
+				}
+			}
+			pending, err := r.metaStore.PendingTransfers(leaseCtx)
+			if err != nil {
+				return fmt.Errorf("recheck transfer queue before GCS orphan deletion: %w", err)
+			}
+			for _, queued := range pending {
+				if queued == id {
+					return nil
+				}
+			}
+			if err := r.validateLease(leaseCtx, operationID); err != nil {
+				return err
+			}
+			if err := r.replica.DeleteReplica(leaseCtx, id, replica.Generation); err != nil {
+				if errors.Is(err, objectstore.ErrObjectNotFound) {
+					return nil
+				}
+				return fmt.Errorf("delete unreferenced GCS replica %s: %w", id, err)
+			}
+			removed = true
+			return nil
+		})
+		if removed {
+			deleted++
+		}
+		if err != nil {
+			return deleted, err
+		}
+	}
+	return deleted, nil
 }
 
 func (r *Repository) deleteIfUnreferenced(ctx context.Context, operationID string, id content.ID) (deleted bool, retErr error) {

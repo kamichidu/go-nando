@@ -28,9 +28,11 @@ type fixedIDMetadataStore struct {
 }
 
 type fakeReplicaStore struct {
-	fail   bool
-	calls  int
-	stored map[content.ID][]byte
+	fail    bool
+	calls   int
+	stored  map[content.ID][]byte
+	listed  []objectstore.ReplicaInfo
+	deleted []objectstore.ReplicaInfo
 }
 
 func (s *fakeReplicaStore) Upload(_ context.Context, id content.ID, size int64, src io.Reader) (objectstore.ReplicaInfo, error) {
@@ -62,10 +64,13 @@ func (s *fakeReplicaStore) ReplicaExists(_ context.Context, id content.ID) (bool
 	_, ok := s.stored[id]
 	return ok, nil
 }
-func (*fakeReplicaStore) ListReplicas(context.Context) ([]objectstore.ReplicaInfo, error) {
-	return nil, nil
+func (s *fakeReplicaStore) ListReplicas(context.Context) ([]objectstore.ReplicaInfo, error) {
+	return append([]objectstore.ReplicaInfo(nil), s.listed...), nil
 }
-func (*fakeReplicaStore) DeleteReplica(context.Context, content.ID, int64) error { return nil }
+func (s *fakeReplicaStore) DeleteReplica(_ context.Context, id content.ID, generation int64) error {
+	s.deleted = append(s.deleted, objectstore.ReplicaInfo{ID: id, Generation: generation})
+	return nil
+}
 
 func TestResourceLeasesProtectPutAndReadsFromGC(t *testing.T) {
 	ctx := context.Background()
@@ -161,6 +166,64 @@ func TestResourceLeasesProtectPutAndReadsFromGC(t *testing.T) {
 	close(getRelease)
 	if err := <-getDone; err != nil {
 		t.Fatalf("Get failed: %v", err)
+	}
+}
+
+func TestGCDeletesInvalidLocalObjectNames(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)
+	objectsDir := filepath.Join(root, "objects")
+	objects, err := local.NewStore(objectsDir, filepath.Join(root, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidPath := filepath.Join(objectsDir, "partial-upload")
+	if err := os.WriteFile(invalidPath, []byte("incomplete"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	repo := openRepositoryInstance(t, root, metaStore, objects, hasher)
+	deleted, err := repo.GC(ctx)
+	if err != nil || deleted != 1 {
+		t.Fatalf("GC did not remove invalid Local object: deleted=%d err=%v", deleted, err)
+	}
+	if _, err := os.Stat(invalidPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid Local object remains after GC: %v", err)
+	}
+}
+
+func TestGCGDeletesUnreferencedGCSReplicaWithObservedGeneration(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(root, "objects"), filepath.Join(root, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := content.ParseID("sha256-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replica := &fakeReplicaStore{listed: []objectstore.ReplicaInfo{{ID: id, Size: 3, Generation: 73}}}
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(root, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := coordinator.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	})
+	settings := repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "unit-test"}
+	repo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(metaStore), objects, replica, hasher, coordinator, settings)
+	deleted, err := repo.GC(ctx)
+	if err != nil || deleted != 1 {
+		t.Fatalf("GC did not delete the unreferenced GCS replica: deleted=%d err=%v", deleted, err)
+	}
+	if len(replica.deleted) != 1 || replica.deleted[0].ID != id || replica.deleted[0].Generation != 73 {
+		t.Fatalf("GCS deletion did not use observed generation: %+v", replica.deleted)
 	}
 }
 
