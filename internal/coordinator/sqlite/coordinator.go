@@ -21,6 +21,13 @@ type Coordinator struct {
 	leases *sql.DB
 }
 
+type ResourceLockMode string
+
+const (
+	RLock ResourceLockMode = "R"
+	WLock ResourceLockMode = "W"
+)
+
 var (
 	// ErrAcquire marks a failure to acquire the coordination lock. Its wrapped
 	// cause preserves context cancellation/deadline and SQLite errors.
@@ -33,7 +40,8 @@ var (
 	// operation may already have completed.
 	ErrRelease = errors.New("coordination lock release failed")
 	// ErrLeaseExpired identifies a Put whose staging Lease is no longer active.
-	ErrLeaseExpired = errors.New("put staging lease expired or was invalidated")
+	ErrLeaseExpired        = errors.New("put staging lease expired or was invalidated")
+	ErrResourceLockExpired = errors.New("resource lock expired or was invalidated")
 )
 
 // Open opens the coordination database at dbPath. The path is made absolute
@@ -54,6 +62,15 @@ func Open(dbPath string) (*Coordinator, error) {
 	if _, err := db.Exec("PRAGMA busy_timeout = 0"); err != nil {
 		return nil, errors.Join(fmt.Errorf("configure coordination database busy timeout: %w", err), db.Close())
 	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS resource_locks (
+		resource_id TEXT NOT NULL,
+		operation_id TEXT NOT NULL,
+		mode TEXT NOT NULL CHECK (mode IN ('R','W')),
+		expires_at INTEGER NOT NULL,
+		PRIMARY KEY (resource_id, operation_id)
+	)`); err != nil {
+		return nil, errors.Join(fmt.Errorf("initialize resource lock table: %w", err), db.Close())
+	}
 	leasePath := filepath.Join(filepath.Dir(absPath), "put-leases.db")
 	leases, err := sql.Open("sqlite", leasePath+"?_txlock=immediate&_pragma=busy_timeout%3d0")
 	if err != nil {
@@ -72,6 +89,148 @@ func Open(dbPath string) (*Coordinator, error) {
 // Close closes the database connection pool.
 func (c *Coordinator) Close() error {
 	return errors.Join(c.db.Close(), c.leases.Close())
+}
+
+// AcquireResourceLock atomically acquires a shared RLock or exclusive WLock
+// for one resource. Conflicting live locks are waited on with context support.
+func (c *Coordinator) AcquireResourceLock(ctx context.Context, resourceID, operationID string, mode ResourceLockMode, ttl time.Duration) error {
+	if resourceID == "" || operationID == "" || ttl <= 0 || (mode != RLock && mode != WLock) {
+		return errors.New("resource lock requires resource ID, operation ID, valid mode, and positive TTL")
+	}
+	for {
+		acquired := false
+		err := c.withCoordinationTransaction(ctx, func(conn *sql.Conn) error {
+			var ownMode string
+			var ownExpiry int64
+			ownErr := conn.QueryRowContext(ctx, "SELECT mode,expires_at FROM resource_locks WHERE resource_id=? AND operation_id=?", resourceID, operationID).Scan(&ownMode, &ownExpiry)
+			if ownErr == nil {
+				var now int64
+				if err := conn.QueryRowContext(ctx, "SELECT CAST(unixepoch('subsec') * 1000 AS INTEGER)").Scan(&now); err != nil {
+					return err
+				}
+				if ownExpiry <= now {
+					return ErrResourceLockExpired
+				}
+				if ownMode != string(mode) {
+					return errors.New("resource lock mode cannot change while held")
+				}
+			} else if !errors.Is(ownErr, sql.ErrNoRows) {
+				return ownErr
+			}
+			var conflicts int
+			query := `SELECT count(*) FROM resource_locks WHERE resource_id=? AND expires_at > CAST(unixepoch('subsec') * 1000 AS INTEGER) AND operation_id<>? AND (mode='W' OR ?='W')`
+			if err := conn.QueryRowContext(ctx, query, resourceID, operationID, string(mode)).Scan(&conflicts); err != nil {
+				return err
+			}
+			if conflicts != 0 {
+				return nil
+			}
+			_, err := conn.ExecContext(ctx, `INSERT INTO resource_locks(resource_id,operation_id,mode,expires_at) VALUES(?,?,?,CAST(unixepoch('subsec') * 1000 AS INTEGER)+?) ON CONFLICT(resource_id,operation_id) DO UPDATE SET expires_at=excluded.expires_at`, resourceID, operationID, string(mode), ttlMilliseconds(ttl))
+			if err == nil {
+				acquired = true
+			}
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		if acquired {
+			return nil
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+// RenewResourceLocks renews every still-live lock held by operationID using
+// SQLite time. It never resurrects an expired lock and fails as a unit.
+func (c *Coordinator) RenewResourceLocks(ctx context.Context, operationID string, ttl time.Duration) (bool, error) {
+	if operationID == "" || ttl <= 0 {
+		return false, errors.New("resource lock renewal requires operation ID and positive TTL")
+	}
+	active := false
+	err := c.withCoordinationTransaction(ctx, func(conn *sql.Conn) error {
+		var total, expired int
+		if err := conn.QueryRowContext(ctx, `SELECT count(*), coalesce(sum(CASE WHEN expires_at <= CAST(unixepoch('subsec') * 1000 AS INTEGER) THEN 1 ELSE 0 END),0) FROM resource_locks WHERE operation_id=?`, operationID).Scan(&total, &expired); err != nil {
+			return err
+		}
+		if total == 0 || expired != 0 {
+			return nil
+		}
+		_, err := conn.ExecContext(ctx, `UPDATE resource_locks SET expires_at=CAST(unixepoch('subsec') * 1000 AS INTEGER)+? WHERE operation_id=?`, ttlMilliseconds(ttl), operationID)
+		active = err == nil
+		return err
+	})
+	return active, err
+}
+
+// ValidateResourceLocks reports whether every lock held by operationID remains live.
+func (c *Coordinator) ValidateResourceLocks(ctx context.Context, operationID string) (bool, error) {
+	var valid bool
+	err := c.withCoordinationTransaction(ctx, func(conn *sql.Conn) error {
+		var total, expired int
+		if err := conn.QueryRowContext(ctx, `SELECT count(*), coalesce(sum(CASE WHEN expires_at <= CAST(unixepoch('subsec') * 1000 AS INTEGER) THEN 1 ELSE 0 END),0) FROM resource_locks WHERE operation_id=?`, operationID).Scan(&total, &expired); err != nil {
+			return err
+		}
+		valid = total > 0 && expired == 0
+		return nil
+	})
+	return valid, err
+}
+
+// ReleaseResourceLocks releases every resource held by operationID.
+func (c *Coordinator) ReleaseResourceLocks(ctx context.Context, operationID string) error {
+	if operationID == "" {
+		return errors.New("resource lock release requires operation ID")
+	}
+	return c.withCoordinationTransaction(ctx, func(conn *sql.Conn) error {
+		_, err := conn.ExecContext(ctx, "DELETE FROM resource_locks WHERE operation_id=?", operationID)
+		return err
+	})
+}
+
+func (c *Coordinator) withCoordinationTransaction(ctx context.Context, operation func(*sql.Conn) error) (retErr error) {
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	open := false
+	defer func() {
+		panicValue := recover()
+		var releaseErr error
+		if open {
+			releaseErr = rollbackAndDiscardOnFailure(conn)
+		}
+		if closeErr := conn.Close(); closeErr != nil {
+			releaseErr = errors.Join(releaseErr, closeErr)
+		}
+		if panicValue != nil {
+			if releaseErr != nil {
+				panic(errors.Join(fmt.Errorf("resource lock transaction panic: %v", panicValue), releaseErr))
+			}
+			panic(panicValue)
+		}
+		retErr = errors.Join(retErr, releaseErr)
+	}()
+	if err := beginImmediate(ctx, conn); err != nil {
+		return err
+	}
+	open = true
+	if err := operation(conn); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return err
+	}
+	open = false
+	return nil
 }
 
 // Exclusive holds a cross-process SQLite writer lock for the full duration of

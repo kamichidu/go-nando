@@ -69,6 +69,58 @@ func TestExclusiveSerializesInstancesAndHonorsCancellation(t *testing.T) {
 	}
 }
 
+func TestResourceRLockSharingAndWLockExclusionAcrossInstances(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "coordination.db")
+	first, second := openCoordinator(t, dbPath), openCoordinator(t, dbPath)
+	ctx := context.Background()
+	if err := first.AcquireResourceLock(ctx, "content:abc", "reader-1", sqlite.RLock, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.AcquireResourceLock(ctx, "content:abc", "reader-2", sqlite.RLock, time.Second); err != nil {
+		t.Fatalf("shared RLock should coexist: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 60*time.Millisecond)
+	defer cancel()
+	if err := second.AcquireResourceLock(waitCtx, "content:abc", "gc", sqlite.WLock, time.Second); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WLock should wait for active readers, got %v", err)
+	}
+	if err := first.ReleaseResourceLocks(ctx, "reader-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.ReleaseResourceLocks(ctx, "reader-2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.AcquireResourceLock(ctx, "content:abc", "gc", sqlite.WLock, time.Second); err != nil {
+		t.Fatalf("WLock after readers release: %v", err)
+	}
+	waitCtx2, cancel2 := context.WithTimeout(ctx, 60*time.Millisecond)
+	defer cancel2()
+	if err := first.AcquireResourceLock(waitCtx2, "content:abc", "late-reader", sqlite.RLock, time.Second); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RLock should wait for WLock, got %v", err)
+	}
+	if err := second.ReleaseResourceLocks(ctx, "gc"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpiredResourceLockCannotBeRenewed(t *testing.T) {
+	coordinator := openCoordinator(t, filepath.Join(t.TempDir(), "coordination.db"))
+	ctx := context.Background()
+	if err := coordinator.AcquireResourceLock(ctx, "temp:one", "put-one", sqlite.RLock, 40*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(60 * time.Millisecond)
+	if active, err := coordinator.RenewResourceLocks(ctx, "put-one", time.Second); err != nil || active {
+		t.Fatalf("expired lock renewal = %v, %v", active, err)
+	}
+	if valid, err := coordinator.ValidateResourceLocks(ctx, "put-one"); err != nil || valid {
+		t.Fatalf("expired lock validation = %v, %v", valid, err)
+	}
+	if err := coordinator.AcquireResourceLock(ctx, "temp:one", "put-one", sqlite.RLock, time.Second); !errors.Is(err, sqlite.ErrResourceLockExpired) {
+		t.Fatalf("expired operation must not reacquire and resurrect its lock: %v", err)
+	}
+}
+
 func TestExclusiveReleasesAfterErrorAndPanic(t *testing.T) {
 	coordinator := openCoordinator(t, filepath.Join(t.TempDir(), "coordination.db"))
 	wantErr := errors.New("operation failed")
