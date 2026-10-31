@@ -52,20 +52,26 @@ func (c *PutCommand) Run(ctx context.Context, args []string) (runErr error) {
 	if err := client.Call(ctx, controlrpc.MethodBeginWrite, map[string]any{"path": repoPath, "resource_schemes": []string{"file"}}, &begin); err != nil {
 		return err
 	}
+	sessionCtx, stopRenewal := startSessionRenewal(ctx, client, begin.SessionID)
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		runErr = errors.Join(runErr, client.Call(cleanupCtx, controlrpc.MethodRelease, map[string]string{"session_id": begin.SessionID}, nil))
 	}()
-	if err := copyToResource(ctx, localPath, begin.ResourceURI); err != nil {
+	defer func() { runErr = errors.Join(runErr, stopRenewal()) }()
+	if err := copyToResource(sessionCtx, localPath, begin.ResourceURI); err != nil {
+		renewalErr := stopRenewal()
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return errors.Join(err, client.Call(cleanupCtx, controlrpc.MethodAbort, map[string]string{"session_id": begin.SessionID}, nil))
+		return errors.Join(err, renewalErr, client.Call(cleanupCtx, controlrpc.MethodAbort, map[string]string{"session_id": begin.SessionID}, nil))
+	}
+	if err := stopRenewal(); err != nil {
+		return err
 	}
 	if err := client.Call(ctx, controlrpc.MethodCommit, map[string]string{"session_id": begin.SessionID}, nil); err != nil {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return errors.Join(err, client.Call(cleanupCtx, controlrpc.MethodAbort, map[string]string{"session_id": begin.SessionID}, nil))
+		// Commit errors retain the daemon's durable staging record for explicit
+		// recovery. Deferred Release closes the client session without discarding it.
+		return err
 	}
 	return nil
 }

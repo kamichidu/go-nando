@@ -326,6 +326,83 @@ func TestReadResourceLeaseProtectsObjectUntilRelease(t *testing.T) {
 	serverStopped = true
 }
 
+func TestExpiredReadLeaseStopsRenewingAndRecoveryStagingSurvivesGC(t *testing.T) {
+	ctx := context.Background()
+	repoDir := t.TempDir()
+	if err := app.InitRepository(ctx, repoDir); err != nil {
+		t.Fatal(err)
+	}
+	application, closeRepository := openTestApplication(t, repoDir)
+	defer func() {
+		if err := closeRepository(); err != nil {
+			t.Errorf("close Repository: %v", err)
+		}
+	}()
+	source := filepath.Join(t.TempDir(), "source")
+	if err := os.WriteFile(source, []byte("expiring read object"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.Put(ctx, app.PutInput{LocalPath: source, RepositoryPath: "/file"}); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := application.Stat(ctx, "/file")
+	if err != nil || entry.ObjectID == nil {
+		t.Fatalf("stat committed file: entry=%+v err=%v", entry, err)
+	}
+	sessions, err := newSessionManagerWithTTL(application, repoDir, 30*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sessions.close(); err != nil {
+			t.Errorf("close sessions: %v", err)
+		}
+	}()
+	service := newService(application, sessions)
+	result, err := service.Call(ctx, controlrpc.MethodBeginRead, marshalTestJSON(t, map[string]any{"path": "/file", "resource_schemes": []string{"file"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var read controlrpc.BeginReadResult
+	if err := decodeTestResult(t, result, &read); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.Remove(ctx, "/file"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(60 * time.Millisecond)
+	sessions.expireDue(time.Now())
+	if deleted, err := application.GC(ctx); err != nil || deleted != 1 {
+		t.Fatalf("GC after read session expiry: deleted=%d err=%v", deleted, err)
+	}
+	objectPath := filepath.Join(repoDir, "objects", entry.ObjectID.String())
+	if _, err := os.Stat(objectPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired read session kept renewing the object lease: %v", err)
+	}
+
+	result, err = service.Call(ctx, controlrpc.MethodBeginWrite, marshalTestJSON(t, map[string]any{"path": "/recovery", "resource_schemes": []string{"file"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var write controlrpc.BeginWriteResult
+	if err := decodeTestResult(t, result, &write); err != nil {
+		t.Fatal(err)
+	}
+	stagePath := resourcePathFromURI(t, write.ResourceURI)
+	if err := os.WriteFile(stagePath, []byte("must survive repository GC"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.release(write.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.GC(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(stagePath); err != nil || string(data) != "must survive repository GC" {
+		t.Fatalf("Repository GC removed recovery staging: data=%q err=%v", data, err)
+	}
+}
+
 func waitForDaemon(ctx context.Context, client *controlrpc.Client) error {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

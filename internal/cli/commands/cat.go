@@ -51,6 +51,8 @@ func (c *CatCommand) Run(ctx context.Context, args []string) (runErr error) {
 		return err
 	}
 	defer func() { runErr = errors.Join(runErr, releaseResource(client, read.SessionID)) }()
+	sessionCtx, stopRenewal := startSessionRenewal(ctx, client, read.SessionID)
+	defer func() { runErr = errors.Join(runErr, stopRenewal()) }()
 	u, err := url.Parse(read.ResourceURI)
 	if err != nil || u.Scheme != "file" || u.Host != "" || u.Path == "" {
 		return fmt.Errorf("daemon returned unsupported or inaccessible Resource URI %q", read.ResourceURI)
@@ -59,6 +61,6 @@ func (c *CatCommand) Run(ctx context.Context, args []string) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("open daemon read Resource: %w", err)
 	}
-	_, copyErr := io.Copy(stdout, contextReader{ctx: ctx, reader: file})
+	_, copyErr := io.Copy(stdout, contextReader{ctx: sessionCtx, reader: file})
 	return errors.Join(copyErr, file.Close())
 }

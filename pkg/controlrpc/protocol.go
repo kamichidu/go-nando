@@ -11,35 +11,47 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
+)
+
+const (
+	ResourceSessionTTL           = 30 * time.Second
+	ResourceSessionRenewInterval = 5 * time.Second
 )
 
 const protocolVersion = "2.0"
 
 const (
-	CodeParseError     = -32700
-	CodeInvalidRequest = -32600
-	CodeMethodNotFound = -32601
-	CodeInvalidParams  = -32602
-	CodeInternalError  = -32603
-	CodeEntryNotFound  = -32004
-	CodeEntryConflict  = -32009
+	CodeParseError             = -32700
+	CodeInvalidRequest         = -32600
+	CodeMethodNotFound         = -32601
+	CodeInvalidParams          = -32602
+	CodeInternalError          = -32603
+	CodeEntryNotFound          = -32004
+	CodeEntryConflict          = -32009
+	CodeResourceSessionExpired = -32011
 )
 
 const (
-	MethodPing        = "daemon.ping"
-	MethodStat        = "repository.stat"
-	MethodList        = "repository.list"
-	MethodMove        = "repository.move"
-	MethodRemove      = "repository.remove"
-	MethodGC          = "repository.gc"
-	MethodMaintenance = "repository.maintenanceOnce"
-	MethodDoctor      = "repository.doctor"
-	MethodSync        = "repository.sync"
-	MethodBeginRead   = "resource.beginRead"
-	MethodBeginWrite  = "resource.beginWrite"
-	MethodCommit      = "resource.commit"
-	MethodAbort       = "resource.abort"
-	MethodRelease     = "resource.release"
+	MethodPing            = "daemon.ping"
+	MethodStat            = "repository.stat"
+	MethodList            = "repository.list"
+	MethodMove            = "repository.move"
+	MethodRemove          = "repository.remove"
+	MethodGC              = "repository.gc"
+	MethodMaintenance     = "repository.maintenanceOnce"
+	MethodDoctor          = "repository.doctor"
+	MethodSync            = "repository.sync"
+	MethodBeginRead       = "resource.beginRead"
+	MethodBeginWrite      = "resource.beginWrite"
+	MethodCommit          = "resource.commit"
+	MethodAbort           = "resource.abort"
+	MethodRelease         = "resource.release"
+	MethodRenew           = "resource.renew"
+	MethodRevoke          = "resource.revoke"
+	MethodRecoveryList    = "resource.recovery.list"
+	MethodRecoveryRetry   = "resource.recovery.retry"
+	MethodRecoveryDiscard = "resource.recovery.discard"
 )
 
 type BeginWriteResult struct {
@@ -51,6 +63,23 @@ type BeginReadResult struct {
 	SessionID   string `json:"session_id"`
 	ResourceURI string `json:"resource_uri"`
 	Entry       Entry  `json:"entry"`
+}
+
+type RenewResult struct {
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type RecoveryRecord struct {
+	SessionID        string    `json:"session_id"`
+	StagingURI       string    `json:"staging_uri"`
+	RepositoryPath   string    `json:"repository_path"`
+	ExpectedEntryID  string    `json:"expected_entry_id,omitempty"`
+	ExpectedRevision uint64    `json:"expected_revision"`
+	MustBeAbsent     bool      `json:"must_be_absent"`
+	FailureReason    string    `json:"failure_reason"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	Size             int64     `json:"size"`
 }
 
 // Entry is the protocol representation of logical metadata. ObjectID is the

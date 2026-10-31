@@ -27,6 +27,7 @@ func main() {
 		&commands.SyncCommand{},
 		&commands.DaemonCommand{},
 		&commands.DoctorCommand{},
+		&commands.RecoveryCommand{},
 	}
 
 	// 2. Instantiate Root Command

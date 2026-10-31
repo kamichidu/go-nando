@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,7 @@ func executeCLI(ctx context.Context, stdout, stderr *bytes.Buffer, args []string
 		&commands.SyncCommand{},
 		&commands.DaemonCommand{},
 		&commands.DoctorCommand{},
+		&commands.RecoveryCommand{},
 	}
 	root := cli.NewRootCommand(subs)
 
@@ -134,6 +136,43 @@ func TestPutUsesDaemonResourceSession(t *testing.T) {
 	exported, err := os.ReadFile(exportPath)
 	if err != nil || string(exported) != "CLI daemon client payload" {
 		t.Fatalf("exported bytes=%q err=%v", exported, err)
+	}
+	var stale controlrpc.BeginWriteResult
+	if err := client.Call(context.Background(), controlrpc.MethodBeginWrite, map[string]any{"path": "/from-cli.txt", "resource_schemes": []string{"file"}}, &stale); err != nil {
+		t.Fatal(err)
+	}
+	staleURL, err := url.Parse(stale.ResourceURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staleURL.Path, []byte("stale recoverable edit"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	winner := filepath.Join(t.TempDir(), "winner")
+	if err := os.WriteFile(winner, []byte("new committed revision"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "put", winner, "/from-cli.txt"}); code != 0 {
+		t.Fatalf("create concurrent winner: code=%d stderr=%q", code, stderr.String())
+	}
+	if err := client.Call(context.Background(), controlrpc.MethodCommit, map[string]string{"session_id": stale.SessionID}, nil); err == nil {
+		t.Fatal("stale write unexpectedly committed")
+	}
+	stdout.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "recovery", "list"}); code != 0 || !strings.Contains(stdout.String(), stale.SessionID) || !strings.Contains(stdout.String(), "/from-cli.txt") {
+		t.Fatalf("recovery list did not expose failed staging: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "recovery", "retry", stale.SessionID}); code == 0 {
+		t.Fatal("recovery retry silently bypassed stale CAS")
+	}
+	if data, err := os.ReadFile(staleURL.Path); err != nil || string(data) != "stale recoverable edit" {
+		t.Fatalf("failed recovery retry lost staging: data=%q err=%v", data, err)
+	}
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "recovery", "discard", stale.SessionID}); code != 0 {
+		t.Fatalf("explicit recovery discard: code=%d stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(staleURL.Path); !os.IsNotExist(err) {
+		t.Fatalf("explicit recovery discard retained staging: %v", err)
 	}
 	stdout.Reset()
 	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "ls", "/"}); code != 0 || !strings.Contains(stdout.String(), "from-cli.txt") {

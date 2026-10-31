@@ -96,13 +96,31 @@ nodes:
   - id: REQ-FUSE-DURABILITY
     level: system_requirement
     kind: filesystem-commit-invariant
-    statement: A successful FUSE Fsync MUST mean the complete file bytes have been durably published as an immutable Local Object and the corresponding Metadata revision plus any GCS delivery obligation have committed atomically. GCS upload is asynchronous and is not part of Fsync. A crash after successful Fsync but before Flush, Close, or Release MUST preserve that committed revision and its queued delivery obligation. Release MUST NOT be the durability boundary. Before successful Fsync, dirty staging is private to the open handle and may be discarded after a crash; the last committed revision remains visible and intact.
+    statement: A successful FUSE Fsync MUST mean the complete file bytes have been durably published as an immutable Local Object and the corresponding Metadata revision plus any GCS delivery obligation have committed atomically. GCS upload is asynchronous and is not part of Fsync. A crash after successful Fsync but before Flush, Close, or Release MUST preserve that committed revision and its queued delivery obligation. The FUSE adapter final-Release path MUST attempt the same Commit for remaining dirty staging before it sends daemon Release; a failed attempt MUST leave a durable recovery record and staging bytes. A failed CAS MUST never silently retry against a newer revision. Before a commit attempt, the last committed revision remains visible and intact.
     provenance:
       origin: human-authored
   - id: REQ-RESOURCE-SESSIONS
     level: system_requirement
     kind: resource-session-invariant
-    statement: The daemon MUST own Resource sessions and their Commit, Abort, and Release lifecycle. Protocol clients MUST request mutations through JSON-RPC and MUST NOT mutate Repository, Metadata Store, Object Store, revisions, or transfer obligations directly. A write session MUST bind its logical path and observed Entry identity/revision (or observed absence) at Begin; Commit MUST enforce that exact expectation with Repository-owned CAS and atomically publish Local content plus Metadata and any GCS delivery obligation. A read session MUST pin the immutable Local object with a renewable content RLock until Release, so GC cannot remove the file:// target during client use. Session setup failures MUST release acquired leases and resources; daemon shutdown MUST release live session leases and clean mutable staging. Resource URIs MUST be scheme-extensible and directly accessible to the requesting client. Phase A supports local file:// URIs for daemon-created mutable staging and immutable read resources; remote data transfer schemes are deferred.
+    statement: The daemon MUST own Resource sessions and their Commit, Abort, Release, Renew, and Revoke lifecycle. A session MUST expire after its finite TTL unless the client explicitly renews it; the daemon MUST NOT renew a dead client's session indefinitely. Expiry, renewal, revocation, and Commit MUST serialize so either Commit begins while the session is live or expiry/revocation wins and later Commit is rejected. A live read session pins its immutable Local object with a renewable content RLock; Release, Revoke, expiry, or daemon shutdown MUST stop heartbeat and release that lease. A write session binds its logical path and observed Entry identity/revision (or absence) at Begin; Commit MUST enforce that exact expectation with Repository-owned CAS and atomically publish Local content plus Metadata and any GCS delivery obligation. Session setup failures MUST release acquired leases. Mutable staging and its durable session manifest MUST survive daemon restart; commit failure MUST persist staging plus session ID, logical path, original expected Entry ID/revision or absence, failure reason, and timestamps. Release, Revoke, expiry, and shutdown of an uncommitted write convert it to recovery instead of deleting it. Recovery data is independent of session leases and MUST NOT be removed by Repository/object GC. Recovery listing, retry, and discard are explicit operations; retry MUST use the original CAS expectation, with no automatic overwrite or CAS bypass. Resource URIs MUST be scheme-extensible and directly accessible to the requesting client. Phase A supports local file:// URIs for daemon-created mutable staging and immutable read resources; remote data transfer schemes are deferred.
+    provenance:
+      origin: human-authored
+  - id: REQ-RESOURCE-RECOVERY
+    level: system_requirement
+    kind: durable-recovery-invariant
+    statement: >-
+      Before returning a mutable staging Resource, the daemon MUST durably persist a manifest that ties its staging path to the session ID, repository path, and Begin-time CAS expectation. Before returning a Commit failure, it MUST sync the staging file and atomically persist the failure reason and update timestamp. After Repository Commit succeeds, it MUST durably record completion before best-effort staging cleanup, so startup can distinguish a committed write from an interrupted one. Startup MUST promote interrupted active sessions to explicit recovery records rather than deleting their staging. Recovery retry MUST preserve the captured CAS expectation; repeated conflicts leave record and bytes unchanged except for the latest failure reason and timestamp. Recovery data is outside Object Store GC authority. Only an explicit recovery discard or successful commit may remove recovery staging; no automatic retry may weaken CAS.
+    attributes:
+      session_ttl: 30-seconds
+      expiry_sweep_resolution: maximum-100ms
+      renewal: explicit-client-RPC
+      expiry_clock: daemon-wall-clock
+      manifest: durable-atomic-JSON
+      manifest_version: 1
+      durable_commit_completion_marker: true
+      recovery_operations: [list, retry-original-CAS, discard-explicitly]
+      gc_ownership: excluded-from-repository-object-GC
+      commit_failure_staging: retained-and-synced
     provenance:
       origin: human-authored
   - id: REQ-GCS-PUBLICATION
@@ -231,7 +249,7 @@ nodes:
   - id: DES-CLI-BOUNDARY
     level: system_design
     kind: responsibility-model
-    statement: CLI owns command-line parsing, input normalization, local stream wiring, and presentation. Repository-facing commands are JSON-RPC 2.0 clients over the configured UDS or TCP transport (UDS default); repository reads, writes, GC, maintenance, and verification execute through the authoritative daemon. CLI consumes daemon-issued Resource URIs for content streams and never constructs an independent Repository, executes SQL, derives content IDs, decides object reachability, or implements recovery policy. Repository initialization is a provisioning operation performed before daemon startup.
+    statement: CLI owns command-line parsing, input normalization, local stream wiring, and presentation. Repository-facing commands are JSON-RPC 2.0 clients over the configured UDS or TCP transport (UDS default); repository reads, writes, GC, maintenance, verification, and explicit Resource recovery operations execute through the authoritative daemon. CLI renews active read/write Resource sessions while it is using their URIs. It never constructs an independent Repository, executes SQL, derives content IDs, decides object reachability, or implements recovery policy. Repository initialization is a provisioning operation performed before daemon startup.
     attributes:
       exit_codes:
         success: 0
@@ -269,7 +287,7 @@ nodes:
   - id: DES-DEPENDENCY-DIRECTION
     level: system_design
     kind: component-model
-    statement: CLI, FUSE, and WebDAV are peer client processes of the daemon. They depend on the transport-neutral JSON-RPC and Resource URI client contracts, not on Repository, Metadata Store, Object Store, or daemon implementation packages. FUSE and WebDAV are each separate Go modules and separate processes and are never linked into the daemon. The daemon owns the RPC server, Resource sessions, and Repository; Repository depends only on Metadata Store, Object Store, coordination, and Content Identity. No adapter dependency enters core.
+    statement: CLI, FUSE, and WebDAV are peer client processes of the daemon. They depend on the transport-neutral JSON-RPC and Resource URI client contracts, not on Repository, Metadata Store, Object Store, or daemon implementation packages. FUSE and WebDAV are each separate Go modules and separate processes and are never linked into the daemon. The daemon owns the RPC server, expiring/renewable Resource sessions, durable staging recovery, and Repository; Repository depends only on Metadata Store, Object Store, coordination, and Content Identity. No adapter dependency enters core.
     attributes:
       dependency_edges:
         - [CLI, JSON-RPC Client]
@@ -289,7 +307,7 @@ nodes:
   - id: DES-DAEMON-RUNTIME
     level: system_design
     kind: process-model
-    statement: Normal operation has one nando daemon as the execution owner of a Repository. The daemon constructs Metadata Store, Object Store, coordination, and Repository once, and serves peer CLI, FUSE, and WebDAV client processes. JSON-RPC 2.0 control messages use HTTP POST /rpc over configurable UDS or TCP; UDS is the local default. TCP is rejected unless TLS and bearer authentication are configured. The daemon owns Resource sessions and executes Commit/Abort/Release requests. On the WSL Linux host, a systemd user service is the default lifecycle manager; a system service is also supported as an installation choice. GCS credentials use standard Application Default Credentials and are not persisted in repository configuration.
+    statement: Normal operation has one nando daemon as the execution owner of a Repository. The daemon constructs Metadata Store, Object Store, coordination, and Repository once, and serves peer CLI, FUSE, and WebDAV client processes. JSON-RPC 2.0 control messages use HTTP POST /rpc over configurable UDS or TCP; UDS is the local default. TCP is rejected unless TLS and bearer authentication are configured. The daemon owns Resource sessions, finite expiry, explicit renewal/revocation, and durable staging recovery. Expiry stops read-session repository-lease heartbeat; daemon shutdown releases read leases and promotes unfinished writes to recovery without deleting them. On the WSL Linux host, a systemd user service is the default lifecycle manager; a system service is also supported as an installation choice. GCS credentials use standard Application Default Credentials and are not persisted in repository configuration.
     attributes:
       default_host: WSL-Linux
       default_service_scope: systemd-user
@@ -301,7 +319,7 @@ nodes:
       tcp_requires: [TLS, bearer-authentication]
       cli_protocol: JSON-RPC-2.0
       client_processes: [CLI, FUSE, WebDAV]
-      daemon_owned: [Repository, Resource-sessions, Commit, Abort, Release]
+      daemon_owned: [Repository, Resource-sessions, Commit, Abort, Release, Renew, Revoke, Recovery]
       fuse_webdav_process_local: true
       adapter_modules_inside_daemon: false
       gcs_credentials: Application-Default-Credentials
@@ -312,13 +330,19 @@ nodes:
   - id: DES-ADAPTERS-FILESYSTEM
     level: system_design
     kind: protocol-adapter-contract
-    statement: CLI, FUSE, and WebDAV are peer processes that call daemon control methods and consume daemon-issued Resource URIs. FUSE and WebDAV each have a separate Go module and executable process; neither is linked into the daemon. They depend on the public controlrpc contract package, never on Repository or daemon implementation packages. A write Begin returns a mutable staging Resource URI and binds the observed Entry identity/revision or absence; the client writes bytes directly to that URI, then asks the daemon to Commit. The daemon hashes/verifies and publishes immutable content, enforces revision CAS, and atomically commits Metadata plus any GCS obligation. Abort discards uncommitted staging; Release closes the session and its leases. Read sessions return immutable file:// Resource URIs under a renewable content RLock held until Release, protecting the object from GC. Setup failures release acquired leases; daemon shutdown releases live leases and cleans mutable staging. The daemon returns only URI schemes the client has declared accessible; Phase A file:// use requires a shared local filesystem path. URI schemes remain extensible; remote data transfer is not required in this phase. FUSE is read-write and follows the documented Fsync contract. WSL Windows Explorer accesses the separate FUSE process mount through the WSL native share. Cross-platform adapters and Cloud Run are deferred.
+    statement: >-
+      CLI, FUSE, and WebDAV are peer processes that call daemon control methods and consume daemon-issued Resource URIs. FUSE and WebDAV each have a separate Go module and executable process; neither is linked into the daemon. They depend on the public controlrpc contract package, never on Repository or daemon implementation packages. A write Begin returns a mutable staging Resource URI and binds the observed Entry identity/revision or absence; the client writes bytes directly to that URI, then asks the daemon to Commit. A successful Commit consumes that write session and staging URI; a later dirty period starts a new write session and captures a fresh CAS expectation. The daemon hashes/verifies and publishes immutable content, enforces revision CAS, and atomically commits Metadata plus any GCS obligation. Abort is an explicit destructive cancellation; uncommitted Release/Revoke and expiry preserve a durable recovery record. Clients explicitly renew live sessions; expired sessions cannot be revived. Read sessions return immutable file:// Resource URIs under a renewable content RLock held until Release, Revoke, expiry, or daemon shutdown, protecting the object from GC while live. Failed Commit retains staging and original CAS metadata; explicit retry uses that CAS, and explicit discard is the only user-directed abandonment. Setup failures release acquired leases; daemon shutdown releases read leases and promotes unfinished writes to recovery. The daemon returns only URI schemes the client has declared accessible; Phase A file:// use requires a shared local filesystem path. URI schemes remain extensible; remote data transfer is not required in this phase. FUSE is read-write: Fsync commits dirty staging, and its final-Release path attempts Commit for any remaining dirty bytes before sending Release; a failure leaves explicit recovery. WSL Windows Explorer accesses the separate FUSE process mount through the WSL native share. Cross-platform adapters and Cloud Run are deferred.
     attributes:
       fuse_access: read-write
       webdav_access: read-write
       fuse_fsync: durable-Local-Object-and-atomic-Metadata-plus-delivery-obligation
-      fuse_release_is_commit_boundary: false
-      dirty_write_visibility: private-to-open-handle-until-Fsync
+      fuse_release_is_commit_boundary: true
+      fuse_release_order: Commit-dirty-staging-before-Resource-Release
+      dirty_write_visibility: private-until-Fsync-or-final-Release-commit
+      commit_failure: durable-staging-recovery-with-original-CAS
+      resource_session_ttl: 30-seconds
+      session_renewal: client-driven
+      session_expiry_stops_repository_lease_heartbeat: true
       rename_identity: stable-Entry-ID
       adapter_calls: daemon-JSON-RPC-and-Resource-URI
       resource_schemes: extensible
@@ -1185,6 +1209,10 @@ relations:
     from: DES-DAEMON-RUNTIME
     type: depends_on
     to: REQ-RESOURCE-SESSIONS
+  - id: REL-RESOURCE-SESSION-RECOVERY
+    from: REQ-RESOURCE-SESSIONS
+    type: depends_on
+    to: REQ-RESOURCE-RECOVERY
   - id: REL-ADAPTERS-REPOSITORY
     from: DES-ADAPTERS-FILESYSTEM
     type: depends_on
@@ -1193,6 +1221,10 @@ relations:
     from: DES-ADAPTERS-FILESYSTEM
     type: depends_on
     to: REQ-RESOURCE-SESSIONS
+  - id: REL-ADAPTERS-RESOURCE-RECOVERY
+    from: DES-ADAPTERS-FILESYSTEM
+    type: depends_on
+    to: REQ-RESOURCE-RECOVERY
   - id: REL-ADAPTERS-FSYNC
     from: DES-ADAPTERS-FILESYSTEM
     type: depends_on

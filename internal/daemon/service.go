@@ -184,6 +184,45 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, mapMethodError(err)
 		}
 		return struct{}{}, nil
+	case controlrpc.MethodRenew:
+		params, err := decodeSession(raw)
+		if err != nil {
+			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+		}
+		expiresAt, err := s.sessions.renew(params.SessionID)
+		if err != nil {
+			return nil, mapMethodError(err)
+		}
+		return controlrpc.RenewResult{ExpiresAt: expiresAt}, nil
+	case controlrpc.MethodRevoke:
+		params, err := decodeSession(raw)
+		if err != nil {
+			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+		}
+		if err := s.sessions.revoke(params.SessionID); err != nil {
+			return nil, mapMethodError(err)
+		}
+		return struct{}{}, nil
+	case controlrpc.MethodRecoveryList:
+		return s.sessions.listRecoveries(), nil
+	case controlrpc.MethodRecoveryRetry:
+		params, err := decodeSession(raw)
+		if err != nil {
+			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+		}
+		if err := s.sessions.retryRecovery(ctx, params.SessionID); err != nil {
+			return nil, mapMethodError(err)
+		}
+		return struct{}{}, nil
+	case controlrpc.MethodRecoveryDiscard:
+		params, err := decodeSession(raw)
+		if err != nil {
+			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+		}
+		if err := s.sessions.discardRecovery(params.SessionID); err != nil {
+			return nil, mapMethodError(err)
+		}
+		return struct{}{}, nil
 	default:
 		return nil, &controlrpc.MethodError{Code: jsonRPCMethodNotFound, Err: fmt.Errorf("unknown method %q", method)}
 	}
@@ -238,6 +277,8 @@ func mapMethodError(err error) error {
 	switch {
 	case errors.Is(err, metadata.ErrEntryNotFound), errors.Is(err, errSessionNotFound):
 		return &controlrpc.MethodError{Code: jsonRPCEntryNotFound, Err: err}
+	case errors.Is(err, errSessionExpired):
+		return &controlrpc.MethodError{Code: controlrpc.CodeResourceSessionExpired, Err: err}
 	case errors.Is(err, metadata.ErrEntryConflict), errors.Is(err, errSessionBusy), errors.Is(err, errSessionClosed):
 		return &controlrpc.MethodError{Code: jsonRPCEntryConflict, Err: err}
 	default:
