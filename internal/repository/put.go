@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"os"
 	"path"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/kamichidu/go-nando/internal/content"
 	"github.com/kamichidu/go-nando/internal/coordinator"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/objectstore"
@@ -214,7 +216,65 @@ func (r *Repository) validateLease(ctx context.Context, operationID string) erro
 	return ctx.Err()
 }
 
-func (r *Repository) withResourceLease(ctx context.Context, resourceID string, mode coordinator.LockMode, operation func(context.Context) error) (retErr error) {
+func (r *Repository) openLocalOrDownload(ctx context.Context, operationID string, id content.ID) (reader io.ReadCloser, retErr error) {
+	reader, err := r.objectStore.Open(ctx, id)
+	if err == nil || !errors.Is(err, objectstore.ErrObjectNotFound) || r.settings.DeliveryMode != DeliveryModeGCS {
+		return reader, err
+	}
+	if r.replica == nil {
+		return nil, errors.New("GCS read-through is configured without a replica store")
+	}
+	if err := r.coordinator.AcquireResourceLock(ctx, temporaryResourceID(operationID), operationID, coordinator.RLock, resourceLeaseTTL); err != nil {
+		return nil, fmt.Errorf("acquire download temp RLock: %w", err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), putCleanupTimeout)
+		defer cancel()
+		if err := r.objectStore.CleanupStaging(cleanupCtx, operationID); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("cleanup GCS download staging: %w", err))
+		}
+	}()
+	session, err := r.objectStore.BeginStage(ctx, operationID)
+	if err != nil {
+		return nil, fmt.Errorf("begin GCS download staging: %w", err)
+	}
+	sessionClosed := false
+	defer func() {
+		if !sessionClosed {
+			retErr = errors.Join(retErr, session.Close())
+		}
+	}()
+	remote, err := r.replica.OpenReplica(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("open GCS replica %s: %w", id, err)
+	}
+	staged, stageErr := session.Stage(ctx, remote)
+	remoteCloseErr := remote.Close()
+	sessionCloseErr := session.Close()
+	sessionClosed = true
+	if err := errors.Join(stageErr, remoteCloseErr, sessionCloseErr); err != nil {
+		return nil, fmt.Errorf("stage GCS download %s: %w", id, err)
+	}
+	if staged.ID() != id {
+		return nil, fmt.Errorf("downloaded GCS content has the wrong identity: got %s, want %s: %w", staged.ID(), id, objectstore.ErrHashMismatch)
+	}
+	if err := r.validateLease(ctx, operationID); err != nil {
+		return nil, err
+	}
+	result, err := r.objectStore.Publish(ctx, staged)
+	if err != nil {
+		return nil, fmt.Errorf("publish verified GCS download: %w", err)
+	}
+	if result.ID != id || result.Size != staged.Size() {
+		return nil, fmt.Errorf("object store published unexpected GCS download: got %s/%d want %s/%d", result.ID, result.Size, id, staged.Size())
+	}
+	if err := r.validateLease(ctx, operationID); err != nil {
+		return nil, err
+	}
+	return r.objectStore.Open(ctx, id)
+}
+
+func (r *Repository) withResourceLease(ctx context.Context, resourceID string, mode coordinator.LockMode, operation func(context.Context, string) error) (retErr error) {
 	operationID := uuid.NewString()
 	if err := r.coordinator.AcquireResourceLock(ctx, resourceID, operationID, mode, resourceLeaseTTL); err != nil {
 		return err
@@ -232,7 +292,7 @@ func (r *Repository) withResourceLease(ctx context.Context, resourceID string, m
 	if err := r.validateLease(leaseCtx, operationID); err != nil {
 		return err
 	}
-	return operation(leaseCtx)
+	return operation(leaseCtx, operationID)
 }
 
 func (r *Repository) startLeaseHeartbeat(ctx context.Context, operationID string) (context.Context, func() error, error) {

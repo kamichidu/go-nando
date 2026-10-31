@@ -33,12 +33,12 @@ func (r *Repository) get(ctx context.Context, repoPath string, localPath string)
 	if entry.ObjectID == nil {
 		return fmt.Errorf("file entry %s has no associated object ID", entry.ID)
 	}
-	return r.withResourceLease(ctx, contentResourceID(entry.ObjectID.String()), coordinator.RLock, func(readCtx context.Context) error {
-		return r.getWithEntry(readCtx, entry, localPath)
+	return r.withResourceLease(ctx, contentResourceID(entry.ObjectID.String()), coordinator.RLock, func(readCtx context.Context, operationID string) error {
+		return r.getWithEntry(readCtx, operationID, entry, localPath)
 	})
 }
 
-func (r *Repository) getWithEntry(ctx context.Context, entry metadata.Entry, localPath string) (retErr error) {
+func (r *Repository) getWithEntry(ctx context.Context, operationID string, entry metadata.Entry, localPath string) (retErr error) {
 	parentDir := filepath.Dir(localPath)
 	if err := os.MkdirAll(parentDir, 0755); err != nil {
 		return fmt.Errorf("failed to create local destination directory %q: %w", parentDir, err)
@@ -48,7 +48,7 @@ func (r *Repository) getWithEntry(ctx context.Context, entry metadata.Entry, loc
 		return err
 	}
 
-	reader, err := r.objectStore.Open(ctx, *entry.ObjectID)
+	reader, err := r.openLocalOrDownload(ctx, operationID, *entry.ObjectID)
 	if err != nil {
 		return fmt.Errorf("failed to open object for metadata entry: %w", err)
 	}

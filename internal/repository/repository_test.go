@@ -1,6 +1,7 @@
 package repository_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -25,6 +26,46 @@ import (
 type fixedIDMetadataStore struct {
 	metadata.MetadataStore
 }
+
+type fakeReplicaStore struct {
+	fail   bool
+	calls  int
+	stored map[content.ID][]byte
+}
+
+func (s *fakeReplicaStore) Upload(_ context.Context, id content.ID, size int64, src io.Reader) (objectstore.ReplicaInfo, error) {
+	s.calls++
+	data, err := io.ReadAll(src)
+	if err != nil {
+		return objectstore.ReplicaInfo{}, err
+	}
+	if s.fail {
+		return objectstore.ReplicaInfo{}, errors.New("simulated GCS unavailable")
+	}
+	if int64(len(data)) != size {
+		return objectstore.ReplicaInfo{}, errors.New("unexpected upload size")
+	}
+	if s.stored == nil {
+		s.stored = make(map[content.ID][]byte)
+	}
+	s.stored[id] = data
+	return objectstore.ReplicaInfo{ID: id, Size: size, Generation: 1}, nil
+}
+func (s *fakeReplicaStore) OpenReplica(_ context.Context, id content.ID) (io.ReadCloser, error) {
+	data, ok := s.stored[id]
+	if !ok {
+		return nil, objectstore.ErrObjectNotFound
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
+}
+func (s *fakeReplicaStore) ReplicaExists(_ context.Context, id content.ID) (bool, error) {
+	_, ok := s.stored[id]
+	return ok, nil
+}
+func (*fakeReplicaStore) ListReplicas(context.Context) ([]objectstore.ReplicaInfo, error) {
+	return nil, nil
+}
+func (*fakeReplicaStore) DeleteReplica(context.Context, content.ID, int64) error { return nil }
 
 func TestResourceLeasesProtectPutAndReadsFromGC(t *testing.T) {
 	ctx := context.Background()
@@ -142,7 +183,8 @@ func TestGCSModePutAtomicallyEnqueuesContentID(t *testing.T) {
 		}
 	})
 	settings := repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "test-bucket"}
-	repo := repository.NewRepositoryWithSettings(metadata.NewValidatingStore(store), objects, hasher, coordinator, settings)
+	remote := &fakeReplicaStore{fail: true}
+	repo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(store), objects, remote, hasher, coordinator, settings)
 	source := filepath.Join(root, "input")
 	if err := os.WriteFile(source, []byte("queued gcs content"), 0600); err != nil {
 		t.Fatal(err)
@@ -168,6 +210,176 @@ func TestGCSModePutAtomicallyEnqueuesContentID(t *testing.T) {
 	ids, err = store.PendingTransfers(ctx)
 	if err != nil || len(ids) != 1 || ids[0] != *entry.ObjectID {
 		t.Fatalf("content-ID queue was not idempotent: ids=%v err=%v", ids, err)
+	}
+	if err := repo.ProcessTransferQueue(ctx); err == nil {
+		t.Fatal("simulated transfer failure unexpectedly succeeded")
+	}
+	ids, err = store.PendingTransfers(ctx)
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("failed transfer removed its retry obligation: ids=%v err=%v", ids, err)
+	}
+	remote.fail = false
+	if err := repo.ProcessTransferQueue(ctx); err != nil {
+		t.Fatalf("retry transfer: %v", err)
+	}
+	ids, err = store.PendingTransfers(ctx)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("successful transfer did not clear its queue row: ids=%v err=%v", ids, err)
+	}
+	if !bytes.Equal(remote.stored[*entry.ObjectID], []byte("queued gcs content")) || remote.calls != 2 {
+		t.Fatalf("unexpected fake replica result: calls=%d data=%q", remote.calls, remote.stored[*entry.ObjectID])
+	}
+}
+
+func TestGCSReadThroughPublishesOnlyHashVerifiedLocalObject(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(root, "objects"), filepath.Join(root, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localRepo := openRepositoryInstance(t, root, metaStore, objects, hasher)
+	source := filepath.Join(root, "source")
+	if err := os.WriteFile(source, []byte("read-through bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := localRepo.Put(ctx, source, "/file"); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := localRepo.Stat(ctx, "/file")
+	if err != nil || entry.ObjectID == nil {
+		t.Fatalf("get entry: %+v %v", entry, err)
+	}
+	id := *entry.ObjectID
+	if err := objects.Delete(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	remote := &fakeReplicaStore{stored: map[content.ID][]byte{id: []byte("read-through bytes")}}
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(root, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := coordinator.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	settings := repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "bucket"}
+	repo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, settings)
+	var out strings.Builder
+	if err := repo.Cat(ctx, "/file", &out); err != nil || out.String() != "read-through bytes" {
+		t.Fatalf("Cat read-through: output=%q err=%v", out.String(), err)
+	}
+	if err := objects.Verify(ctx, id); err != nil {
+		t.Fatalf("download was not published as a verified Local Object: %v", err)
+	}
+	if err := objects.Delete(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	remote.stored[id] = []byte("wrong content")
+	destination := filepath.Join(root, "export")
+	if err := os.WriteFile(destination, []byte("keep old file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Get(ctx, "/file", destination); !errors.Is(err, objectstore.ErrHashMismatch) {
+		t.Fatalf("hash-invalid GCS download was accepted: %v", err)
+	}
+	if exists, err := objects.Exists(ctx, id); err != nil || exists {
+		t.Fatalf("partial/invalid download became a committed Local object: exists=%v err=%v", exists, err)
+	}
+	got, err := os.ReadFile(destination)
+	if err != nil || string(got) != "keep old file" {
+		t.Fatalf("failed read-through changed Get destination: %q err=%v", got, err)
+	}
+}
+
+func TestCapacityGCOnlyEvictsConfirmedReferencedLocalCache(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	hasher := content.NewHasher()
+	store := openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(root, "objects"), filepath.Join(root, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localRepo := openRepositoryInstance(t, root, store, objects, hasher)
+	source := filepath.Join(root, "source")
+	data := []byte("cache bytes")
+	if err := os.WriteFile(source, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := localRepo.Put(ctx, source, "/cached"); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := localRepo.Stat(ctx, "/cached")
+	if err != nil || entry.ObjectID == nil {
+		t.Fatalf("entry: %+v %v", entry, err)
+	}
+	id := *entry.ObjectID
+	remote := &fakeReplicaStore{stored: map[content.ID][]byte{id: data}}
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(root, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := coordinator.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	settings := repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "bucket", MaxLocalBytes: 1}
+	repo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(store), objects, remote, hasher, coordinator, settings)
+	deleted, err := repo.CapacityGC(ctx)
+	if err != nil || deleted != 1 {
+		t.Fatalf("confirmed cache eviction: deleted=%d err=%v", deleted, err)
+	}
+	if exists, err := objects.Exists(ctx, id); err != nil || exists {
+		t.Fatalf("confirmed Local cache was not evicted: exists=%v err=%v", exists, err)
+	}
+	if _, err := repo.Stat(ctx, "/cached"); err != nil {
+		t.Fatalf("capacity eviction changed Metadata: %v", err)
+	}
+}
+
+func TestCapacityGCPreservesUntransferredContent(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	hasher := content.NewHasher()
+	store := openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(root, "objects"), filepath.Join(root, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(root, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := coordinator.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	remote := &fakeReplicaStore{}
+	settings := repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "bucket", MaxLocalBytes: 1}
+	repo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(store), objects, remote, hasher, coordinator, settings)
+	source := filepath.Join(root, "source")
+	if err := os.WriteFile(source, []byte("not transferred"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Put(ctx, source, "/pending"); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := repo.Stat(ctx, "/pending")
+	if err != nil || entry.ObjectID == nil {
+		t.Fatalf("entry: %+v %v", entry, err)
+	}
+	deleted, err := repo.CapacityGC(ctx)
+	if err != nil || deleted != 0 {
+		t.Fatalf("capacity GC removed untransferred data: deleted=%d err=%v", deleted, err)
+	}
+	if exists, err := objects.Exists(ctx, *entry.ObjectID); err != nil || !exists {
+		t.Fatalf("untransferred Local copy missing: exists=%v err=%v", exists, err)
 	}
 }
 

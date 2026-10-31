@@ -21,6 +21,7 @@ import (
 type Repository struct {
 	metaStore   metadata.MetadataStore
 	objectStore objectstore.ObjectStore
+	replica     objectstore.ReplicaStore
 	hasher      content.Hasher
 	coordinator Coordinator
 	settings    Settings
@@ -34,9 +35,15 @@ func NewRepository(metaStore metadata.MetadataStore, objStore objectstore.Object
 
 // NewRepositoryWithSettings creates a Repository with persisted delivery settings.
 func NewRepositoryWithSettings(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, hasher content.Hasher, coordinator Coordinator, settings Settings) *Repository {
+	return NewRepositoryWithReplica(metaStore, objStore, nil, hasher, coordinator, settings)
+}
+
+// NewRepositoryWithReplica installs the remote replica used by GCS delivery.
+func NewRepositoryWithReplica(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, replica objectstore.ReplicaStore, hasher content.Hasher, coordinator Coordinator, settings Settings) *Repository {
 	return &Repository{
 		metaStore:   metaStore,
 		objectStore: objStore,
+		replica:     replica,
 		hasher:      hasher,
 		coordinator: coordinator,
 		settings:    settings,
@@ -200,8 +207,8 @@ func (r *Repository) cat(ctx context.Context, repoPath string, w io.Writer) erro
 		return fmt.Errorf("file entry %s has no associated object ID", entry.ID)
 	}
 
-	return r.withResourceLease(ctx, contentResourceID(entry.ObjectID.String()), coordinator.RLock, func(readCtx context.Context) error {
-		rc, err := r.objectStore.Open(readCtx, *entry.ObjectID)
+	return r.withResourceLease(ctx, contentResourceID(entry.ObjectID.String()), coordinator.RLock, func(readCtx context.Context, operationID string) error {
+		rc, err := r.openLocalOrDownload(readCtx, operationID, *entry.ObjectID)
 		if err != nil {
 			return fmt.Errorf("failed to open object from store: %w", err)
 		}
@@ -397,7 +404,7 @@ func (r *Repository) doctor(ctx context.Context) error {
 	for _, e := range allEntries {
 		if e.Kind == metadata.EntryKindFile && e.ObjectID != nil {
 			id := *e.ObjectID
-			err := r.withResourceLease(ctx, contentResourceID(id.String()), coordinator.RLock, func(readCtx context.Context) error {
+			err := r.withResourceLease(ctx, contentResourceID(id.String()), coordinator.RLock, func(readCtx context.Context, _ string) error {
 				exists, err := r.objectStore.Exists(readCtx, id)
 				if err != nil {
 					return fmt.Errorf("doctor failed: failed to check object existence for ID %s: %w", id.String(), err)
