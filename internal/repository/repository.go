@@ -416,6 +416,15 @@ func (r *Repository) deleteIfUnreferenced(ctx context.Context, operationID strin
 			return false, nil
 		}
 	}
+	pendingTransfers, err := r.metaStore.PendingTransfers(leaseCtx)
+	if err != nil {
+		return false, fmt.Errorf("recheck pending transfer obligations under GC WLock: %w", err)
+	}
+	for _, pendingID := range pendingTransfers {
+		if pendingID == id {
+			return false, nil
+		}
+	}
 	if err := r.validateLease(leaseCtx, operationID); err != nil {
 		return false, err
 	}

@@ -281,6 +281,22 @@ func TestGCSModePutAtomicallyEnqueuesContentID(t *testing.T) {
 	if err != nil || len(ids) != 1 {
 		t.Fatalf("failed transfer removed its retry obligation: ids=%v err=%v", ids, err)
 	}
+	if err := repo.Remove(ctx, "/item"); err != nil {
+		t.Fatalf("remove first reference while transfer is pending: %v", err)
+	}
+	if err := repo.Remove(ctx, "/second"); err != nil {
+		t.Fatalf("remove last reference while transfer is pending: %v", err)
+	}
+	if deleted, err := repo.GC(ctx); err != nil || deleted != 0 {
+		t.Fatalf("GC must retain a local orphan with a pending transfer: deleted=%d err=%v", deleted, err)
+	}
+	if err := objects.Verify(ctx, *entry.ObjectID); err != nil {
+		t.Fatalf("pending transfer source was deleted by GC: %v", err)
+	}
+	ids, err = store.PendingTransfers(ctx)
+	if err != nil || len(ids) != 1 || ids[0] != *entry.ObjectID {
+		t.Fatalf("GC changed pending transfer obligation: ids=%v err=%v", ids, err)
+	}
 	remote.fail = false
 	if err := repo.ProcessTransferQueue(ctx); err != nil {
 		t.Fatalf("retry transfer: %v", err)
