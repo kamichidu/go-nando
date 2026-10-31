@@ -25,6 +25,60 @@ type fakeRepositoryUseCases struct {
 	readReleaseCount int
 	putStarted       chan struct{}
 	putContinue      chan struct{}
+	putErr           error
+}
+
+type failingSessionFiles struct {
+	osSessionFiles
+	syncErr    error
+	writeErr   error
+	writePhase string
+	removePath string
+	removeErr  error
+}
+
+func (f failingSessionFiles) SyncFile(path string) error {
+	if f.syncErr != nil {
+		return f.syncErr
+	}
+	return f.osSessionFiles.SyncFile(path)
+}
+
+func (f failingSessionFiles) WriteAtomic(directory, path string, data []byte) error {
+	if f.writeErr != nil && f.writePhase != "" {
+		temp, err := os.CreateTemp(directory, ".test-recovery-record-*")
+		if err != nil {
+			return err
+		}
+		tempPath := temp.Name()
+		if f.writePhase == "write" {
+			return errors.Join(f.writeErr, temp.Close(), os.Remove(tempPath))
+		}
+		if _, err := temp.Write(data); err != nil {
+			return errors.Join(err, temp.Close(), os.Remove(tempPath))
+		}
+		if f.writePhase == "fsync" {
+			return errors.Join(f.writeErr, temp.Close(), os.Remove(tempPath))
+		}
+		if err := temp.Sync(); err != nil {
+			return errors.Join(err, temp.Close(), os.Remove(tempPath))
+		}
+		if err := temp.Close(); err != nil {
+			return errors.Join(err, os.Remove(tempPath))
+		}
+		return errors.Join(f.writeErr, os.Remove(tempPath))
+	}
+	if f.writeErr != nil {
+		return f.writeErr
+	}
+	return f.osSessionFiles.WriteAtomic(directory, path, data)
+}
+
+func (f failingSessionFiles) Remove(path string) error {
+	if path == f.removePath && f.removeErr != nil {
+		return f.removeErr
+	}
+	return f.osSessionFiles.Remove(path)
 }
 
 func (f *fakeRepositoryUseCases) Stat(_ context.Context, path string) (metadata.Entry, error) {
@@ -126,6 +180,9 @@ func (f *fakeRepositoryUseCases) PutExpected(_ context.Context, input app.PutInp
 	data, err := os.ReadFile(input.LocalPath)
 	if err != nil {
 		return err
+	}
+	if f.putErr != nil {
+		return f.putErr
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -346,6 +403,238 @@ func TestExpiredCommitIsRejectedWithSessionExpiredRPCError(t *testing.T) {
 	if records := sessions.listRecoveries(); len(records) != 1 || records[0].SessionID != begin.SessionID {
 		t.Fatalf("expired Commit did not preserve staging: %+v", records)
 	}
+}
+
+func TestExpiredRenewSerializesWithExpirySweep(t *testing.T) {
+	fake := &fakeRepositoryUseCases{}
+	root := t.TempDir()
+	sessions, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := sessions.beginWrite(context.Background(), "/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions.mu.Lock()
+	sessions.sessions[result.SessionID].expiresAt = time.Now().Add(-time.Second)
+	sessions.mu.Unlock()
+	start := make(chan struct{})
+	renewDone := make(chan error, 1)
+	sweepDone := make(chan struct{})
+	go func() { <-start; _, renewErr := sessions.renew(result.SessionID); renewDone <- renewErr }()
+	go func() { <-start; sessions.expireDue(time.Now()); close(sweepDone) }()
+	close(start)
+	renewErr := <-renewDone
+	<-sweepDone
+	if renewErr == nil {
+		t.Fatal("expired session was renewed")
+	}
+	if records := sessions.listRecoveries(); len(records) != 1 || records[0].SessionID != result.SessionID {
+		t.Fatalf("expired session was not preserved exactly once: %+v", records)
+	}
+	if _, err := sessions.renew(result.SessionID); !errors.Is(err, errSessionExpired) && !errors.Is(err, errSessionNotFound) {
+		t.Fatalf("session became renewable after expiry transition: %v", err)
+	}
+	stopSessionManagerForCrash(sessions)
+	restarted, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := restarted.close(); err != nil {
+			t.Errorf("close restarted manager: %v", err)
+		}
+	}()
+	if records := restarted.listRecoveries(); len(records) != 1 || records[0].SessionID != result.SessionID {
+		t.Fatalf("expiry recovery did not survive restart: %+v", records)
+	}
+}
+
+func TestRecoveryPreservationFailuresKeepBeginManifestAndStaging(t *testing.T) {
+	failure := errors.New("injected persistence boundary failure")
+	for _, test := range []struct {
+		name  string
+		files failingSessionFiles
+	}{
+		{name: "staging fsync", files: failingSessionFiles{syncErr: failure}},
+		{name: "manifest write", files: failingSessionFiles{writeErr: failure, writePhase: "write"}},
+		{name: "manifest fsync", files: failingSessionFiles{writeErr: failure, writePhase: "fsync"}},
+		{name: "manifest rename", files: failingSessionFiles{writeErr: failure, writePhase: "rename"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &fakeRepositoryUseCases{putErr: metadata.ErrEntryConflict}
+			root := t.TempDir()
+			sessions, err := newSessionManagerWithTTL(fake, root, time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := sessions.beginWrite(context.Background(), "/file")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stage := resourcePathFromURI(t, result.ResourceURI)
+			if err := os.WriteFile(stage, []byte("recoverable payload"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			sessions.files = test.files
+			if err := sessions.commit(context.Background(), result.SessionID); err == nil {
+				t.Fatal("Commit unexpectedly succeeded with injected storage failure")
+			}
+			sessions.mu.Lock()
+			_, active := sessions.sessions[result.SessionID]
+			_, listed := sessions.recoveries[result.SessionID]
+			sessions.mu.Unlock()
+			if !active || !listed {
+				t.Fatalf("failed preservation must stay retryable in memory: active=%v recovery=%v", active, listed)
+			}
+			if data, err := os.ReadFile(stage); err != nil || string(data) != "recoverable payload" {
+				t.Fatalf("staging lost on preservation failure: %q, %v", data, err)
+			}
+			manifest := sessions.recordPath(result.SessionID)
+			if _, err := os.Stat(manifest); err != nil {
+				t.Fatalf("Begin-time durable manifest missing: %v", err)
+			}
+			stopSessionManagerForCrash(sessions)
+			restarted, err := newSessionManagerWithTTL(fake, root, time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := restarted.close(); err != nil {
+					t.Errorf("close restarted manager: %v", err)
+				}
+			}()
+			if records := restarted.listRecoveries(); len(records) != 1 || records[0].SessionID != result.SessionID {
+				t.Fatalf("Begin manifest did not reconstruct recovery: %+v", records)
+			}
+		})
+	}
+}
+
+func TestDiscardTombstonePrecedesCleanupAndRestartFinishesPartialRemoval(t *testing.T) {
+	fake := &fakeRepositoryUseCases{putErr: metadata.ErrEntryConflict}
+	root := t.TempDir()
+	sessions, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := sessions.beginWrite(context.Background(), "/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, result.ResourceURI)
+	if err := os.WriteFile(stage, []byte("discard me"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.commit(context.Background(), result.SessionID); !errors.Is(err, metadata.ErrEntryConflict) {
+		t.Fatalf("Commit error=%v", err)
+	}
+	manifest := sessions.recordPath(result.SessionID)
+	sessions.files = failingSessionFiles{removePath: manifest, removeErr: errors.New("injected manifest unlink error")}
+	if err := sessions.discardRecovery(result.SessionID); err == nil {
+		t.Fatal("partial cleanup error was not reported")
+	}
+	if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected stage cleanup to precede manifest cleanup: %v", err)
+	}
+	data, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatalf("discard tombstone missing after partial cleanup: %v", err)
+	}
+	var record recoveryRecord
+	if err := json.Unmarshal(data, &record); err != nil || !record.Discarding {
+		t.Fatalf("manifest is not a durable discard tombstone: %+v err=%v", record, err)
+	}
+	stopSessionManagerForCrash(sessions)
+	restarted, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := restarted.close(); err != nil {
+			t.Errorf("close restarted manager: %v", err)
+		}
+	}()
+	if records := restarted.listRecoveries(); len(records) != 0 {
+		t.Fatalf("discarded session reappeared as recovery: %+v", records)
+	}
+	if _, err := os.Stat(manifest); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restart did not finish tombstone cleanup: %v", err)
+	}
+}
+
+func TestAbortPersistenceFailureRetainsStageAndBlocksCommitUntilAbortRetry(t *testing.T) {
+	fake := &fakeRepositoryUseCases{}
+	sessions, err := newSessionManagerWithTTL(fake, t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sessions.close(); err != nil {
+			t.Errorf("close sessions: %v", err)
+		}
+	}()
+	result, err := sessions.beginWrite(context.Background(), "/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, result.ResourceURI)
+	if err := os.WriteFile(stage, []byte("keep until abort intent is durable"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sessions.files = failingSessionFiles{writeErr: errors.New("injected rename failure"), writePhase: "rename"}
+	if err := sessions.abort(result.SessionID); err == nil {
+		t.Fatal("Abort persistence failure was not returned")
+	}
+	if data, err := os.ReadFile(stage); err != nil || string(data) != "keep until abort intent is durable" {
+		t.Fatalf("stage removed before durable intent: %q, %v", data, err)
+	}
+	if err := sessions.commit(context.Background(), result.SessionID); !errors.Is(err, errSessionClosed) {
+		t.Fatalf("Commit after failed Abort intent=%v, want closed session", err)
+	}
+	sessions.files = osSessionFiles{}
+	if err := sessions.abort(result.SessionID); err != nil {
+		t.Fatalf("retry Abort after storage recovered: %v", err)
+	}
+	if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("successful explicit Abort retained staging: %v", err)
+	}
+}
+
+func TestUncommittedReleasePreservesInsteadOfCommitting(t *testing.T) {
+	fake := &fakeRepositoryUseCases{}
+	sessions, err := newSessionManagerWithTTL(fake, t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sessions.close(); err != nil {
+			t.Errorf("close sessions: %v", err)
+		}
+	}()
+	result, err := sessions.beginWrite(context.Background(), "/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, result.ResourceURI)
+	if err := os.WriteFile(stage, []byte("uncommitted close"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.release(result.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if fake.entry != nil {
+		t.Fatalf("generic Release committed repository data: %+v", fake.entry)
+	}
+	if records := sessions.listRecoveries(); len(records) != 1 || records[0].SessionID != result.SessionID {
+		t.Fatalf("Release did not preserve abandoned staging: %+v", records)
+	}
+}
+
+func stopSessionManagerForCrash(sessions *sessionManager) {
+	close(sessions.done)
+	sessions.wg.Wait()
 }
 
 func TestCommitAndExpirySerializeAndCommitFailureIsRecoverable(t *testing.T) {

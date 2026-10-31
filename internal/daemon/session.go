@@ -34,6 +34,7 @@ var (
 type recoveryRecord struct {
 	Version        int                       `json:"version"`
 	Committed      bool                      `json:"committed"`
+	Discarding     bool                      `json:"discarding,omitempty"`
 	SessionID      string                    `json:"session_id"`
 	StagingPath    string                    `json:"staging_path"`
 	RepositoryPath string                    `json:"repository_path"`
@@ -48,13 +49,56 @@ type writeSession struct {
 	recoveryRecord
 	expiresAt time.Time
 	committed bool
+	expired   bool
 }
 
 type readSession struct {
 	release   func() error
 	expiresAt time.Time
 	inFlight  bool
+	expired   bool
 }
+
+// sessionFiles isolates the daemon's durable Resource manifest and staging
+// operations so failures at each filesystem boundary have explicit outcomes.
+type sessionFiles interface {
+	SyncFile(string) error
+	WriteAtomic(directory, path string, data []byte) error
+	Remove(string) error
+	SyncDirectory(string) error
+	ReadDir(string) ([]os.DirEntry, error)
+	ReadFile(string) ([]byte, error)
+}
+
+type osSessionFiles struct{}
+
+func (osSessionFiles) SyncFile(path string) error { return syncFile(path) }
+
+func (osSessionFiles) WriteAtomic(directory, path string, data []byte) error {
+	temp, err := os.CreateTemp(directory, ".recovery-record-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	n, writeErr := temp.Write(data)
+	if writeErr == nil && n != len(data) {
+		writeErr = fmt.Errorf("short recovery record write: %d of %d bytes", n, len(data))
+	}
+	syncErr := temp.Sync()
+	closeErr := temp.Close()
+	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
+		return errors.Join(err, removeIfExists(tempPath))
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return errors.Join(err, removeIfExists(tempPath))
+	}
+	return syncDirectory(directory)
+}
+
+func (osSessionFiles) Remove(path string) error                   { return removeIfExists(path) }
+func (osSessionFiles) SyncDirectory(path string) error            { return syncDirectory(path) }
+func (osSessionFiles) ReadDir(path string) ([]os.DirEntry, error) { return os.ReadDir(path) }
+func (osSessionFiles) ReadFile(path string) ([]byte, error)       { return os.ReadFile(path) }
 
 type sessionManager struct {
 	app        repositoryUseCases
@@ -64,6 +108,7 @@ type sessionManager struct {
 	sessions   map[string]*writeSession
 	reads      map[string]*readSession
 	recoveries map[string]*recoveryRecord
+	files      sessionFiles
 	done       chan struct{}
 	wg         sync.WaitGroup
 }
@@ -86,7 +131,7 @@ func newSessionManagerWithTTL(application repositoryUseCases, repoDir string, tt
 	manager := &sessionManager{
 		app: application, directory: directory, ttl: ttl,
 		sessions: make(map[string]*writeSession), reads: make(map[string]*readSession),
-		recoveries: make(map[string]*recoveryRecord), done: make(chan struct{}),
+		recoveries: make(map[string]*recoveryRecord), files: osSessionFiles{}, done: make(chan struct{}),
 	}
 	if err := manager.loadRecoveries(); err != nil {
 		return nil, err
@@ -165,6 +210,10 @@ func (m *sessionManager) renew(id string) (time.Time, error) {
 	m.mu.Lock()
 	session, ok := m.sessions[id]
 	if ok {
+		if session.expired {
+			m.mu.Unlock()
+			return time.Time{}, errSessionExpired
+		}
 		if session.inFlight {
 			m.mu.Unlock()
 			return time.Time{}, errSessionBusy
@@ -173,9 +222,15 @@ func (m *sessionManager) renew(id string) (time.Time, error) {
 			m.mu.Unlock()
 			return time.Time{}, errSessionClosed
 		}
-		if !time.Now().Before(session.expiresAt) {
+		if session.Discarding {
 			m.mu.Unlock()
-			return time.Time{}, errors.Join(errSessionExpired, m.expireWrite(id))
+			return time.Time{}, errSessionClosed
+		}
+		if !time.Now().Before(session.expiresAt) {
+			session.expired = true
+			session.inFlight = true
+			m.mu.Unlock()
+			return time.Time{}, errors.Join(errSessionExpired, m.finishExpiredWrite(id, session))
 		}
 		session.expiresAt = time.Now().Add(m.ttl)
 		expiresAt := session.expiresAt
@@ -187,13 +242,19 @@ func (m *sessionManager) renew(id string) (time.Time, error) {
 		m.mu.Unlock()
 		return time.Time{}, errSessionNotFound
 	}
+	if read.expired {
+		m.mu.Unlock()
+		return time.Time{}, errSessionExpired
+	}
 	if read.inFlight {
 		m.mu.Unlock()
 		return time.Time{}, errSessionBusy
 	}
 	if !time.Now().Before(read.expiresAt) {
+		read.expired = true
+		read.inFlight = true
 		m.mu.Unlock()
-		return time.Time{}, errors.Join(errSessionExpired, m.expireRead(id))
+		return time.Time{}, errors.Join(errSessionExpired, m.finishExpiredRead(id, read))
 	}
 	read.expiresAt = time.Now().Add(m.ttl)
 	expiresAt := read.expiresAt
@@ -212,36 +273,54 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 		m.mu.Unlock()
 		return errSessionBusy
 	}
+	if session.expired {
+		m.mu.Unlock()
+		return errSessionExpired
+	}
 	if session.committed {
 		m.mu.Unlock()
 		return nil
 	}
-	if !time.Now().Before(session.expiresAt) {
+	if session.Discarding {
 		m.mu.Unlock()
-		return errors.Join(errSessionExpired, m.expireWrite(id))
+		return errSessionClosed
+	}
+	if !time.Now().Before(session.expiresAt) {
+		session.expired = true
+		session.inFlight = true
+		m.mu.Unlock()
+		return errors.Join(errSessionExpired, m.finishExpiredWrite(id, session))
 	}
 	session.inFlight = true
 	m.mu.Unlock()
 
-	commitErr := syncFile(session.StagingPath)
+	commitErr := m.files.SyncFile(session.StagingPath)
 	if commitErr == nil {
 		commitErr = m.app.PutExpected(ctx, app.PutInput{LocalPath: session.StagingPath, RepositoryPath: session.RepositoryPath}, session.Expectation)
 	}
 	if commitErr != nil {
 		preserveErr := m.preserve(&session.recoveryRecord, commitErr.Error())
 		m.mu.Lock()
-		delete(m.sessions, id)
 		session.inFlight = false
 		m.recoveries[id] = &session.recoveryRecord
+		if preserveErr == nil {
+			delete(m.sessions, id)
+		} else {
+			session.expired = true
+		}
 		m.mu.Unlock()
 		return errors.Join(commitErr, preserveErr)
 	}
 	if err := m.markCommitted(&session.recoveryRecord); err != nil {
 		preserveErr := m.preserve(&session.recoveryRecord, "repository commit succeeded but durable completion record failed: "+err.Error())
 		m.mu.Lock()
-		delete(m.sessions, id)
 		session.inFlight = false
 		m.recoveries[id] = &session.recoveryRecord
+		if preserveErr == nil {
+			delete(m.sessions, id)
+		} else {
+			session.expired = true
+		}
 		m.mu.Unlock()
 		return errors.Join(err, preserveErr)
 	}
@@ -266,25 +345,39 @@ func (m *sessionManager) abort(id string) error {
 		m.mu.Unlock()
 		return errSessionBusy
 	}
+	if session.expired {
+		m.mu.Unlock()
+		return errSessionExpired
+	}
 	if session.committed {
 		m.mu.Unlock()
 		return fmt.Errorf("cannot abort a committed Resource session: %w", errSessionClosed)
 	}
 	if !time.Now().Before(session.expiresAt) {
+		session.expired = true
+		session.inFlight = true
 		m.mu.Unlock()
-		return errors.Join(errSessionExpired, m.expireWrite(id))
+		return errors.Join(errSessionExpired, m.finishExpiredWrite(id, session))
 	}
 	session.inFlight = true
 	m.mu.Unlock()
-	err := m.removeStageAndRecord(id, session.StagingPath)
-	m.mu.Lock()
-	if err == nil {
-		delete(m.sessions, id)
-	} else {
+	if err := m.markDiscarding(&session.recoveryRecord, "explicit resource abort"); err != nil {
+		m.mu.Lock()
 		session.inFlight = false
+		m.mu.Unlock()
+		return fmt.Errorf("persist Abort intent: %w", err)
 	}
+	if err := m.cleanupDiscardedRecord(&session.recoveryRecord); err != nil {
+		m.mu.Lock()
+		session.inFlight = false
+		m.mu.Unlock()
+		return err
+	}
+	m.mu.Lock()
+	delete(m.sessions, id)
+	session.inFlight = false
 	m.mu.Unlock()
-	return err
+	return nil
 }
 
 // release closes a client handle. Uncommitted bytes are preserved for explicit
@@ -292,6 +385,10 @@ func (m *sessionManager) abort(id string) error {
 func (m *sessionManager) release(id string) error {
 	m.mu.Lock()
 	if session, ok := m.sessions[id]; ok {
+		if session.expired {
+			m.mu.Unlock()
+			return errSessionExpired
+		}
 		if session.inFlight {
 			m.mu.Unlock()
 			return errSessionBusy
@@ -301,13 +398,21 @@ func (m *sessionManager) release(id string) error {
 			m.mu.Unlock()
 			return nil
 		}
+		if session.Discarding {
+			m.mu.Unlock()
+			return errSessionClosed
+		}
 		session.inFlight = true
 		m.mu.Unlock()
 		err := m.preserve(&session.recoveryRecord, "session released before successful commit")
 		m.mu.Lock()
-		delete(m.sessions, id)
 		session.inFlight = false
 		m.recoveries[id] = &session.recoveryRecord
+		if err == nil {
+			delete(m.sessions, id)
+		} else {
+			session.expired = true
+		}
 		m.mu.Unlock()
 		return err
 	}
@@ -357,9 +462,13 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 		m.mu.Unlock()
 		return errSessionBusy
 	}
+	if record.Discarding {
+		m.mu.Unlock()
+		return errSessionClosed
+	}
 	record.inFlight = true
 	m.mu.Unlock()
-	if err := syncFile(record.StagingPath); err != nil {
+	if err := m.files.SyncFile(record.StagingPath); err != nil {
 		return m.updateRecoveryFailure(record, err)
 	}
 	err := m.app.PutExpected(ctx, app.PutInput{LocalPath: record.StagingPath, RepositoryPath: record.RepositoryPath}, record.Expectation)
@@ -367,6 +476,7 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 		if err := m.markCommitted(record); err == nil {
 			m.mu.Lock()
 			delete(m.recoveries, id)
+			delete(m.sessions, id)
 			m.mu.Unlock()
 			if cleanupErr := m.cleanupCommittedRecord(record); cleanupErr != nil {
 				log.Printf("clean committed recovery Resource %s: %v", id, cleanupErr)
@@ -399,13 +509,20 @@ func (m *sessionManager) discardRecovery(id string) error {
 	}
 	record.inFlight = true
 	m.mu.Unlock()
-	if err := m.removeStageAndRecord(id, record.StagingPath); err != nil {
+	if err := m.markDiscarding(record, "explicit recovery discard"); err != nil {
+		m.mu.Lock()
+		record.inFlight = false
+		m.mu.Unlock()
+		return fmt.Errorf("persist recovery discard intent: %w", err)
+	}
+	if err := m.cleanupDiscardedRecord(record); err != nil {
 		m.mu.Lock()
 		record.inFlight = false
 		m.mu.Unlock()
 		return err
 	}
 	m.mu.Lock()
+	delete(m.sessions, id)
 	delete(m.recoveries, id)
 	m.mu.Unlock()
 	return nil
@@ -433,40 +550,47 @@ func (m *sessionManager) expireLoop() {
 }
 
 func (m *sessionManager) expireDue(now time.Time) {
+	type expiringWrite struct {
+		id      string
+		session *writeSession
+	}
+	type expiringRead struct {
+		id      string
+		session *readSession
+	}
 	m.mu.Lock()
-	writeIDs := make([]string, 0)
-	readIDs := make([]string, 0)
+	writes := make([]expiringWrite, 0)
+	reads := make([]expiringRead, 0)
 	for id, session := range m.sessions {
-		if !session.inFlight && !now.Before(session.expiresAt) {
-			writeIDs = append(writeIDs, id)
+		if !session.inFlight && !session.expired && !now.Before(session.expiresAt) {
+			session.expired = true
+			session.inFlight = true
+			writes = append(writes, expiringWrite{id, session})
 		}
 	}
 	for id, session := range m.reads {
-		if !session.inFlight && !now.Before(session.expiresAt) {
-			readIDs = append(readIDs, id)
+		if !session.inFlight && !session.expired && !now.Before(session.expiresAt) {
+			session.expired = true
+			session.inFlight = true
+			reads = append(reads, expiringRead{id, session})
 		}
 	}
 	m.mu.Unlock()
-	for _, id := range writeIDs {
-		if err := m.expireWrite(id); err != nil {
-			log.Printf("expire write Resource session %s: %v", id, err)
+	for _, item := range writes {
+		if err := m.finishExpiredWrite(item.id, item.session); err != nil {
+			log.Printf("expire write Resource session %s: %v", item.id, err)
 		}
 	}
-	for _, id := range readIDs {
-		if err := m.expireRead(id); err != nil {
-			log.Printf("expire read Resource session %s: %v", id, err)
+	for _, item := range reads {
+		if err := m.finishExpiredRead(item.id, item.session); err != nil {
+			log.Printf("expire read Resource session %s: %v", item.id, err)
 		}
 	}
 }
 
-func (m *sessionManager) expireWrite(id string) error {
-	m.mu.Lock()
-	session, ok := m.sessions[id]
-	if !ok || session.inFlight || time.Now().Before(session.expiresAt) {
-		m.mu.Unlock()
-		return nil
-	}
+func (m *sessionManager) finishExpiredWrite(id string, session *writeSession) error {
 	if session.committed {
+		m.mu.Lock()
 		delete(m.sessions, id)
 		m.mu.Unlock()
 		if err := m.cleanupCommittedRecord(&session.recoveryRecord); err != nil {
@@ -474,26 +598,18 @@ func (m *sessionManager) expireWrite(id string) error {
 		}
 		return nil
 	}
-	session.inFlight = true
-	m.mu.Unlock()
 	err := m.preserve(&session.recoveryRecord, "Resource session expired before successful commit")
 	m.mu.Lock()
-	delete(m.sessions, id)
 	session.inFlight = false
 	m.recoveries[id] = &session.recoveryRecord
+	if err == nil {
+		delete(m.sessions, id)
+	}
 	m.mu.Unlock()
 	return err
 }
 
-func (m *sessionManager) expireRead(id string) error {
-	m.mu.Lock()
-	session, ok := m.reads[id]
-	if !ok || session.inFlight || time.Now().Before(session.expiresAt) {
-		m.mu.Unlock()
-		return nil
-	}
-	session.inFlight = true
-	m.mu.Unlock()
+func (m *sessionManager) finishExpiredRead(id string, session *readSession) error {
 	err := session.release()
 	m.mu.Lock()
 	delete(m.reads, id)
@@ -502,8 +618,11 @@ func (m *sessionManager) expireRead(id string) error {
 }
 
 func (m *sessionManager) preserve(record *recoveryRecord, reason string) error {
+	if record.Discarding {
+		return errors.New("resource session has a pending explicit discard")
+	}
 	var syncErr error
-	if err := syncFile(record.StagingPath); err != nil {
+	if err := m.files.SyncFile(record.StagingPath); err != nil {
 		syncErr = fmt.Errorf("sync recovery staging: %w", err)
 		reason += "; staging sync failed: " + err.Error()
 	}
@@ -526,21 +645,33 @@ func (m *sessionManager) persistRecord(record *recoveryRecord) error {
 	if err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(m.directory, ".recovery-record-*")
-	if err != nil {
+	return m.files.WriteAtomic(m.directory, m.recordPath(record.SessionID), data)
+}
+
+func (m *sessionManager) markDiscarding(record *recoveryRecord, reason string) error {
+	updated := *record
+	updated.Discarding = true
+	updated.FailureReason = reason
+	updated.UpdatedAt = time.Now().UTC()
+	m.mu.Lock()
+	record.Discarding = true
+	record.FailureReason = updated.FailureReason
+	record.UpdatedAt = updated.UpdatedAt
+	m.mu.Unlock()
+	return m.persistRecord(&updated)
+}
+
+func (m *sessionManager) cleanupDiscardedRecord(record *recoveryRecord) error {
+	if !record.Discarding {
+		return errors.New("refuse cleanup without durable discard intent")
+	}
+	if err := m.files.Remove(record.StagingPath); err != nil {
 		return err
 	}
-	tempPath := temp.Name()
-	_, writeErr := temp.Write(data)
-	syncErr := temp.Sync()
-	closeErr := temp.Close()
-	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
-		return errors.Join(err, os.Remove(tempPath))
+	if err := m.files.Remove(m.recordPath(record.SessionID)); err != nil {
+		return err
 	}
-	if err := os.Rename(tempPath, m.recordPath(record.SessionID)); err != nil {
-		return errors.Join(err, os.Remove(tempPath))
-	}
-	return syncDirectory(m.directory)
+	return m.files.SyncDirectory(m.directory)
 }
 
 func (m *sessionManager) markCommitted(record *recoveryRecord) error {
@@ -558,17 +689,17 @@ func (m *sessionManager) markCommitted(record *recoveryRecord) error {
 }
 
 func (m *sessionManager) cleanupCommittedRecord(record *recoveryRecord) error {
-	if err := removeIfExists(record.StagingPath); err != nil {
+	if err := m.files.Remove(record.StagingPath); err != nil {
 		return err
 	}
-	if err := removeIfExists(m.recordPath(record.SessionID)); err != nil {
+	if err := m.files.Remove(m.recordPath(record.SessionID)); err != nil {
 		return err
 	}
-	return syncDirectory(m.directory)
+	return m.files.SyncDirectory(m.directory)
 }
 
 func (m *sessionManager) loadRecoveries() error {
-	entries, err := os.ReadDir(m.directory)
+	entries, err := m.files.ReadDir(m.directory)
 	if err != nil {
 		return err
 	}
@@ -577,7 +708,7 @@ func (m *sessionManager) loadRecoveries() error {
 			continue
 		}
 		path := filepath.Join(m.directory, entry.Name())
-		data, err := os.ReadFile(path)
+		data, err := m.files.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("read Resource recovery record %q: %w", path, err)
 		}
@@ -585,12 +716,18 @@ func (m *sessionManager) loadRecoveries() error {
 		if err := json.Unmarshal(data, &record); err != nil {
 			return fmt.Errorf("decode Resource recovery record %q: %w", path, err)
 		}
-		if record.Version != 1 || record.SessionID == "" || filepath.Base(m.recordPath(record.SessionID)) != entry.Name() || !m.ownsStagePath(record.StagingPath) {
+		if record.Version != 1 || record.SessionID == "" || (record.Committed && record.Discarding) || filepath.Base(m.recordPath(record.SessionID)) != entry.Name() || !m.ownsStagePath(record.StagingPath) {
 			return fmt.Errorf("invalid Resource recovery record %q", path)
 		}
 		if record.Committed {
 			if err := m.cleanupCommittedRecord(&record); err != nil {
 				log.Printf("clean committed Resource record %s: %v", record.SessionID, err)
+			}
+			continue
+		}
+		if record.Discarding {
+			if err := m.cleanupDiscardedRecord(&record); err != nil {
+				log.Printf("finish discarded Resource cleanup %s: %v", record.SessionID, err)
 			}
 			continue
 		}
@@ -643,8 +780,21 @@ func (m *sessionManager) close() error {
 		if session == nil {
 			continue
 		}
-		if err := m.preserve(&session.recoveryRecord, "daemon stopped before session completed"); err != nil {
+		if session.Discarding {
+			if err := m.persistRecord(&session.recoveryRecord); err != nil {
+				failures = append(failures, err)
+				continue
+			}
+			if err := m.cleanupDiscardedRecord(&session.recoveryRecord); err != nil {
+				failures = append(failures, err)
+				continue
+			}
+		} else if err := m.preserve(&session.recoveryRecord, "daemon stopped before session completed"); err != nil {
 			failures = append(failures, err)
+			m.mu.Lock()
+			m.recoveries[id] = &session.recoveryRecord
+			m.mu.Unlock()
+			continue
 		}
 		m.mu.Lock()
 		delete(m.sessions, id)
@@ -673,14 +823,6 @@ func syncFile(path string) error {
 		return err
 	}
 	return errors.Join(file.Sync(), file.Close())
-}
-
-func (m *sessionManager) removeStageAndRecord(id, stagePath string) error {
-	err := errors.Join(removeIfExists(stagePath), removeIfExists(m.recordPath(id)))
-	if err != nil {
-		return err
-	}
-	return syncDirectory(m.directory)
 }
 
 func removeIfExists(path string) error {
