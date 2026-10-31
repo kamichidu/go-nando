@@ -110,6 +110,30 @@ func (s *ValidatingStore) Delete(ctx context.Context, id EntryID) error {
 	return s.next.Delete(ctx, id)
 }
 
+// CommitPut validates a Put Entry and delegates its atomic persistence.
+func (s *ValidatingStore) CommitPut(ctx context.Context, entry Entry, enqueueTransfer bool) (Entry, error) {
+	if err := runEntryValidators(entry, mustHaveEntryIDInEntry, mustNotBeRootInEntry, mustHaveValidKind, mustHaveValidRevision, mustHaveValidParentID, mustHaveNonEmptyName, mustHaveValidObjectIDForKind); err != nil {
+		return Entry{}, err
+	}
+	if entry.Kind != EntryKindFile {
+		return Entry{}, fmt.Errorf("%w: Put commit requires a file Entry", ErrEntryConflict)
+	}
+	return s.next.CommitPut(ctx, entry, enqueueTransfer)
+}
+
+// PendingTransfers delegates transfer queue listing.
+func (s *ValidatingStore) PendingTransfers(ctx context.Context) ([]content.ID, error) {
+	return s.next.PendingTransfers(ctx)
+}
+
+// CompleteTransfer delegates transfer queue completion.
+func (s *ValidatingStore) CompleteTransfer(ctx context.Context, id content.ID) error {
+	if err := id.Validate(); err != nil {
+		return err
+	}
+	return s.next.CompleteTransfer(ctx, id)
+}
+
 // ReferencedObjectIDs delegates to the next store.
 func (s *ValidatingStore) ReferencedObjectIDs(ctx context.Context) ([]content.ID, error) {
 	return s.next.ReferencedObjectIDs(ctx)

@@ -2516,3 +2516,96 @@ func TestSQLiteStore(t *testing.T) {
 		}
 	})
 }
+
+func TestCommitPutTransferQueue(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
+		t.Fatal(err)
+	}
+	objectID, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentID := metadata.EntryID("root")
+	now := metadata.TimestampFromTime(time.Now().UTC())
+	entry := metadata.Entry{ID: "queued-file", ParentID: &parentID, Name: "file.txt", Kind: metadata.EntryKindFile, ObjectID: &objectID, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if _, err := store.CommitPut(ctx, entry, true); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := store.PendingTransfers(ctx)
+	if err != nil || len(ids) != 1 || ids[0] != objectID {
+		t.Fatalf("pending transfers = %v, err %v", ids, err)
+	}
+	entry.Name = "renamed.txt"
+	updated, err := store.CommitPut(ctx, entry, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Revision != 2 {
+		t.Fatalf("updated revision = %d, want 2", updated.Revision)
+	}
+	ids, err = store.PendingTransfers(ctx)
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("idempotent enqueue = %v, err %v", ids, err)
+	}
+	if err := store.CompleteTransfer(ctx, objectID); err != nil {
+		t.Fatal(err)
+	}
+	ids, err = store.PendingTransfers(ctx)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("completed queue = %v, err %v", ids, err)
+	}
+
+	badParent := metadata.EntryID("missing-parent")
+	invalid := entry
+	invalid.ID = "invalid-put"
+	invalid.ParentID = &badParent
+	invalid.Name = "invalid.txt"
+	invalid.Revision = 1
+	if _, err := store.CommitPut(ctx, invalid, true); !errors.Is(err, metadata.ErrEntryConflict) {
+		t.Fatalf("expected invalid Put to fail before enqueue, got %v", err)
+	}
+	ids, err = store.PendingTransfers(ctx)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("failed Put leaked transfer queue state: %v, err %v", ids, err)
+	}
+}
+
+func TestMetadataV1MigrationPreservesCommittedEntries(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
+		t.Fatal(err)
+	}
+	root, err := store.Root(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(ctx, metadata.Entry{ID: "existing", ParentID: &root.ID, Name: "kept", Kind: metadata.EntryKindDirectory, Revision: 1, Mode: 0755}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, "DROP TABLE transfer_queue; DELETE FROM schema_migrations WHERE version=2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CheckMigrations(ctx); err != nil {
+		t.Fatalf("v1 history should be supported for additive migration: %v", err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetByID(ctx, "existing"); err != nil {
+		t.Fatalf("migration lost committed Entry: %v", err)
+	}
+	if err := store.CheckMigrations(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

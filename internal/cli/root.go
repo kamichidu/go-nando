@@ -177,6 +177,9 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func() error, err
 	if err := repoFormat.Validate(); err != nil {
 		return nil, "", nil, errors.Join(err, metaStore.Close())
 	}
+	if err := metaStore.Migrate(ctx); err != nil {
+		return nil, "", nil, errors.Join(fmt.Errorf("failed to apply metadata schema migrations: %w", err), metaStore.Close())
+	}
 
 	objectsDir := filepath.Join(repoDir, "objects")
 	tempDir := filepath.Join(repoDir, "temp")

@@ -30,4 +30,13 @@ CREATE TABLE schema_migrations (
 );
 `
 
-const CurrentSchemaVersion = 1
+// MigrationV2 adds the durable content-ID transfer queue. Queue rows are
+// obligations, not logical Entry state or resumable Put progress.
+const MigrationV2 = `
+CREATE TABLE transfer_queue (
+    content_id TEXT PRIMARY KEY,
+    enqueued_at INTEGER NOT NULL
+);
+`
+
+const CurrentSchemaVersion = 2

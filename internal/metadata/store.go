@@ -25,6 +25,12 @@ type MetadataStore interface {
 	Move(ctx context.Context, entry Entry) (Entry, error)
 
 	Delete(ctx context.Context, id EntryID) error
+	// CommitPut atomically creates or updates a file Entry and, when
+	// enqueueTransfer is true, records its content ID for asynchronous delivery.
+	// Local-only Put passes false. Backends must not expose transaction types.
+	CommitPut(ctx context.Context, entry Entry, enqueueTransfer bool) (Entry, error)
+	PendingTransfers(ctx context.Context) ([]content.ID, error)
+	CompleteTransfer(ctx context.Context, id content.ID) error
 	ReferencedObjectIDs(ctx context.Context) ([]content.ID, error)
 	ListAll(ctx context.Context) ([]Entry, error)
 }

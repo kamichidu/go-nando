@@ -91,7 +91,7 @@ func (s *Store) Initialize(ctx context.Context, repoFormat repositoryformat.Form
 		if !found {
 			return ErrRepositoryFormatMissing
 		}
-		return nil
+		return s.Migrate(ctx)
 	} else if !errors.Is(err, ErrMigrationsUninitialized) {
 		return err
 	}
@@ -120,6 +120,12 @@ func (s *Store) Initialize(ctx context.Context, repoFormat repositoryformat.Form
 	}
 	if err := writeRepositoryFormat(ctx, tx, repoFormat); err != nil {
 		return err
+	}
+	if _, err := tx.ExecContext(ctx, MigrationV2); err != nil {
+		return fmt.Errorf("failed to apply SQLite schema migration 2: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?)", int64(now)); err != nil {
+		return fmt.Errorf("failed to record SQLite schema migration 2: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit SQLite schema migration: %w", err)
@@ -167,8 +173,8 @@ func (s *Store) RepositoryFormat(ctx context.Context) (repositoryformat.Format, 
 	return result, true, nil
 }
 
-// CheckMigrations validates only the SQLite migration ledger. It does not
-// inspect every table or enforce Repository Format compatibility.
+// CheckMigrations validates the SQLite migration ledger. It accepts supported
+// older histories so Initialize/Migrate can apply additive migrations.
 func (s *Store) CheckMigrations(ctx context.Context) error {
 	var ledgerExists int
 	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'").Scan(&ledgerExists); err != nil {
@@ -188,8 +194,48 @@ func (s *Store) CheckMigrations(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, "SELECT count(*), coalesce(min(version), 0), coalesce(max(version), 0) FROM schema_migrations").Scan(&count, &minVersion, &maxVersion); err != nil {
 		return fmt.Errorf("failed to read SQLite migration ledger: %w", err)
 	}
-	if minVersion != 1 || maxVersion > CurrentSchemaVersion || count != maxVersion || maxVersion != CurrentSchemaVersion {
+	if minVersion != 1 || maxVersion > CurrentSchemaVersion || count != maxVersion {
 		return fmt.Errorf("%w: found %d migrations from version %d through %d; supported history is 1 through %d", ErrMigrationsUnsupported, count, minVersion, maxVersion, CurrentSchemaVersion)
+	}
+	return nil
+}
+
+// Migrate applies additive migrations to an initialized repository. Callers
+// must validate Repository Format before invoking it.
+func (s *Store) Migrate(ctx context.Context) error {
+	if err := s.CheckMigrations(ctx); err != nil {
+		return err
+	}
+	var current int
+	if err := s.db.QueryRowContext(ctx, "SELECT coalesce(max(version), 0) FROM schema_migrations").Scan(&current); err != nil {
+		return err
+	}
+	if current >= CurrentSchemaVersion {
+		return nil
+	}
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin SQLite migration: %w", err)
+	}
+	defer tx.Rollback()
+	now := int64(metadata.TimestampFromTime(time.Now().UTC()))
+	for version := current + 1; version <= CurrentSchemaVersion; version++ {
+		var migration string
+		switch version {
+		case 2:
+			migration = MigrationV2
+		default:
+			return fmt.Errorf("%w: no migration implementation for version %d", ErrMigrationsUnsupported, version)
+		}
+		if _, err := tx.ExecContext(ctx, migration); err != nil {
+			return fmt.Errorf("apply SQLite schema migration %d: %w", version, err)
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)", version, now); err != nil {
+			return fmt.Errorf("record SQLite schema migration %d: %w", version, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit SQLite migrations: %w", err)
 	}
 	return nil
 }
@@ -545,6 +591,106 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 	updatedEntry.UpdatedAt = now
 
 	return updatedEntry, nil
+}
+
+// CommitPut atomically creates or updates a file Entry and optionally enqueues
+// its content ID for asynchronous delivery. It is intentionally one semantic
+// MetadataStore operation so backends can preserve the same atomic boundary.
+func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTransfer bool) (metadata.Entry, error) {
+	if entry.Kind != metadata.EntryKindFile || entry.ObjectID == nil {
+		return metadata.Entry{}, fmt.Errorf("%w: Put commit requires a file with content ID", metadata.ErrEntryConflict)
+	}
+	if err := entry.ObjectID.Validate(); err != nil {
+		return metadata.Entry{}, fmt.Errorf("invalid object ID: %w", err)
+	}
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return metadata.Entry{}, fmt.Errorf("begin Put metadata transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	existing, getErr := s.getByID(ctx, tx, entry.ID)
+	if errors.Is(getErr, metadata.ErrEntryNotFound) {
+		if err := s.validateCreateInvariants(ctx, tx, entry); err != nil {
+			return metadata.Entry{}, err
+		}
+		var parentID sql.NullString
+		if entry.ParentID != nil {
+			parentID = sql.NullString{String: entry.ParentID.String(), Valid: true}
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO entries (entry_id,parent_id,name,kind,object_id,size,mtime,mode,content_type,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			entry.ID.String(), parentID, entry.Name, string(entry.Kind), entry.ObjectID.String(), entry.Size, int64(entry.Mtime), entry.Mode, entry.ContentType, entry.Revision, int64(entry.CreatedAt), int64(entry.UpdatedAt))
+		if err != nil {
+			return metadata.Entry{}, fmt.Errorf("%w: failed to create Put Entry: %w", metadata.ErrEntryConflict, err)
+		}
+	} else if getErr != nil {
+		return metadata.Entry{}, fmt.Errorf("read Put target Entry: %w", getErr)
+	} else {
+		if existing.Kind != metadata.EntryKindFile {
+			return metadata.Entry{}, fmt.Errorf("%w: cannot replace directory with file", metadata.ErrEntryConflict)
+		}
+		if existing.Revision != entry.Revision {
+			return metadata.Entry{}, fmt.Errorf("%w: expected revision %d, found %d", metadata.ErrEntryConflict, entry.Revision, existing.Revision)
+		}
+		if err := s.validateUpdateInvariants(ctx, tx, entry); err != nil {
+			return metadata.Entry{}, err
+		}
+		newRevision := entry.Revision + 1
+		now := metadata.TimestampFromTime(time.Now().UTC())
+		res, err := tx.ExecContext(ctx, `UPDATE entries SET object_id=?,size=?,mtime=?,mode=?,content_type=?,revision=?,updated_at=? WHERE entry_id=? AND revision=?`,
+			entry.ObjectID.String(), entry.Size, int64(entry.Mtime), entry.Mode, entry.ContentType, newRevision, int64(now), entry.ID.String(), entry.Revision)
+		if err != nil {
+			return metadata.Entry{}, fmt.Errorf("update Put Entry: %w", err)
+		}
+		rows, err := res.RowsAffected()
+		if err != nil {
+			return metadata.Entry{}, err
+		}
+		if rows != 1 {
+			return metadata.Entry{}, metadata.ErrEntryConflict
+		}
+		entry.Revision, entry.UpdatedAt = newRevision, now
+	}
+	if enqueueTransfer {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO transfer_queue(content_id,enqueued_at) VALUES(?,?) ON CONFLICT(content_id) DO NOTHING`, entry.ObjectID.String(), int64(metadata.TimestampFromTime(time.Now().UTC()))); err != nil {
+			return metadata.Entry{}, fmt.Errorf("enqueue content transfer: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return metadata.Entry{}, fmt.Errorf("commit Put metadata: %w", err)
+	}
+	return entry, nil
+}
+
+// PendingTransfers lists distinct content IDs whose GCS delivery is pending.
+func (s *Store) PendingTransfers(ctx context.Context) ([]content.ID, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT content_id FROM transfer_queue ORDER BY content_id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []content.ID
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		id, err := content.ParseID(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid transfer queue content ID %q: %w", raw, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// CompleteTransfer removes a content-ID obligation after delivery confirmation.
+func (s *Store) CompleteTransfer(ctx context.Context, id content.ID) error {
+	if err := id.Validate(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, "DELETE FROM transfer_queue WHERE content_id = ?", id.String())
+	return err
 }
 
 func (s *Store) validateMoveInvariants(
