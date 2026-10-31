@@ -255,6 +255,10 @@ nodes:
       current_backends: [SQLite, local filesystem Object Store]
       planned_backend_selection: repository-owned-configuration
       repository_owned_settings: [delivery-mode, GCS-bucket, capacity-policy]
+      current_settings_file: repository.json
+      current_settings_fields: [delivery_mode, gcs_bucket]
+      legacy_repository_without_settings: defaults-to-Local;is-not-reconfigured-by-init
+      settings_scope_limit: capacity-policy-representation-not-yet-implemented
     provenance:
       origin: imported
   - id: DES-METADATA-MODEL

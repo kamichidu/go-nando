@@ -280,8 +280,16 @@ func TestResourceLeaseRenewalDoesNotHoldRepositoryWideLock(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "coordination.db")
 	reader := openCoordinator(t, dbPath)
 	renewer := openCoordinator(t, dbPath)
-	defer reader.Close()
-	defer renewer.Close()
+	t.Cleanup(func() {
+		if err := reader.Close(); err != nil {
+			t.Errorf("close reader Coordinator: %v", err)
+		}
+	})
+	t.Cleanup(func() {
+		if err := renewer.Close(); err != nil {
+			t.Errorf("close renewer Coordinator: %v", err)
+		}
+	})
 	const operationID = "2697db17-50fb-4499-a01a-25f6b47ba7cd"
 	if err := reader.AcquireResourceLock(context.Background(), "content:read", "reader-op", sqlite.RLock, time.Second); err != nil {
 		t.Fatal(err)

@@ -30,6 +30,9 @@ var ErrPutCommitted = errors.New("Put metadata committed but staging cleanup fai
 
 // Put imports a local file into the repository under the specified logical repository path.
 func (r *Repository) Put(ctx context.Context, localPath string, repoPath string) (retErr error) {
+	if err := r.settings.Validate(); err != nil {
+		return fmt.Errorf("invalid Repository settings: %w", err)
+	}
 	normalized, err := paths.NormalizeLogicalPath(repoPath)
 	if err != nil {
 		return fmt.Errorf("invalid logical destination path: %w", err)
@@ -139,6 +142,8 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 			return err
 		}
 		existing, err := r.metaStore.GetChild(leaseCtx, parentID, baseName)
+		var putEntry metadata.Entry
+		createdEntry := false
 		if err == nil {
 			if existing.Kind == metadata.EntryKindDirectory {
 				return fmt.Errorf("cannot replace directory %s with a file: %w", repoPath, metadata.ErrEntryConflict)
@@ -148,11 +153,10 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 			existing.Mtime = metadata.TimestampFromTime(localStat.ModTime())
 			existing.Mode = uint32(localStat.Mode())
 			existing.ContentType = contentType
-			if _, err := r.metaStore.Update(leaseCtx, existing); err != nil {
-				return fmt.Errorf("failed to update entry metadata: %w", err)
-			}
+			putEntry = existing
 		} else if errors.Is(err, metadata.ErrEntryNotFound) {
-			created := metadata.Entry{
+			createdEntry = true
+			putEntry = metadata.Entry{
 				ID:          metadata.EntryID(uuid.New().String()),
 				ParentID:    &parentID,
 				Name:        baseName,
@@ -166,11 +170,22 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 				CreatedAt:   now,
 				UpdatedAt:   now,
 			}
-			if _, err := r.metaStore.Create(leaseCtx, created); err != nil {
-				return fmt.Errorf("failed to create entry metadata: %w", err)
-			}
 		} else {
 			return fmt.Errorf("failed to check existing entry: %w", err)
+		}
+		if err := r.validateLease(leaseCtx, operationID); err != nil {
+			return err
+		}
+		if r.settings.DeliveryMode == DeliveryModeGCS {
+			if _, err := r.metaStore.CommitPut(leaseCtx, putEntry, true); err != nil {
+				return fmt.Errorf("failed to atomically commit GCS-mode Put metadata and transfer obligation: %w", err)
+			}
+		} else if createdEntry {
+			if _, err := r.metaStore.Create(leaseCtx, putEntry); err != nil {
+				return fmt.Errorf("failed to create entry metadata: %w", err)
+			}
+		} else if _, err := r.metaStore.Update(leaseCtx, putEntry); err != nil {
+			return fmt.Errorf("failed to update entry metadata: %w", err)
 		}
 		metadataCommitted = true
 		return nil
@@ -183,7 +198,7 @@ func (r *Repository) stagePutInput(ctx context.Context, session objectstore.Stag
 	return staged, errors.Join(stageErr, session.Close())
 }
 
-var errResourceLeaseLost = errors.New("Resource Lease expired or was invalidated")
+var errResourceLeaseLost = errors.New("resource lease expired or was invalidated")
 
 func temporaryResourceID(operationID string) string { return "temp:" + operationID }
 func contentResourceID(contentID string) string     { return "content:" + contentID }

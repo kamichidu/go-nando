@@ -7,18 +7,24 @@ import (
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/cli"
+	"github.com/kamichidu/go-nando/internal/repository"
 )
 
 // InitCommand represents the "nando init" subcommand.
-type InitCommand struct{}
+type InitCommand struct {
+	deliveryMode string
+	gcsBucket    string
+}
 
 // Name returns the subcommand name.
 func (c *InitCommand) Name() string {
 	return "init"
 }
 
-// RegisterFlags binds flags. None needed for init.
+// RegisterFlags binds repository-owned delivery settings for a new repository.
 func (c *InitCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) context.Context {
+	fs.StringVar(&c.deliveryMode, "delivery-mode", "local", "repository delivery mode (local or gcs)")
+	fs.StringVar(&c.gcsBucket, "gcs-bucket", "", "Google Cloud Storage bucket for GCS delivery mode")
 	return ctx
 }
 
@@ -32,7 +38,10 @@ func (c *InitCommand) Run(ctx context.Context, args []string) error {
 	cli.LogVerbose(ctx, "Starting repository initialization...")
 	cli.LogVerbose(ctx, "Target directory: %s", repoDir)
 
-	if err := app.InitRepository(ctx, repoDir); err != nil {
+	settings := repository.DefaultSettings()
+	settings.DeliveryMode = repository.DeliveryMode(c.deliveryMode)
+	settings.GCSBucket = c.gcsBucket
+	if err := app.InitRepositoryWithSettings(ctx, repoDir, settings); err != nil {
 		return err
 	}
 

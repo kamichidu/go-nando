@@ -183,6 +183,10 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func() error, err
 
 	objectsDir := filepath.Join(repoDir, "objects")
 	tempDir := filepath.Join(repoDir, "temp")
+	repoSettings, err := app.LoadRepositorySettings(repoDir)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("failed to load repository settings: %w", err)
+	}
 	hasher := content.NewHasher()
 
 	objStore, err := local.NewStore(objectsDir, tempDir, hasher)
@@ -195,7 +199,7 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func() error, err
 	if err != nil {
 		return nil, "", nil, errors.Join(fmt.Errorf("failed to open repository coordinator: %w", err), metaStore.Close())
 	}
-	repo := repository.NewRepository(validatingMetaStore, objStore, hasher, coordinator)
+	repo := repository.NewRepositoryWithSettings(validatingMetaStore, objStore, hasher, coordinator, repoSettings)
 	application := app.NewApp(repo)
 
 	cleanup := func() error {

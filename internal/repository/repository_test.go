@@ -123,6 +123,54 @@ func TestResourceLeasesProtectPutAndReadsFromGC(t *testing.T) {
 	}
 }
 
+func TestGCSModePutAtomicallyEnqueuesContentID(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	hasher := content.NewHasher()
+	store := openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(root, "objects"), filepath.Join(root, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(root, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := coordinator.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	settings := repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "test-bucket"}
+	repo := repository.NewRepositoryWithSettings(metadata.NewValidatingStore(store), objects, hasher, coordinator, settings)
+	source := filepath.Join(root, "input")
+	if err := os.WriteFile(source, []byte("queued gcs content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Put(ctx, source, "/item"); err != nil {
+		t.Fatalf("GCS-mode Put: %v", err)
+	}
+	entry, err := repo.Stat(ctx, "/item")
+	if err != nil || entry.ObjectID == nil {
+		t.Fatalf("Put Entry was not visible: entry=%+v err=%v", entry, err)
+	}
+	ids, err := store.PendingTransfers(ctx)
+	if err != nil || len(ids) != 1 || ids[0] != *entry.ObjectID {
+		t.Fatalf("transfer queue does not contain committed content ID: ids=%v err=%v", ids, err)
+	}
+	if err := objects.Verify(ctx, *entry.ObjectID); err != nil {
+		t.Fatalf("Local authoritative copy missing after Put: %v", err)
+	}
+	// A second logical Entry with identical bytes is one content-ID obligation.
+	if err := repo.Put(ctx, source, "/second"); err != nil {
+		t.Fatalf("second GCS-mode Put: %v", err)
+	}
+	ids, err = store.PendingTransfers(ctx)
+	if err != nil || len(ids) != 1 || ids[0] != *entry.ObjectID {
+		t.Fatalf("content-ID queue was not idempotent: ids=%v err=%v", ids, err)
+	}
+}
+
 func TestExpiredPutStageCannotRenewOrPublishAfterCleanup(t *testing.T) {
 	ctx := context.Background()
 	tempDir := t.TempDir()
@@ -200,7 +248,11 @@ func TestPutStageRunsOutsideRepositoryWideExclusion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer leaseChecker.Close()
+	t.Cleanup(func() {
+		if err := leaseChecker.Close(); err != nil {
+			t.Errorf("close Resource Lease checker: %v", err)
+		}
+	})
 	putRepo := openRepositoryInstance(t, tempDir, metaStore, &blockingStageObjectStore{
 		ObjectStore: &assertStageLeaseObjectStore{ObjectStore: baseObjects, t: t, coordinator: leaseChecker},
 		entered:     stageEntered,

@@ -23,16 +23,23 @@ type Repository struct {
 	objectStore objectstore.ObjectStore
 	hasher      content.Hasher
 	coordinator Coordinator
+	settings    Settings
 }
 
 // NewRepository creates a Repository whose protected operations use the
 // repository-wide coordinator shared by every process and instance.
 func NewRepository(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, hasher content.Hasher, coordinator Coordinator) *Repository {
+	return NewRepositoryWithSettings(metaStore, objStore, hasher, coordinator, DefaultSettings())
+}
+
+// NewRepositoryWithSettings creates a Repository with persisted delivery settings.
+func NewRepositoryWithSettings(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, hasher content.Hasher, coordinator Coordinator, settings Settings) *Repository {
 	return &Repository{
 		metaStore:   metaStore,
 		objectStore: objStore,
 		hasher:      hasher,
 		coordinator: coordinator,
+		settings:    settings,
 	}
 }
 
