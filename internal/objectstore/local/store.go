@@ -24,6 +24,7 @@ type Store struct {
 	hasher     content.Hasher
 }
 
+// ObjectInfo describes a committed Local object for capacity accounting.
 // NewStore initializes a new local ObjectStore.
 func NewStore(objectsDir, tempDir string, hasher content.Hasher) (*Store, error) {
 	if err := os.MkdirAll(objectsDir, 0755); err != nil {
@@ -95,6 +96,51 @@ func (s *Store) Exists(ctx context.Context, id content.ID) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("failed to check existence of object %q: %w", id.String(), err)
+}
+
+// Size returns the size of a committed Local object.
+func (s *Store) Size(ctx context.Context, id content.ID) (int64, error) {
+	if err := id.Validate(); err != nil {
+		return 0, err
+	}
+	info, err := os.Stat(filepath.Join(s.objectsDir, id.String()))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, objectstore.ErrObjectNotFound
+		}
+		return 0, fmt.Errorf("stat object %q: %w", id.String(), err)
+	}
+	if !info.Mode().IsRegular() {
+		return 0, fmt.Errorf("object %q is not a regular file", id.String())
+	}
+	return info.Size(), nil
+}
+
+// ListObjectInfo returns valid committed objects and their filesystem size/time.
+func (s *Store) ListObjectInfo(ctx context.Context) ([]objectstore.LocalObjectInfo, error) {
+	entries, err := os.ReadDir(s.objectsDir)
+	if err != nil {
+		return nil, fmt.Errorf("read objects directory: %w", err)
+	}
+	result := make([]objectstore.LocalObjectInfo, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		id, err := content.ParseID(entry.Name())
+		if err != nil {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, fmt.Errorf("stat Local object %q: %w", entry.Name(), err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		result = append(result, objectstore.LocalObjectInfo{ID: id, Size: info.Size(), ModTime: info.ModTime()})
+	}
+	return result, nil
 }
 
 // Delete removes an object from the store.
@@ -171,4 +217,33 @@ func (s *Store) ListRaw(ctx context.Context) ([]string, error) {
 		}
 	}
 	return names, nil
+}
+
+// DeleteRaw removes a malformed object namespace file without interpreting its
+// name as a content ID. Directories and non-regular files are preserved.
+func (s *Store) DeleteRaw(ctx context.Context, name string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if name == "" || filepath.Base(name) != name {
+		return fmt.Errorf("invalid raw object name %q", name)
+	}
+	if _, err := content.ParseID(name); err == nil {
+		return fmt.Errorf("raw object name %q is a valid content ID", name)
+	}
+	path := filepath.Join(s.objectsDir, name)
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("refusing to remove non-regular raw object %q", name)
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove raw object %q: %w", name, err)
+	}
+	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/kamichidu/go-nando/internal/content"
 )
@@ -22,6 +23,30 @@ var ErrStagingNotFound = errors.New("staging file not found")
 type CommitResult struct {
 	ID   content.ID
 	Size int64
+}
+
+// ReplicaInfo is API-observed metadata for one remote immutable replica.
+type ReplicaInfo struct {
+	ID         content.ID
+	Size       int64
+	Generation int64
+}
+
+// LocalObjectInfo exposes only physical accounting data, not filesystem paths.
+type LocalObjectInfo struct {
+	ID      content.ID
+	Size    int64
+	ModTime time.Time
+}
+
+// ReplicaStore contains only the remote replica operations used by GCS delivery.
+// It does not own logical paths or Repository consistency.
+type ReplicaStore interface {
+	Upload(context.Context, content.ID, int64, io.Reader) (ReplicaInfo, error)
+	OpenReplica(context.Context, content.ID) (io.ReadCloser, error)
+	ReplicaExists(context.Context, content.ID) (bool, error)
+	ListReplicas(context.Context) ([]ReplicaInfo, error)
+	DeleteReplica(context.Context, content.ID, int64) error
 }
 
 // StagedObject is an immutable backend-owned handle produced by Stage.
