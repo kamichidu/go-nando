@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/metadata/sqlite"
 	"github.com/kamichidu/go-nando/internal/objectstore"
+	"github.com/kamichidu/go-nando/internal/objectstore/gcs"
 	"github.com/kamichidu/go-nando/internal/objectstore/local"
 	"github.com/kamichidu/go-nando/internal/paths"
 	"github.com/kamichidu/go-nando/internal/repository"
@@ -195,18 +197,34 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func() error, err
 	}
 
 	validatingMetaStore := metadata.NewValidatingStore(metaStore)
+	var replica objectstore.ReplicaStore
+	var gcsClient io.Closer
+	if repoSettings.DeliveryMode == repository.DeliveryModeGCS {
+		gcsStore, client, err := gcs.NewClientStore(ctx, repoSettings.GCSBucket)
+		if err != nil {
+			return nil, "", nil, errors.Join(err, metaStore.Close())
+		}
+		replica, gcsClient = gcsStore, client
+	}
 	coordinator, err := coordinatorsqlite.Open(filepath.Join(repoDir, "coordination.db"))
 	if err != nil {
-		return nil, "", nil, errors.Join(fmt.Errorf("failed to open repository coordinator: %w", err), metaStore.Close())
+		return nil, "", nil, errors.Join(fmt.Errorf("failed to open repository coordinator: %w", err), closeIfNotNil(gcsClient), metaStore.Close())
 	}
-	repo := repository.NewRepositoryWithSettings(validatingMetaStore, objStore, hasher, coordinator, repoSettings)
+	repo := repository.NewRepositoryWithReplica(validatingMetaStore, objStore, replica, hasher, coordinator, repoSettings)
 	application := app.NewApp(repo)
 
 	cleanup := func() error {
-		return errors.Join(coordinator.Close(), metaStore.Close())
+		return errors.Join(coordinator.Close(), closeIfNotNil(gcsClient), metaStore.Close())
 	}
 
 	return application, repoDir, cleanup, nil
+}
+
+func closeIfNotNil(closer io.Closer) error {
+	if closer == nil {
+		return nil
+	}
+	return closer.Close()
 }
 
 // LogVerbose prints debug/tracing details to stderr if verbose logging is enabled.

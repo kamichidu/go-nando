@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/internal/cli"
@@ -21,6 +23,7 @@ func main() {
 		&commands.MvCommand{},
 		&commands.RmCommand{},
 		&commands.GcCommand{},
+		&commands.MaintenanceCommand{},
 		&commands.SyncCommand{},
 		&commands.DoctorCommand{},
 	}
@@ -29,8 +32,10 @@ func main() {
 	root := cli.NewRootCommand(subs)
 
 	// 3. Run flagshim execution loop
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	exitCode := flagshim.Run(
-		context.Background(),
+		ctx,
 		os.Stdin,
 		os.Stdout,
 		os.Stderr,

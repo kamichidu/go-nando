@@ -12,8 +12,9 @@ import (
 
 // InitCommand represents the "nando init" subcommand.
 type InitCommand struct {
-	deliveryMode string
-	gcsBucket    string
+	deliveryMode  string
+	gcsBucket     string
+	maxLocalBytes int64
 }
 
 // Name returns the subcommand name.
@@ -25,6 +26,7 @@ func (c *InitCommand) Name() string {
 func (c *InitCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) context.Context {
 	fs.StringVar(&c.deliveryMode, "delivery-mode", "local", "repository delivery mode (local or gcs)")
 	fs.StringVar(&c.gcsBucket, "gcs-bucket", "", "Google Cloud Storage bucket for GCS delivery mode")
+	fs.Int64Var(&c.maxLocalBytes, "max-local-bytes", 0, "maximum Local object bytes before Capacity GC (0 disables capacity eviction)")
 	return ctx
 }
 
@@ -41,6 +43,7 @@ func (c *InitCommand) Run(ctx context.Context, args []string) error {
 	settings := repository.DefaultSettings()
 	settings.DeliveryMode = repository.DeliveryMode(c.deliveryMode)
 	settings.GCSBucket = c.gcsBucket
+	settings.MaxLocalBytes = c.maxLocalBytes
 	if err := app.InitRepositoryWithSettings(ctx, repoDir, settings); err != nil {
 		return err
 	}
