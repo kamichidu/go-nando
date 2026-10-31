@@ -31,7 +31,34 @@ const (
 var ErrPutCommitted = errors.New("Put metadata committed but staging cleanup failed")
 
 // Put imports a local file into the repository under the specified logical repository path.
-func (r *Repository) Put(ctx context.Context, localPath string, repoPath string) (retErr error) {
+// PutExpectation captures the target Entry state observed when a daemon write
+// Resource session begins. MustBeAbsent represents an observed missing path.
+type PutExpectation struct {
+	MustBeAbsent bool
+	EntryID      metadata.EntryID
+	Revision     uint64
+}
+
+// Put imports a complete file and applies the current path-based create or
+// replace behavior.
+func (r *Repository) Put(ctx context.Context, localPath string, repoPath string) error {
+	return r.put(ctx, localPath, repoPath, nil)
+}
+
+// PutExpected imports a complete file only if the target still has the state
+// observed when the caller opened its write Resource session.
+func (r *Repository) PutExpected(ctx context.Context, localPath, repoPath string, expected PutExpectation) error {
+	if expected.MustBeAbsent {
+		if expected.EntryID != "" || expected.Revision != 0 {
+			return fmt.Errorf("invalid absent-entry expectation: %w", metadata.ErrEntryConflict)
+		}
+	} else if expected.EntryID == "" || expected.Revision == 0 {
+		return fmt.Errorf("existing-entry expectation requires ID and revision: %w", metadata.ErrEntryConflict)
+	}
+	return r.put(ctx, localPath, repoPath, &expected)
+}
+
+func (r *Repository) put(ctx context.Context, localPath string, repoPath string, expected *PutExpectation) (retErr error) {
 	if err := r.settings.Validate(); err != nil {
 		return fmt.Errorf("invalid Repository settings: %w", err)
 	}
@@ -147,6 +174,9 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 		var putEntry metadata.Entry
 		createdEntry := false
 		if err == nil {
+			if expected != nil && (expected.MustBeAbsent || existing.ID != expected.EntryID || existing.Revision != expected.Revision) {
+				return fmt.Errorf("Put target changed since Resource session began: %w", metadata.ErrEntryConflict)
+			}
 			if existing.Kind == metadata.EntryKindDirectory {
 				return fmt.Errorf("cannot replace directory %s with a file: %w", repoPath, metadata.ErrEntryConflict)
 			}
@@ -157,6 +187,9 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 			existing.ContentType = contentType
 			putEntry = existing
 		} else if errors.Is(err, metadata.ErrEntryNotFound) {
+			if expected != nil && !expected.MustBeAbsent {
+				return fmt.Errorf("Put target disappeared since Resource session began: %w", metadata.ErrEntryConflict)
+			}
 			createdEntry = true
 			putEntry = metadata.Entry{
 				ID:          metadata.EntryID(uuid.New().String()),

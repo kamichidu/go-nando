@@ -23,6 +23,7 @@ import (
 	"github.com/kamichidu/go-nando/internal/paths"
 	"github.com/kamichidu/go-nando/internal/repository"
 	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
+	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // ErrInvalidArguments is returned when CLI arguments are missing or invalid.
@@ -30,9 +31,12 @@ var ErrInvalidArguments = errors.New("invalid arguments")
 
 // GlobalFlags represents common options available across all subcommands.
 type GlobalFlags struct {
-	Repository string
-	ConfigFile string
-	Verbose    bool
+	Repository       string
+	ConfigFile       string
+	Verbose          bool
+	DaemonEndpoint   string
+	DaemonTokenFile  string
+	DaemonCACertFile string
 }
 
 // RootCommand represents the base "nando" command.
@@ -61,8 +65,43 @@ func (c *RootCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) c
 	fs.Alias("config", "c")
 	fs.BoolVar(&c.flags.Verbose, "verbose", false, "enable verbose output")
 	fs.Alias("verbose", "v")
+	fs.StringVar(&c.flags.DaemonEndpoint, "daemon-endpoint", "", "daemon control endpoint (unix:///path or tcp://host:port)")
+	fs.StringVar(&c.flags.DaemonTokenFile, "daemon-token-file", "", "private bearer-token file for TCP daemon access")
+	fs.StringVar(&c.flags.DaemonCACertFile, "daemon-ca-cert", "", "CA certificate PEM for TCP daemon TLS")
 
 	return flagshim.ContextWithFlag(ctx, &c.flags)
+}
+
+// NewDaemonClientFromContext resolves the configured or repository-default
+// control endpoint without constructing a local Repository.
+func NewDaemonClientFromContext(ctx context.Context) (*controlrpc.Client, error) {
+	flags := flagshim.MustFlagFromContext[GlobalFlags](ctx)
+	repoDir, _, err := ResolveRepositoryAndVerbose(ctx)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := flags.DaemonEndpoint
+	if endpoint == "" {
+		endpoint, err = controlrpc.DefaultEndpoint(repoDir)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var token string
+	if flags.DaemonTokenFile != "" {
+		token, err = controlrpc.ReadTokenFile(flags.DaemonTokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("read daemon bearer token: %w", err)
+		}
+	}
+	var caPEM []byte
+	if flags.DaemonCACertFile != "" {
+		caPEM, err = os.ReadFile(flags.DaemonCACertFile)
+		if err != nil {
+			return nil, fmt.Errorf("read daemon CA certificate: %w", err)
+		}
+	}
+	return controlrpc.NewClient(controlrpc.ClientConfig{Endpoint: endpoint, Token: token, CACertPEM: caPEM})
 }
 
 // Commands exposes subcommands of the root command.
@@ -104,6 +143,17 @@ func (c *RootCommand) MapError(err error) int {
 
 	if errors.Is(err, metadata.ErrEntryConflict) {
 		return 4 // Conflict
+	}
+	var remoteErr *controlrpc.RemoteError
+	if errors.As(err, &remoteErr) {
+		switch remoteErr.Code {
+		case controlrpc.CodeEntryNotFound:
+			return 3
+		case controlrpc.CodeEntryConflict:
+			return 4
+		case controlrpc.CodeInvalidParams:
+			return 2
+		}
 	}
 
 	if errors.Is(err, objectstore.ErrHashMismatch) ||

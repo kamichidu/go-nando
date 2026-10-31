@@ -99,6 +99,12 @@ nodes:
     statement: A successful FUSE Fsync MUST mean the complete file bytes have been durably published as an immutable Local Object and the corresponding Metadata revision plus any GCS delivery obligation have committed atomically. GCS upload is asynchronous and is not part of Fsync. A crash after successful Fsync but before Flush, Close, or Release MUST preserve that committed revision and its queued delivery obligation. Release MUST NOT be the durability boundary. Before successful Fsync, dirty staging is private to the open handle and may be discarded after a crash; the last committed revision remains visible and intact.
     provenance:
       origin: human-authored
+  - id: REQ-RESOURCE-SESSIONS
+    level: system_requirement
+    kind: resource-session-invariant
+    statement: The daemon MUST own Resource sessions and their Commit, Abort, and Release lifecycle. Protocol clients MUST request mutations through JSON-RPC and MUST NOT mutate Repository, Metadata Store, Object Store, revisions, or transfer obligations directly. A write session MUST bind its logical path and observed Entry identity/revision (or observed absence) at Begin; Commit MUST enforce that exact expectation with Repository-owned CAS and atomically publish Local content plus Metadata and any GCS delivery obligation. Resource URIs MUST be scheme-extensible and directly accessible to the requesting client. Phase A supports local file:// URIs for daemon-created mutable staging and immutable read resources; remote data transfer schemes are deferred.
+    provenance:
+      origin: human-authored
   - id: REQ-GCS-PUBLICATION
     level: system_requirement
     kind: object-publication-invariant
@@ -225,7 +231,7 @@ nodes:
   - id: DES-CLI-BOUNDARY
     level: system_design
     kind: responsibility-model
-    statement: CLI owns command-line parsing, input normalization, local stream wiring, and presentation. In normal daemon operation it is a Unix-domain-socket JSON-RPC 2.0 client and does not construct an independent Repository, execute SQL, derive content IDs, decide object reachability, or implement recovery policy. A separate explicit offline/maintenance mode, if introduced, must define how it excludes the daemon.
+    statement: CLI owns command-line parsing, input normalization, local stream wiring, and presentation. In normal daemon operation it is a JSON-RPC 2.0 client over the configured UDS or TCP transport (UDS default) and does not construct an independent Repository, execute SQL, derive content IDs, decide object reachability, or implement recovery policy. A separate explicit offline/maintenance mode, if introduced, must define how it excludes the daemon.
     attributes:
       exit_codes:
         success: 0
@@ -243,16 +249,18 @@ nodes:
   - id: DES-DEPENDENCY-DIRECTION
     level: system_design
     kind: component-model
-    statement: Runtime dependency direction is CLI adapter, FUSE adapter, and WebDAV adapter to the protocol-independent Repository core; the CLI adapter reaches the daemon over Unix-domain-socket JSON-RPC 2.0, while FUSE and WebDAV adapters run in the daemon. Repository depends on Metadata Store, Object Store, coordination, and Content Identity; concrete storage packages depend on interfaces and domain values. Repository has no dependency on any protocol adapter.
+    statement: CLI, FUSE, and WebDAV are peer client processes of the daemon. They depend on the transport-neutral JSON-RPC and Resource URI client contracts, not on Repository, Metadata Store, Object Store, or daemon implementation packages. FUSE and WebDAV are each separate Go modules and separate processes and are never linked into the daemon. The daemon owns the RPC server, Resource sessions, and Repository; Repository depends only on Metadata Store, Object Store, coordination, and Content Identity. No adapter dependency enters core.
     attributes:
       dependency_edges:
-        - [CLI, Unix-domain-socket JSON-RPC 2.0]
-        - [Unix-domain-socket JSON-RPC 2.0, Daemon]
-        - [Daemon, FUSE Adapter]
-        - [Daemon, WebDAV Adapter]
-        - [CLI Adapter, Repository]
-        - [FUSE Adapter, Repository]
-        - [WebDAV Adapter, Repository]
+        - [CLI, JSON-RPC Client]
+        - [FUSE Process, JSON-RPC and Resource URI Client]
+        - [WebDAV Process, JSON-RPC and Resource URI Client]
+        - [JSON-RPC Client, Configurable Transport]
+        - [Configurable Transport, Daemon RPC Server]
+        - [FUSE Module, FUSE Process]
+        - [WebDAV Module, WebDAV Process]
+        - [Daemon RPC Server, Resource Session Manager]
+        - [Resource Session Manager, Repository]
         - [Repository, Metadata Store]
         - [Repository, Object Store]
         - [Repository, Content Identity]
@@ -261,14 +269,21 @@ nodes:
   - id: DES-DAEMON-RUNTIME
     level: system_design
     kind: process-model
-    statement: Normal operation has one nando daemon as the execution owner of a Repository. The daemon constructs Metadata Store, Object Store, coordination, and Repository once, and serves peer CLI, FUSE, and WebDAV adapters. The CLI sends JSON-RPC 2.0 requests over a permission-protected Unix domain socket. FUSE and WebDAV execute in-process and call Repository APIs. On the WSL Linux host, a systemd user service is the default lifecycle manager; a system service is also supported as an installation choice. GCS credentials use standard Application Default Credentials and are not persisted in repository configuration.
+    statement: Normal operation has one nando daemon as the execution owner of a Repository. The daemon constructs Metadata Store, Object Store, coordination, and Repository once, and serves peer CLI, FUSE, and WebDAV client processes. JSON-RPC 2.0 control messages use HTTP POST /rpc over configurable UDS or TCP; UDS is the local default. TCP is rejected unless TLS and bearer authentication are configured. The daemon owns Resource sessions and executes Commit/Abort/Release requests. On the WSL Linux host, a systemd user service is the default lifecycle manager; a system service is also supported as an installation choice. GCS credentials use standard Application Default Credentials and are not persisted in repository configuration.
     attributes:
       default_host: WSL-Linux
       default_service_scope: systemd-user
       supported_service_scope: [systemd-user, system]
-      cli_transport: Unix-domain-socket
+      control_protocol: JSON-RPC-2.0
+      control_framing: HTTP-POST-/rpc
+      control_transports: [Unix-domain-socket, TCP]
+      default_transport: Unix-domain-socket
+      tcp_requires: [TLS, bearer-authentication]
       cli_protocol: JSON-RPC-2.0
-      in_process_adapters: [FUSE, WebDAV]
+      client_processes: [CLI, FUSE, WebDAV]
+      daemon_owned: [Repository, Resource-sessions, Commit, Abort, Release]
+      fuse_webdav_process_local: true
+      adapter_modules_inside_daemon: false
       gcs_credentials: Application-Default-Credentials
       cross_platform_runtime: deferred
       Cloud_Run: deferred
@@ -277,7 +292,7 @@ nodes:
   - id: DES-ADAPTERS-FILESYSTEM
     level: system_design
     kind: protocol-adapter-contract
-    statement: FUSE and WebDAV are read-write adapters over Repository semantics. FUSE Create commits a visible empty file; Open handles retain stable Entry identity across rename. WriteAt and Truncate change private dirty staging, including zero-filled holes, and other handles continue to observe the last committed version until Fsync. Fsync publishes a complete immutable Local Object and atomically commits the new Metadata revision plus GCS obligation; it does not wait for GCS. Flush reports deferred write/commit errors but is not required for durability, and Release closes handles and releases leases but is not a commit boundary. Rename preserves Entry identity. Local commit visibility and atomic replacement follow the phase-specific Local Commit/Global Publish model. The adapters map Repository conflicts and failures to protocol errors and never mutate Metadata Store or Object Store directly. WSL Windows Explorer access is through the WSL native share of the Linux FUSE mount; a Windows-native filesystem driver is out of scope. Cross-platform adapters and Cloud Run are deferred.
+    statement: CLI, FUSE, and WebDAV are peer processes that call daemon control methods and consume daemon-issued Resource URIs. FUSE and WebDAV each have a separate Go module and executable process; neither is linked into the daemon. They depend on the public controlrpc contract package, never on Repository or daemon implementation packages. A write Begin returns a mutable staging Resource URI and binds the observed Entry identity/revision or absence; the client writes bytes directly to that URI, then asks the daemon to Commit. The daemon hashes/verifies and publishes immutable content, enforces revision CAS, and atomically commits Metadata plus any GCS obligation. Abort discards uncommitted staging; Release closes the session and its leases. Read sessions return immutable file:// Resource URIs where client access is available. The daemon returns only URI schemes the client has declared accessible; Phase A file:// use requires a shared local filesystem path. URI schemes remain extensible; remote data transfer is not required in this phase. FUSE is read-write and follows the documented Fsync contract. WSL Windows Explorer accesses the separate FUSE process mount through the WSL native share. Cross-platform adapters and Cloud Run are deferred.
     attributes:
       fuse_access: read-write
       webdav_access: read-write
@@ -285,8 +300,12 @@ nodes:
       fuse_release_is_commit_boundary: false
       dirty_write_visibility: private-to-open-handle-until-Fsync
       rename_identity: stable-Entry-ID
-      fuse_calls: Repository
-      webdav_calls: Repository
+      adapter_calls: daemon-JSON-RPC-and-Resource-URI
+      resource_schemes: extensible
+      phase_a_resource_scheme: file
+      resource_contract_package: pkg/controlrpc
+      remote_data_transport: deferred
+      module_and_process_per_adapter: true
       Windows_Explorer: WSL-native-share
       Windows_native_driver: deferred
       cross_platform: deferred
@@ -729,12 +748,12 @@ nodes:
   - id: DES-PHASE-A-DAEMON
     level: system_design
     kind: roadmap-phase
-    statement: Phase A delivers one WSL Linux daemon with SQLite Metadata, Local durable commits, immediate single-daemon visibility, a Unix-domain-socket JSON-RPC 2.0 CLI adapter, read-write in-daemon FUSE and WebDAV adapters, and idle-scheduled GCS replication using ADC. It does not implement Firestore, multiple daemons, globally published heads, cross-platform runtime support, or Cloud Run deployment.
+    statement: Phase A delivers one WSL Linux daemon with SQLite Metadata, Local durable commits, immediate single-daemon visibility, configurable UDS/TCP JSON-RPC 2.0 control transport (UDS default; TCP requires TLS and authentication), daemon-owned Resource sessions, and local file:// Resource URIs. CLI, FUSE, and WebDAV are client processes; FUSE and WebDAV are separate Go modules and executables. The phase includes read-write FUSE/WebDAV clients and idle-scheduled GCS replication using ADC, but their complete implementations may be delivered incrementally. It does not implement Firestore, multiple daemons, globally published heads, remote Resource transfer, cross-platform runtime support, or Cloud Run deployment.
     attributes:
       roadmap_phase: A
       phase_status: planned
-      includes: [single-daemon, SQLite, Local-immediate-visibility, CLI-JSON-RPC-UDS, read-write-FUSE, read-write-WebDAV, idle-GCS-sync, ADC]
-      excludes: [Firestore, multiple-daemons, Published-Head, cross-platform, Cloud-Run]
+      includes: [single-daemon, SQLite, Local-immediate-visibility, JSON-RPC-UDS-or-TCP, daemon-owned-resource-sessions, file-Resource-URIs, separate-FUSE-module-and-process, separate-WebDAV-module-and-process, idle-GCS-sync, ADC]
+      excludes: [Firestore, multiple-daemons, Published-Head, remote-Resource-transfer, cross-platform, Cloud-Run]
       commit_boundary: [durable-Local-Object, atomic-Metadata-and-delivery-obligation]
       gcs_scheduler_settings: [idle-interval, periodic-check-interval, maximum-delivery-delay, parallelism]
     provenance:
@@ -1134,10 +1153,18 @@ relations:
     from: DES-DAEMON-RUNTIME
     type: depends_on
     to: DES-REPOSITORY-BOUNDARIES
+  - id: REL-DAEMON-RESOURCE-SESSIONS
+    from: DES-DAEMON-RUNTIME
+    type: depends_on
+    to: REQ-RESOURCE-SESSIONS
   - id: REL-ADAPTERS-REPOSITORY
     from: DES-ADAPTERS-FILESYSTEM
     type: depends_on
     to: DES-REPOSITORY-BOUNDARIES
+  - id: REL-ADAPTERS-RESOURCE-SESSIONS
+    from: DES-ADAPTERS-FILESYSTEM
+    type: depends_on
+    to: REQ-RESOURCE-SESSIONS
   - id: REL-ADAPTERS-FSYNC
     from: DES-ADAPTERS-FILESYSTEM
     type: depends_on
@@ -1304,7 +1331,7 @@ open_items:
     status: open
     related_refs: [REQ-METADATA-BACKUP-RESPONSIBILITY, DES-METADATA-BACKEND-PORTABILITY, DES-REPLICATION-STATE]
   - id: OPEN-ADAPTER-AUTHORIZATION
-    statement: Define Unix-domain-socket ownership, mode, and peer authorization for CLI clients, including systemd user versus system service deployment. Define WebDAV bind address, authentication, TLS termination, and whether writes require conditional requests. ADC supplies GCS credentials only and is not client authorization.
+    statement: Define Unix-domain-socket ownership, mode, and peer authorization for all clients, including systemd user versus system service deployment. For TCP define bind-address policy, TLS certificate trust/rotation, bearer-token provisioning/rotation, and whether per-method authorization is needed. Define WebDAV's own bind/authentication/TLS policy and conditional write requirements. TCP must remain unavailable without TLS and authentication. ADC supplies GCS credentials only and is not client authorization.
     status: open
     related_refs: [DES-DAEMON-RUNTIME, DES-ADAPTERS-FILESYSTEM]
   - id: OPEN-FUSE-UNLINK-AND-WRITER-SEMANTICS

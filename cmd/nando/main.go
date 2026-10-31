@@ -25,6 +25,7 @@ func main() {
 		&commands.GcCommand{},
 		&commands.MaintenanceCommand{},
 		&commands.SyncCommand{},
+		&commands.DaemonCommand{},
 		&commands.DoctorCommand{},
 	}
 

@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"time"
 
 	"github.com/kamichidu/go-flagshim"
-	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/cli"
 	"github.com/kamichidu/go-nando/internal/paths"
+	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // PutCommand represents the "nando put" subcommand.
@@ -38,21 +42,71 @@ func (c *PutCommand) Run(ctx context.Context, args []string) (runErr error) {
 		return fmt.Errorf("%w: %v", cli.ErrInvalidArguments, err)
 	}
 
-	application, _, cleanup, err := cli.NewAppFromContext(ctx)
+	client, err := cli.NewDaemonClientFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
 	cli.LogVerbose(ctx, "Importing file %q to logical repository path %q", localPath, repoPath)
-
-	err = application.Put(ctx, app.PutInput{
-		LocalPath:      localPath,
-		RepositoryPath: repoPath,
-	})
-	if err != nil {
+	var begin controlrpc.BeginWriteResult
+	if err := client.Call(ctx, controlrpc.MethodBeginWrite, map[string]any{"path": repoPath, "resource_schemes": []string{"file"}}, &begin); err != nil {
 		return err
 	}
-
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		runErr = errors.Join(runErr, client.Call(cleanupCtx, controlrpc.MethodRelease, map[string]string{"session_id": begin.SessionID}, nil))
+	}()
+	if err := copyToResource(ctx, localPath, begin.ResourceURI); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return errors.Join(err, client.Call(cleanupCtx, controlrpc.MethodAbort, map[string]string{"session_id": begin.SessionID}, nil))
+	}
+	if err := client.Call(ctx, controlrpc.MethodCommit, map[string]string{"session_id": begin.SessionID}, nil); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return errors.Join(err, client.Call(cleanupCtx, controlrpc.MethodAbort, map[string]string{"session_id": begin.SessionID}, nil))
+	}
 	return nil
+}
+
+func copyToResource(ctx context.Context, sourcePath, resourceURI string) (retErr error) {
+	u, err := url.Parse(resourceURI)
+	if err != nil || u.Scheme != "file" || u.Host != "" || u.Path == "" {
+		return fmt.Errorf("daemon returned unsupported or inaccessible Resource URI %q", resourceURI)
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return fmt.Errorf("open source file: %w", err)
+	}
+	defer func() { retErr = errors.Join(retErr, source.Close()) }()
+	target, err := os.OpenFile(u.Path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return fmt.Errorf("open daemon staging Resource: %w", err)
+	}
+	_, copyErr := io.Copy(target, contextReader{ctx: ctx, reader: source})
+	var syncErr error
+	if copyErr == nil {
+		syncErr = target.Sync()
+	}
+	closeErr := target.Close()
+	if copyErr != nil {
+		copyErr = fmt.Errorf("copy source into daemon Resource: %w", copyErr)
+	}
+	if syncErr != nil {
+		syncErr = fmt.Errorf("sync daemon Resource: %w", syncErr)
+	}
+	return errors.Join(copyErr, syncErr, closeErr)
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }
