@@ -82,6 +82,26 @@ func (s *Store) Open(ctx context.Context, id content.ID) (io.ReadCloser, error) 
 	return file, nil
 }
 
+// LocalResourcePath returns the directly accessible immutable object path.
+// Callers must hold a Repository content lease for the path's lifetime.
+func (s *Store) LocalResourcePath(id content.ID) (string, error) {
+	if err := id.Validate(); err != nil {
+		return "", err
+	}
+	path := filepath.Join(s.objectsDir, id.String())
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", objectstore.ErrObjectNotFound
+		}
+		return "", fmt.Errorf("stat local resource %q: %w", id, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("local resource %q is not a regular file", id)
+	}
+	return path, nil
+}
+
 // Exists checks if the object is present in the store.
 func (s *Store) Exists(ctx context.Context, id content.ID) (bool, error) {
 	if err := id.Validate(); err != nil {

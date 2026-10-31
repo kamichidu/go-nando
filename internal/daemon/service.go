@@ -22,7 +22,15 @@ const (
 
 type repositoryUseCases interface {
 	Stat(context.Context, string) (metadata.Entry, error)
+	List(context.Context, string) ([]metadata.Entry, error)
 	PutExpected(context.Context, app.PutInput, repository.PutExpectation) error
+	Move(context.Context, app.MoveInput) error
+	Remove(context.Context, string) error
+	GC(context.Context) (int, error)
+	MaintenanceOnce(context.Context) error
+	Doctor(context.Context) error
+	Sync(context.Context) error
+	BeginReadResource(context.Context, string) (metadata.Entry, string, func() error, error)
 }
 
 type service struct {
@@ -39,16 +47,13 @@ type beginWriteParams struct {
 	ResourceSchemes []string `json:"resource_schemes"`
 }
 
-type sessionParams struct {
-	SessionID string `json:"session_id"`
+type moveParams struct {
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
 }
 
-type entryResult struct {
-	ID       metadata.EntryID   `json:"id"`
-	Name     string             `json:"name"`
-	Kind     metadata.EntryKind `json:"kind"`
-	Revision uint64             `json:"revision"`
-	Size     int64              `json:"size"`
+type sessionParams struct {
+	SessionID string `json:"session_id"`
 }
 
 func newService(application repositoryUseCases, sessions *sessionManager) *service {
@@ -70,20 +75,81 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 		if err != nil {
 			return nil, mapMethodError(err)
 		}
-		return entryResult{ID: entry.ID, Name: entry.Name, Kind: entry.Kind, Revision: entry.Revision, Size: entry.Size}, nil
+		return protocolEntry(entry), nil
+	case controlrpc.MethodList:
+		var params pathParams
+		if err := decodeParams(raw, &params); err != nil {
+			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+		}
+		entries, err := s.app.List(ctx, params.Path)
+		if err != nil {
+			return nil, mapMethodError(err)
+		}
+		result := make([]controlrpc.Entry, 0, len(entries))
+		for _, entry := range entries {
+			result = append(result, protocolEntry(entry))
+		}
+		return result, nil
+	case controlrpc.MethodMove:
+		var params moveParams
+		if err := decodeParams(raw, &params); err != nil || params.Source == "" || params.Destination == "" {
+			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: errors.New("source and destination are required")}
+		}
+		if err := s.app.Move(ctx, app.MoveInput{SourcePath: params.Source, DestinationPath: params.Destination}); err != nil {
+			return nil, mapMethodError(err)
+		}
+		return struct{}{}, nil
+	case controlrpc.MethodRemove:
+		var params pathParams
+		if err := decodeParams(raw, &params); err != nil {
+			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+		}
+		if err := s.app.Remove(ctx, params.Path); err != nil {
+			return nil, mapMethodError(err)
+		}
+		return struct{}{}, nil
+	case controlrpc.MethodGC:
+		count, err := s.app.GC(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return struct {
+			Removed int `json:"removed"`
+		}{Removed: count}, nil
+	case controlrpc.MethodMaintenance:
+		if err := s.app.MaintenanceOnce(ctx); err != nil {
+			return nil, err
+		}
+		return struct{}{}, nil
+	case controlrpc.MethodDoctor:
+		if err := s.app.Doctor(ctx); err != nil {
+			return nil, err
+		}
+		return struct{}{}, nil
+	case controlrpc.MethodSync:
+		if err := s.app.Sync(ctx); err != nil {
+			return nil, err
+		}
+		return struct{}{}, nil
+	case controlrpc.MethodBeginRead:
+		var params beginWriteParams
+		if err := decodeParams(raw, &params); err != nil {
+			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+		}
+		if !containsScheme(params.ResourceSchemes, "file") {
+			return nil, &controlrpc.MethodError{Code: -32010, Err: errors.New("client did not declare support for daemon's file Resource URI")}
+		}
+		result, err := s.sessions.beginRead(ctx, params.Path)
+		if err != nil {
+			return nil, mapMethodError(err)
+		}
+		return result, nil
 	case controlrpc.MethodBeginWrite:
 		var params beginWriteParams
 		if err := decodeParams(raw, &params); err != nil {
 			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
 		}
-		fileSupported := false
-		for _, scheme := range params.ResourceSchemes {
-			if scheme == "file" {
-				fileSupported = true
-				break
-			}
-		}
-		if !fileSupported {
+		if !containsScheme(params.ResourceSchemes, "file") {
 			return nil, &controlrpc.MethodError{Code: -32010, Err: errors.New("client did not declare support for daemon's file Resource URI")}
 		}
 		result, err := s.sessions.beginWrite(ctx, params.Path)
@@ -121,6 +187,31 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 	default:
 		return nil, &controlrpc.MethodError{Code: jsonRPCMethodNotFound, Err: fmt.Errorf("unknown method %q", method)}
 	}
+}
+
+func containsScheme(schemes []string, expected string) bool {
+	for _, scheme := range schemes {
+		if scheme == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func protocolEntry(entry metadata.Entry) controlrpc.Entry {
+	result := controlrpc.Entry{
+		ID: string(entry.ID), Name: entry.Name, Kind: string(entry.Kind), Size: entry.Size,
+		Mtime: int64(entry.Mtime), Mode: entry.Mode, ContentType: entry.ContentType,
+		Revision: entry.Revision, CreatedAt: int64(entry.CreatedAt), UpdatedAt: int64(entry.UpdatedAt),
+	}
+	if entry.ParentID != nil {
+		parent := string(*entry.ParentID)
+		result.ParentID = &parent
+	}
+	if entry.ObjectID != nil {
+		result.ObjectID = entry.ObjectID.String()
+	}
+	return result
 }
 
 func decodeSession(raw json.RawMessage) (sessionParams, error) {

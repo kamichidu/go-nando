@@ -2,12 +2,12 @@ package commands
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/internal/cli"
 	"github.com/kamichidu/go-nando/internal/paths"
+	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // RmCommand represents the "nando rm" subcommand.
@@ -35,18 +35,12 @@ func (c *RmCommand) Run(ctx context.Context, args []string) (runErr error) {
 		return fmt.Errorf("%w: %v", cli.ErrInvalidArguments, err)
 	}
 
-	application, _, cleanup, err := cli.NewAppFromContext(ctx)
+	client, err := cli.NewDaemonClientFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
 	cli.LogVerbose(ctx, "Soft deleting logical path %q", repoPath)
 
-	err = application.Remove(ctx, repoPath)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return client.Call(ctx, controlrpc.MethodRemove, map[string]string{"path": repoPath}, nil)
 }

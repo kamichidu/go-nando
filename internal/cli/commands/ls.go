@@ -2,13 +2,13 @@ package commands
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/internal/cli"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/paths"
+	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // LsCommand represents the "nando ls" subcommand.
@@ -36,23 +36,22 @@ func (c *LsCommand) Run(ctx context.Context, args []string) (runErr error) {
 		return fmt.Errorf("%w: %v", cli.ErrInvalidArguments, err)
 	}
 
-	application, _, cleanup, err := cli.NewAppFromContext(ctx)
+	client, err := cli.NewDaemonClientFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
 	cli.LogVerbose(ctx, "Listing entries under logical path %q", repoPath)
 
-	entries, err := application.List(ctx, repoPath)
-	if err != nil {
+	var entries []controlrpc.Entry
+	if err := client.Call(ctx, controlrpc.MethodList, map[string]string{"path": repoPath}, &entries); err != nil {
 		return err
 	}
 
 	stdout := flagshim.MustStdoutFromContext(ctx)
 	for _, entry := range entries {
 		name := entry.Name
-		if entry.Kind == metadata.EntryKindDirectory {
+		if entry.Kind == string(metadata.EntryKindDirectory) {
 			name += "/"
 		}
 		fmt.Fprintln(stdout, name)

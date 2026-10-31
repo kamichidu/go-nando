@@ -17,9 +17,10 @@ import (
 )
 
 type fakeRepositoryUseCases struct {
-	mu      sync.Mutex
-	entry   *metadata.Entry
-	content []byte
+	mu               sync.Mutex
+	entry            *metadata.Entry
+	content          []byte
+	readReleaseCount int
 }
 
 func (f *fakeRepositoryUseCases) Stat(_ context.Context, path string) (metadata.Entry, error) {
@@ -29,6 +30,85 @@ func (f *fakeRepositoryUseCases) Stat(_ context.Context, path string) (metadata.
 		return metadata.Entry{}, metadata.ErrEntryNotFound
 	}
 	return *f.entry, nil
+}
+
+func (f *fakeRepositoryUseCases) List(_ context.Context, _ string) ([]metadata.Entry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.entry == nil {
+		return nil, nil
+	}
+	return []metadata.Entry{*f.entry}, nil
+}
+
+func (f *fakeRepositoryUseCases) Move(context.Context, app.MoveInput) error { return nil }
+func (f *fakeRepositoryUseCases) Remove(context.Context, string) error      { return nil }
+func (f *fakeRepositoryUseCases) GC(context.Context) (int, error)           { return 0, nil }
+func (f *fakeRepositoryUseCases) MaintenanceOnce(context.Context) error     { return nil }
+func (f *fakeRepositoryUseCases) Doctor(context.Context) error              { return nil }
+func (f *fakeRepositoryUseCases) Sync(context.Context) error                { return nil }
+
+func (f *fakeRepositoryUseCases) BeginReadResource(_ context.Context, _ string) (metadata.Entry, string, func() error, error) {
+	file, err := os.CreateTemp("", "nando-test-read-resource-")
+	if err != nil {
+		return metadata.Entry{}, "", nil, err
+	}
+	path := file.Name()
+	if _, err := file.Write([]byte("read")); err != nil {
+		return metadata.Entry{}, "", nil, errors.Join(err, file.Close(), os.Remove(path))
+	}
+	if err := file.Close(); err != nil {
+		return metadata.Entry{}, "", nil, errors.Join(err, os.Remove(path))
+	}
+	return metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 1}, path, func() error {
+		f.mu.Lock()
+		f.readReleaseCount++
+		f.mu.Unlock()
+		return os.Remove(path)
+	}, nil
+}
+
+func TestReadResourceSessionReleaseRunsRepositoryCleanup(t *testing.T) {
+	fake := &fakeRepositoryUseCases{entry: &metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 1}}
+	sessions, err := newSessionManager(fake, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sessions.close(); err != nil {
+			t.Errorf("close sessions: %v", err)
+		}
+	}()
+	service := newService(fake, sessions)
+	params := marshalTestJSON(t, map[string]any{"path": "/file", "resource_schemes": []string{"file"}})
+	result, err := service.Call(context.Background(), controlrpc.MethodBeginRead, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var read controlrpc.BeginReadResult
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(encoded, &read); err != nil {
+		t.Fatal(err)
+	}
+	path := resourcePathFromURI(t, read.ResourceURI)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("read Resource was not created: %v", err)
+	}
+	params = marshalTestJSON(t, map[string]string{"session_id": read.SessionID})
+	if _, err := service.Call(context.Background(), controlrpc.MethodRelease, params); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Call(context.Background(), controlrpc.MethodRelease, params); err != nil {
+		t.Fatalf("idempotent release: %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.readReleaseCount != 1 {
+		t.Fatalf("Repository read resource released %d times, want 1", fake.readReleaseCount)
+	}
 }
 
 func (f *fakeRepositoryUseCases) PutExpected(_ context.Context, input app.PutInput, expected repository.PutExpectation) error {

@@ -2,11 +2,11 @@ package commands
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/internal/cli"
+	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // DoctorCommand represents the "nando doctor" subcommand.
@@ -24,15 +24,14 @@ func (c *DoctorCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet)
 
 // Run executes repository integrity checks.
 func (c *DoctorCommand) Run(ctx context.Context, args []string) (runErr error) {
-	application, _, cleanup, err := cli.NewAppFromContext(ctx)
+	client, err := cli.NewDaemonClientFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
 	cli.LogVerbose(ctx, "Starting repository verification...")
 
-	if err := application.Doctor(ctx); err != nil {
+	if err := client.Call(ctx, controlrpc.MethodDoctor, struct{}{}, nil); err != nil {
 		return err
 	}
 

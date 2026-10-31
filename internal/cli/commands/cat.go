@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
+	"os"
 
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/internal/cli"
@@ -35,19 +38,27 @@ func (c *CatCommand) Run(ctx context.Context, args []string) (runErr error) {
 		return fmt.Errorf("%w: %v", cli.ErrInvalidArguments, err)
 	}
 
-	application, _, cleanup, err := cli.NewAppFromContext(ctx)
+	client, err := cli.NewDaemonClientFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
 	cli.LogVerbose(ctx, "Streaming content of logical path %q to stdout", repoPath)
 
 	stdout := flagshim.MustStdoutFromContext(ctx)
-	err = application.Cat(ctx, repoPath, stdout)
+	read, err := beginReadResource(ctx, client, repoPath)
 	if err != nil {
 		return err
 	}
-
-	return nil
+	defer func() { runErr = errors.Join(runErr, releaseResource(client, read.SessionID)) }()
+	u, err := url.Parse(read.ResourceURI)
+	if err != nil || u.Scheme != "file" || u.Host != "" || u.Path == "" {
+		return fmt.Errorf("daemon returned unsupported or inaccessible Resource URI %q", read.ResourceURI)
+	}
+	file, err := os.Open(u.Path)
+	if err != nil {
+		return fmt.Errorf("open daemon read Resource: %w", err)
+	}
+	_, copyErr := io.Copy(stdout, contextReader{ctx: ctx, reader: file})
+	return errors.Join(copyErr, file.Close())
 }

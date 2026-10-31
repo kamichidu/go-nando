@@ -2,10 +2,10 @@ package commands
 
 import (
 	"context"
-	"errors"
 
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/internal/cli"
+	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // SyncCommand represents the "nando sync" subcommand.
@@ -23,13 +23,12 @@ func (c *SyncCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) c
 
 // Run executes sync use case (currently planned and returns not implemented).
 func (c *SyncCommand) Run(ctx context.Context, args []string) (runErr error) {
-	application, _, cleanup, err := cli.NewAppFromContext(ctx)
+	client, err := cli.NewDaemonClientFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
 	cli.LogVerbose(ctx, "Starting repository synchronization (currently unimplemented)...")
 
-	return application.Sync(ctx)
+	return client.Call(ctx, controlrpc.MethodSync, struct{}{}, nil)
 }

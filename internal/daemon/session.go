@@ -33,11 +33,17 @@ type writeSession struct {
 	aborted        bool
 }
 
+type readSession struct {
+	release  func() error
+	inFlight bool
+}
+
 type sessionManager struct {
 	app       repositoryUseCases
 	directory string
 	mu        sync.Mutex
 	sessions  map[string]*writeSession
+	reads     map[string]*readSession
 }
 
 func newSessionManager(application repositoryUseCases, repoDir string) (*sessionManager, error) {
@@ -48,7 +54,20 @@ func newSessionManager(application repositoryUseCases, repoDir string) (*session
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return nil, fmt.Errorf("create daemon Resource session directory: %w", err)
 	}
-	return &sessionManager{app: application, directory: directory, sessions: make(map[string]*writeSession)}, nil
+	return &sessionManager{app: application, directory: directory, sessions: make(map[string]*writeSession), reads: make(map[string]*readSession)}, nil
+}
+
+func (m *sessionManager) beginRead(ctx context.Context, repositoryPath string) (controlrpc.BeginReadResult, error) {
+	entry, resourcePath, release, err := m.app.BeginReadResource(ctx, repositoryPath)
+	if err != nil {
+		return controlrpc.BeginReadResult{}, err
+	}
+	id := uuid.NewString()
+	resourceURI := (&url.URL{Scheme: "file", Path: resourcePath}).String()
+	m.mu.Lock()
+	m.reads[id] = &readSession{release: release}
+	m.mu.Unlock()
+	return controlrpc.BeginReadResult{SessionID: id, ResourceURI: resourceURI, Entry: protocolEntry(entry)}, nil
 }
 
 func (m *sessionManager) beginWrite(ctx context.Context, repositoryPath string) (controlrpc.BeginWriteResult, error) {
@@ -146,6 +165,24 @@ func (m *sessionManager) abort(id string) error {
 
 func (m *sessionManager) release(id string) error {
 	m.mu.Lock()
+	if session, ok := m.reads[id]; ok {
+		if session.inFlight {
+			m.mu.Unlock()
+			return errSessionBusy
+		}
+		session.inFlight = true
+		m.mu.Unlock()
+		if err := session.release(); err != nil {
+			m.mu.Lock()
+			session.inFlight = false
+			m.mu.Unlock()
+			return fmt.Errorf("release read Resource lease: %w", err)
+		}
+		m.mu.Lock()
+		delete(m.reads, id)
+		m.mu.Unlock()
+		return nil
+	}
 	session, ok := m.sessions[id]
 	if !ok {
 		m.mu.Unlock()
@@ -176,9 +213,19 @@ func (m *sessionManager) close() error {
 	for _, session := range m.sessions {
 		pathsToRemove = append(pathsToRemove, session.path)
 	}
+	readReleases := make([]func() error, 0, len(m.reads))
+	for _, session := range m.reads {
+		readReleases = append(readReleases, session.release)
+	}
 	m.sessions = make(map[string]*writeSession)
+	m.reads = make(map[string]*readSession)
 	m.mu.Unlock()
 	var failures []error
+	for _, release := range readReleases {
+		if err := release(); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	for _, path := range pathsToRemove {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			failures = append(failures, err)

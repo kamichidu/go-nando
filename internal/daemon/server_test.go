@@ -212,6 +212,120 @@ func TestDaemonUsesDefaultEndpoint(t *testing.T) {
 	}
 }
 
+func TestReadResourceLeaseProtectsObjectUntilRelease(t *testing.T) {
+	ctx := context.Background()
+	repoDir := t.TempDir()
+	if err := app.InitRepository(ctx, repoDir); err != nil {
+		t.Fatal(err)
+	}
+	application, closeRepository := openTestApplication(t, repoDir)
+	defer func() {
+		if err := closeRepository(); err != nil {
+			t.Errorf("close Repository: %v", err)
+		}
+	}()
+	unlock, err := AcquireRepositoryLock(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := unlock(); err != nil {
+			t.Errorf("release Repository lock: %v", err)
+		}
+	}()
+
+	oldSource := filepath.Join(t.TempDir(), "old")
+	if err := os.WriteFile(oldSource, []byte("pinned immutable bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.Put(ctx, app.PutInput{LocalPath: oldSource, RepositoryPath: "/pinned"}); err != nil {
+		t.Fatal(err)
+	}
+	oldEntry, err := application.Stat(ctx, "/pinned")
+	if err != nil || oldEntry.ObjectID == nil {
+		t.Fatalf("stat initial file: entry=%+v err=%v", oldEntry, err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "nando.sock")
+	endpoint := (&url.URL{Scheme: "unix", Path: socketPath}).String()
+	serveCtx, cancel := context.WithCancel(ctx)
+	serveErr := make(chan error, 1)
+	serverStopped := false
+	t.Cleanup(func() {
+		if serverStopped {
+			return
+		}
+		cancel()
+		select {
+		case err := <-serveErr:
+			if err != nil {
+				t.Errorf("stop daemon: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("daemon did not stop")
+		}
+	})
+	go func() { serveErr <- Serve(serveCtx, application, repoDir, controlrpc.ListenConfig{Endpoint: endpoint}) }()
+	client, err := controlrpc.NewClient(controlrpc.ClientConfig{Endpoint: endpoint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := waitForDaemon(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	var read controlrpc.BeginReadResult
+	if err := client.Call(ctx, controlrpc.MethodBeginRead, map[string]any{"path": "/pinned", "resource_schemes": []string{"file"}}, &read); err != nil {
+		t.Fatal(err)
+	}
+	resourceURL, err := url.Parse(read.ResourceURI)
+	if err != nil || resourceURL.Scheme != "file" {
+		t.Fatalf("invalid read Resource URI %q: %v", read.ResourceURI, err)
+	}
+	resource, err := os.ReadFile(resourceURL.Path)
+	if err != nil || string(resource) != "pinned immutable bytes" {
+		t.Fatalf("read Resource content=%q err=%v", resource, err)
+	}
+
+	if err := application.Remove(ctx, "/pinned"); err != nil {
+		t.Fatal(err)
+	}
+	type gcResult struct {
+		count int
+		err   error
+	}
+	gcDone := make(chan gcResult, 1)
+	gcCtx, cancelGC := context.WithTimeout(ctx, 3*time.Second)
+	defer cancelGC()
+	go func() {
+		count, err := application.GC(gcCtx)
+		gcDone <- gcResult{count: count, err: err}
+	}()
+	select {
+	case result := <-gcDone:
+		t.Fatalf("GC should wait for active read Resource lease: %+v", result)
+	case <-time.After(100 * time.Millisecond):
+	}
+	oldObjectPath := filepath.Join(repoDir, "objects", oldEntry.ObjectID.String())
+	if _, err := os.Stat(oldObjectPath); err != nil {
+		t.Fatalf("GC removed object while read Resource lease was active: %v", err)
+	}
+	if err := client.Call(ctx, controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	result := <-gcDone
+	if result.err != nil || result.count != 1 {
+		t.Fatalf("GC after Resource release: %+v", result)
+	}
+	if _, err := os.Stat(oldObjectPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old object remains after read Resource release and GC: %v", err)
+	}
+	cancel()
+	if err := <-serveErr; err != nil {
+		t.Fatalf("stop daemon: %v", err)
+	}
+	serverStopped = true
+}
+
 func waitForDaemon(ctx context.Context, client *controlrpc.Client) error {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

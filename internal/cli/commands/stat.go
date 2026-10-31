@@ -2,7 +2,6 @@ package commands
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -10,6 +9,7 @@ import (
 	"github.com/kamichidu/go-nando/internal/cli"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/paths"
+	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // StatCommand represents the "nando stat" subcommand.
@@ -37,41 +37,35 @@ func (c *StatCommand) Run(ctx context.Context, args []string) (runErr error) {
 		return fmt.Errorf("%w: %v", cli.ErrInvalidArguments, err)
 	}
 
-	application, _, cleanup, err := cli.NewAppFromContext(ctx)
+	client, err := cli.NewDaemonClientFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
 	cli.LogVerbose(ctx, "Retrieving stat for %q", repoPath)
 
-	entry, err := application.Stat(ctx, repoPath)
-	if err != nil {
+	var entry controlrpc.Entry
+	if err := client.Call(ctx, controlrpc.MethodStat, map[string]string{"path": repoPath}, &entry); err != nil {
 		return err
 	}
 
-	canonicalPath, err := application.DeriveCanonicalPath(ctx, entry)
-	if err != nil {
-		return fmt.Errorf("failed to derive canonical path: %w", err)
-	}
-
 	stdout := flagshim.MustStdoutFromContext(ctx)
-	fmt.Fprintf(stdout, "Path:         %s\n", canonicalPath)
-	if entry.Kind == metadata.EntryKindFile {
-		if entry.ObjectID != nil {
-			fmt.Fprintf(stdout, "Hash:         %s\n", entry.ObjectID.String())
+	fmt.Fprintf(stdout, "Path:         %s\n", repoPath)
+	if entry.Kind == string(metadata.EntryKindFile) {
+		if entry.ObjectID != "" {
+			fmt.Fprintf(stdout, "Hash:         %s\n", entry.ObjectID)
 		} else {
 			fmt.Fprintf(stdout, "Hash:         <nil>\n")
 		}
 	}
 	fmt.Fprintf(stdout, "Size:         %d bytes\n", entry.Size)
-	fmt.Fprintf(stdout, "Mtime:        %s\n", entry.Mtime.Time().Format(time.RFC3339))
+	fmt.Fprintf(stdout, "Mtime:        %s\n", time.Unix(0, entry.Mtime).UTC().Format(time.RFC3339))
 	fmt.Fprintf(stdout, "Mode:         %o\n", entry.Mode)
 	fmt.Fprintf(stdout, "Content-Type: %s\n", entry.ContentType)
 	fmt.Fprintf(stdout, "Revision:     %d\n", entry.Revision)
 	fmt.Fprintf(stdout, "Kind:         %s\n", string(entry.Kind))
-	fmt.Fprintf(stdout, "Created At:   %s\n", entry.CreatedAt.Time().Format(time.RFC3339))
-	fmt.Fprintf(stdout, "Updated At:   %s\n", entry.UpdatedAt.Time().Format(time.RFC3339))
+	fmt.Fprintf(stdout, "Created At:   %s\n", time.Unix(0, entry.CreatedAt).UTC().Format(time.RFC3339))
+	fmt.Fprintf(stdout, "Updated At:   %s\n", time.Unix(0, entry.UpdatedAt).UTC().Format(time.RFC3339))
 
 	return nil
 }

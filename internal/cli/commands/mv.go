@@ -2,13 +2,12 @@ package commands
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/kamichidu/go-flagshim"
-	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/cli"
 	"github.com/kamichidu/go-nando/internal/paths"
+	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // MvCommand represents the "nando mv" subcommand.
@@ -43,21 +42,12 @@ func (c *MvCommand) Run(ctx context.Context, args []string) (runErr error) {
 		return fmt.Errorf("%w: destination path: %v", cli.ErrInvalidArguments, err)
 	}
 
-	application, _, cleanup, err := cli.NewAppFromContext(ctx)
+	client, err := cli.NewDaemonClientFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
 	cli.LogVerbose(ctx, "Moving logical path %q to %q", src, dst)
 
-	err = application.Move(ctx, app.MoveInput{
-		SourcePath:      src,
-		DestinationPath: dst,
-	})
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return client.Call(ctx, controlrpc.MethodMove, map[string]string{"source": src, "destination": dst}, nil)
 }

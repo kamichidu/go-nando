@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -192,6 +193,65 @@ func (r *Repository) Stat(ctx context.Context, repoPath string) (metadata.Entry,
 // Cat streams content of the given logical path to the specified writer.
 func (r *Repository) Cat(ctx context.Context, repoPath string, w io.Writer) error {
 	return r.cat(ctx, repoPath, w)
+}
+
+// BeginReadResource opens a stable local object Resource and keeps its content
+// RLock alive until the returned release function completes.
+func (r *Repository) BeginReadResource(ctx context.Context, repoPath string) (metadata.Entry, string, func() error, error) {
+	entry, err := r.ResolvePath(ctx, repoPath)
+	if err != nil {
+		return metadata.Entry{}, "", nil, err
+	}
+	if entry.Kind != metadata.EntryKindFile || entry.ObjectID == nil {
+		return metadata.Entry{}, "", nil, fmt.Errorf("repository path %q is not a readable file: %w", repoPath, metadata.ErrEntryConflict)
+	}
+	pathProvider, ok := r.objectStore.(interface {
+		LocalResourcePath(content.ID) (string, error)
+	})
+	if !ok {
+		return metadata.Entry{}, "", nil, errors.New("object store does not provide client-accessible local Resources")
+	}
+	operationID := uuid.NewString()
+	resourceID := contentResourceID(entry.ObjectID.String())
+	if err := r.coordinator.AcquireResourceLock(ctx, resourceID, operationID, coordinator.RLock, resourceLeaseTTL); err != nil {
+		return metadata.Entry{}, "", nil, err
+	}
+	leaseCtx, stopHeartbeat, err := r.startLeaseHeartbeat(context.WithoutCancel(ctx), operationID)
+	if err != nil {
+		return metadata.Entry{}, "", nil, errors.Join(err, r.releaseResourceLocks(operationID))
+	}
+	var cleanupOnce sync.Once
+	var cleanupErr error
+	cleanup := func() error {
+		cleanupOnce.Do(func() {
+			stopErr := stopHeartbeat()
+			releaseCtx, cancel := context.WithTimeout(context.Background(), putCleanupTimeout)
+			defer cancel()
+			cleanupErr = errors.Join(stopErr, r.coordinator.ReleaseResourceLocks(releaseCtx, operationID))
+		})
+		return cleanupErr
+	}
+	if err := r.validateLease(leaseCtx, operationID); err != nil {
+		return metadata.Entry{}, "", nil, errors.Join(err, cleanup())
+	}
+	reader, err := r.openLocalOrDownload(ctx, operationID, *entry.ObjectID)
+	if err != nil {
+		return metadata.Entry{}, "", nil, errors.Join(fmt.Errorf("open read Resource: %w", err), cleanup())
+	}
+	if err := reader.Close(); err != nil {
+		return metadata.Entry{}, "", nil, errors.Join(fmt.Errorf("close read Resource verification handle: %w", err), cleanup())
+	}
+	if err := r.validateLease(leaseCtx, operationID); err != nil {
+		return metadata.Entry{}, "", nil, errors.Join(err, cleanup())
+	}
+	localPath, err := pathProvider.LocalResourcePath(*entry.ObjectID)
+	if err != nil {
+		return metadata.Entry{}, "", nil, errors.Join(err, cleanup())
+	}
+	if err := ctx.Err(); err != nil {
+		return metadata.Entry{}, "", nil, errors.Join(err, cleanup())
+	}
+	return entry, localPath, cleanup, nil
 }
 
 func (r *Repository) cat(ctx context.Context, repoPath string, w io.Writer) error {

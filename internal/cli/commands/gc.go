@@ -2,11 +2,11 @@ package commands
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/internal/cli"
+	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // GcCommand represents the "nando gc" subcommand.
@@ -24,20 +24,21 @@ func (c *GcCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) con
 
 // Run executes garbage collection on the repository.
 func (c *GcCommand) Run(ctx context.Context, args []string) (runErr error) {
-	application, _, cleanup, err := cli.NewAppFromContext(ctx)
+	client, err := cli.NewDaemonClientFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
 	cli.LogVerbose(ctx, "Running garbage collection...")
 
-	count, err := application.GC(ctx)
-	if err != nil {
+	var result struct {
+		Removed int `json:"removed"`
+	}
+	if err := client.Call(ctx, controlrpc.MethodGC, struct{}{}, &result); err != nil {
 		return err
 	}
 
 	stdout := flagshim.MustStdoutFromContext(ctx)
-	fmt.Fprintf(stdout, "Garbage collection completed. Removed %d orphan objects.\n", count)
+	fmt.Fprintf(stdout, "Garbage collection completed. Removed %d orphan objects.\n", result.Removed)
 	return nil
 }

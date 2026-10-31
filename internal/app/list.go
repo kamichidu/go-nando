@@ -21,3 +21,9 @@ func (a *App) Stat(ctx context.Context, repoPath string) (metadata.Entry, error)
 func (a *App) Cat(ctx context.Context, repoPath string, w io.Writer) error {
 	return a.repo.Cat(ctx, repoPath, w)
 }
+
+// BeginReadResource returns a local immutable object path and a release
+// function that holds its Repository content lease until called.
+func (a *App) BeginReadResource(ctx context.Context, repoPath string) (metadata.Entry, string, func() error, error) {
+	return a.repo.BeginReadResource(ctx, repoPath)
+}

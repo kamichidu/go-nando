@@ -26,17 +26,48 @@ const (
 )
 
 const (
-	MethodPing       = "daemon.ping"
-	MethodStat       = "repository.stat"
-	MethodBeginWrite = "resource.beginWrite"
-	MethodCommit     = "resource.commit"
-	MethodAbort      = "resource.abort"
-	MethodRelease    = "resource.release"
+	MethodPing        = "daemon.ping"
+	MethodStat        = "repository.stat"
+	MethodList        = "repository.list"
+	MethodMove        = "repository.move"
+	MethodRemove      = "repository.remove"
+	MethodGC          = "repository.gc"
+	MethodMaintenance = "repository.maintenanceOnce"
+	MethodDoctor      = "repository.doctor"
+	MethodSync        = "repository.sync"
+	MethodBeginRead   = "resource.beginRead"
+	MethodBeginWrite  = "resource.beginWrite"
+	MethodCommit      = "resource.commit"
+	MethodAbort       = "resource.abort"
+	MethodRelease     = "resource.release"
 )
 
 type BeginWriteResult struct {
 	SessionID   string `json:"session_id"`
 	ResourceURI string `json:"resource_uri"`
+}
+
+type BeginReadResult struct {
+	SessionID   string `json:"session_id"`
+	ResourceURI string `json:"resource_uri"`
+	Entry       Entry  `json:"entry"`
+}
+
+// Entry is the protocol representation of logical metadata. ObjectID is the
+// canonical content ID string; timestamps are Unix nanoseconds.
+type Entry struct {
+	ID          string  `json:"id"`
+	ParentID    *string `json:"parent_id"`
+	Name        string  `json:"name"`
+	Kind        string  `json:"kind"`
+	ObjectID    string  `json:"object_id,omitempty"`
+	Size        int64   `json:"size"`
+	Mtime       int64   `json:"mtime"`
+	Mode        uint32  `json:"mode"`
+	ContentType string  `json:"content_type"`
+	Revision    uint64  `json:"revision"`
+	CreatedAt   int64   `json:"created_at"`
+	UpdatedAt   int64   `json:"updated_at"`
 }
 
 // API handles one JSON-RPC method. Params and results are JSON values.

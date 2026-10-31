@@ -8,6 +8,7 @@ import (
 
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/internal/cli"
+	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // MaintenanceCommand runs the repository's single periodic maintenance job.
@@ -24,13 +25,28 @@ func (c *MaintenanceCommand) Run(ctx context.Context, args []string) (runErr err
 	if len(args) != 0 || c.interval <= 0 {
 		return fmt.Errorf("%w: nando maintenance --interval <duration>", cli.ErrInvalidArguments)
 	}
-	application, _, cleanup, err := cli.NewAppFromContext(ctx)
+	client, err := cli.NewDaemonClientFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 	stderr := flagshim.MustStderrFromContext(ctx)
-	return application.RunMaintenance(ctx, c.interval, func(err error) {
-		_, _ = fmt.Fprintf(stderr, "[maintenance] %v\n", err)
-	})
+	if err := client.Call(ctx, controlrpc.MethodMaintenance, struct{}{}, nil); err != nil {
+		if _, writeErr := fmt.Fprintf(stderr, "[maintenance] %v\n", err); writeErr != nil {
+			return errors.Join(err, writeErr)
+		}
+	}
+	ticker := time.NewTicker(c.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if err := client.Call(ctx, controlrpc.MethodMaintenance, struct{}{}, nil); err != nil {
+				if _, writeErr := fmt.Fprintf(stderr, "[maintenance] %v\n", err); writeErr != nil {
+					return errors.Join(err, writeErr)
+				}
+			}
+		}
+	}
 }

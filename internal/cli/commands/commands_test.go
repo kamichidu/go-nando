@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +110,38 @@ func TestPutUsesDaemonResourceSession(t *testing.T) {
 	if err := client.Call(context.Background(), controlrpc.MethodStat, map[string]string{"path": "/from-cli.txt"}, &entry); err != nil || entry.Revision != 1 || entry.Size != int64(len("CLI daemon client payload")) {
 		t.Fatalf("daemon metadata after CLI put: entry=%+v err=%v", entry, err)
 	}
+	stdout.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "stat", "/from-cli.txt"}); code != 0 || !strings.Contains(stdout.String(), "Revision:     1") {
+		t.Fatalf("daemon-backed stat: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "cat", "/from-cli.txt"}); code != 0 || stdout.String() != "CLI daemon client payload" {
+		t.Fatalf("daemon-backed cat: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	exportPath := filepath.Join(t.TempDir(), "exported.txt")
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "get", "/from-cli.txt", exportPath}); code != 0 {
+		t.Fatalf("daemon-backed get: code=%d stderr=%q", code, stderr.String())
+	}
+	exported, err := os.ReadFile(exportPath)
+	if err != nil || string(exported) != "CLI daemon client payload" {
+		t.Fatalf("exported bytes=%q err=%v", exported, err)
+	}
+	stdout.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "ls", "/"}); code != 0 || !strings.Contains(stdout.String(), "from-cli.txt") {
+		t.Fatalf("daemon-backed ls: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "mv", "/from-cli.txt", "/renamed.txt"}); code != 0 {
+		t.Fatalf("daemon-backed mv: code=%d stderr=%q", code, stderr.String())
+	}
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "rm", "/renamed.txt"}); code != 0 {
+		t.Fatalf("daemon-backed rm: code=%d stderr=%q", code, stderr.String())
+	}
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "gc"}); code != 0 {
+		t.Fatalf("daemon-backed gc: code=%d stderr=%q", code, stderr.String())
+	}
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "doctor"}); code != 0 {
+		t.Fatalf("daemon-backed doctor: code=%d stderr=%q", code, stderr.String())
+	}
 	cancelDaemon()
 	select {
 	case code := <-daemonResult:
@@ -141,6 +174,8 @@ func TestCLI(t *testing.T) {
 		if initCode != 0 {
 			t.Fatalf("failed to init repo: %s", stderr.String())
 		}
+		stopDaemon := startTestDaemon(t, tempRepo)
+		defer stopDaemon()
 
 		stdout.Reset()
 		stderr.Reset()
@@ -170,4 +205,48 @@ func TestCLI(t *testing.T) {
 			t.Errorf("expected coordination.db to exist at %s, but it was not found", coordinationDBPath)
 		}
 	})
+}
+
+func startTestDaemon(t *testing.T, repoDir string) func() {
+	t.Helper()
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(t.TempDir(), "runtime"))
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan int, 1)
+	go func() {
+		var stdout, stderr bytes.Buffer
+		result <- executeCLI(ctx, &stdout, &stderr, []string{"--repository", repoDir, "daemon"})
+	}()
+	endpoint, err := controlrpc.DefaultEndpoint(repoDir)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	client, err := controlrpc.NewClient(controlrpc.ClientConfig{Endpoint: endpoint})
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var ready struct {
+			Version string `json:"version"`
+		}
+		if err := client.Call(context.Background(), controlrpc.MethodPing, struct{}{}, &ready); err == nil {
+			return func() {
+				cancel()
+				select {
+				case code := <-result:
+					if code != 0 {
+						t.Errorf("daemon stopped with exit code %d", code)
+					}
+				case <-time.After(5 * time.Second):
+					t.Error("daemon did not stop")
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	t.Fatal("daemon did not become ready")
+	return func() {}
 }
