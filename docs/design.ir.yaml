@@ -90,7 +90,7 @@ nodes:
   - id: REQ-REPLICATION-OBLIGATION
     level: system_requirement
     kind: persistence-invariant
-    statement: GCS delivery obligations MUST be stored in a persistent transfer queue keyed by content ID and MUST be atomically enqueued in the same Metadata transaction that commits the Put Entry. The MetadataStore semantic API MUST expose this atomic operation without exposing SQL or SQLite transaction types; alternate adapters MUST provide equivalent transaction semantics. Queue state MUST support restart rediscovery, retry, and recording verified completion. It MUST NOT represent logical Entries as Pending or promise resumption of the original Put operation; retry from a complete committed Local Object MUST be idempotent.
+    statement: Uncompleted GCS delivery obligations MUST be stored in a persistent transfer queue keyed by content ID and MUST be atomically enqueued in the same Metadata transaction that commits the Put Entry. The MetadataStore semantic API MUST expose this atomic operation without exposing SQL or SQLite transaction types; alternate adapters MUST provide equivalent transaction semantics. A periodic Maintenance Job MUST retry each uncompleted queue item from the complete Local Object. After GCS API-contract completion is confirmed, the queue row MUST be deleted. Existing-name and ambiguous-response results MUST converge through final-object API attributes. The queue MUST NOT represent logical Entries as Pending or promise resumption of the original Put; no retry-state machine is required.
     provenance:
       origin: imported
   - id: REQ-GCS-PUBLICATION
@@ -102,7 +102,7 @@ nodes:
   - id: REQ-LOCAL-CAPACITY-GC
     level: system_requirement
     kind: garbage-collection-invariant
-    statement: Capacity GC and invalid-orphan GC MUST be distinct operations. Capacity GC MUST NOT remove a Local authoritative Object in Local mode, an Object without confirmed GCS delivery in GCS mode, or any RLock-protected resource. It MAY evict a GCS-delivered Local cache Object only after the required GCS confirmation. If capacity cannot be released without violating these conditions, the requesting operation MUST fail with a capacity error. Repository GC MUST NOT intentionally delete the last known-good physical Object copy; in-flight deletion I/O may complete after its WLock expires and can make a replica unavailable.
+    statement: Capacity GC and invalid-orphan GC MUST be distinct operations within the periodic Maintenance Job. Capacity GC MUST inspect configured capacity policy and reclaim Local space when needed; it MUST NOT remove a Local authoritative Object in Local mode, an untransferred Object in GCS mode, or any RLock-protected resource. It MAY evict a Local copy after the content ID is absent from the uncompleted transfer queue. Put, Download, or another operation that encounters actual capacity exhaustion MUST fail with a capacity error; the Repository does not require GC to reserve or guarantee future space. GC MUST NOT intentionally delete the last known-good physical Object copy; in-flight deletion I/O may complete after its WLock expires and can make a replica unavailable.
     provenance:
       origin: imported
   - id: REQ-READ-THROUGH
@@ -250,10 +250,11 @@ nodes:
   - id: DES-CONSTRUCTION
     level: system_design
     kind: composition-root
-    statement: The executable composition root reads persisted Repository Format metadata, validates its meaning and compatibility before use, then composes the metadata backend, object backend, digest algorithm, and Repository. The SQLite adapter owns only SQLite schema migrations and persistence of Repository Format values; backend selection is planned to use repository-owned configuration distinct from per-user runtime configuration.
+    statement: The executable composition root reads persisted Repository Format metadata and Repository settings, validates their meaning and compatibility before use, then composes the metadata backend, object backend, digest algorithm, and Repository. Repository settings own Local/GCS delivery mode, GCS bucket, and capacity policy; they are distinct from per-user runtime configuration. No new general settings framework is implied. The SQLite adapter owns schema migrations and persistence of Repository Format values.
     attributes:
       current_backends: [SQLite, local filesystem Object Store]
       planned_backend_selection: repository-owned-configuration
+      repository_owned_settings: [delivery-mode, GCS-bucket, capacity-policy]
     provenance:
       origin: imported
   - id: DES-METADATA-MODEL
@@ -273,7 +274,7 @@ nodes:
   - id: DES-DOCTOR
     level: system_design
     kind: diagnostic-contract
-    statement: Doctor checks Repository health by validating committed metadata references, referenced Object content identity, logical metadata invariants, and supported Repository Format before reporting healthy. It is non-destructive; repair is outside Doctor and requires a separate explicit operation. Valid unreferenced committed Objects are not Doctor findings and remain GC's responsibility.
+    statement: Doctor checks Repository health by validating committed metadata references, referenced Object content identity, logical metadata invariants, and supported Repository Format before reporting healthy. It is non-destructive; repair is outside Doctor and requires a separate explicit operation. Valid unreferenced committed Objects are not Doctor findings and remain the Orphan/Invalid GC subtask's responsibility.
     provenance:
       origin: imported
   - id: DES-ERROR-MODEL
@@ -315,11 +316,14 @@ nodes:
   - id: DES-LEASE
     level: system_design
     kind: resource-lock-model
-    statement: Lease has one model for all Local and GCS operations; resource ID, operation ID, RLock/WLock mode, expiry, and extensible information. One operation may hold multiple resource Leases. RLock is shared; WLock excludes all locks for its resource. Leases are heartbeated while the operation is active and explicitly released when it completes. There is no separate Put-only Operation Lease in the target design.
+    statement: Lease has one model for all Local and GCS operations; resource ID, operation ID, RLock/WLock mode, expiry, and extensible information. One operation may hold multiple resource Leases. RLock is shared; WLock excludes all locks for its resource. Leases are heartbeated while the operation is active and explicitly released when it completes. Defaults are TTL 30 seconds and heartbeat 5 seconds, both configurable; expiry uses the SQLite database clock. There is no separate Put-only Operation Lease in the target design.
     attributes:
       expiration_representation: absolute-utc-timestamp
       active_operation: heartbeat-until-completion
       completion: explicit-release
+      default_ttl: 30-seconds;configurable
+      default_heartbeat_interval: 5-seconds;configurable
+      expiry_clock: SQLite-database-clock
     provenance:
       origin: imported
   - id: DES-PUT-STAGE-COMMIT
@@ -343,7 +347,7 @@ nodes:
     attributes:
       modes: [local, gcs]
       local_mode: [GCS-absent, Local-authoritative]
-      gcs_mode_put_order: [acquire-temp-RLock-before-Stage, Local-Stage-and-hash, acquire-content-ID-RLock, Local-no-replace-publication, atomic-Metadata-Entry-and-transfer-queue-Commit, asynchronous-GCS-transfer, release-Leases-on-completion]
+      gcs_mode_put_order: [acquire-temp-RLock-before-Stage, Local-Stage-and-hash, acquire-content-ID-RLock, Local-no-replace-publication, atomic-Metadata-Entry-and-transfer-queue-Commit, periodic-Maintenance-transfer, delete-queue-row-after-API-confirmation, release-Leases-on-completion]
       gcs_mode_visibility: Metadata-Commit
       pre_replication_failure: Local-physical-loss-may-lose-unreplicated-content
       local_cache_eviction: only-after-confirmed-GCS-delivery
@@ -359,20 +363,23 @@ nodes:
   - id: DES-REPLICATION-STATE
     level: system_design
     kind: replica-state-model
-    statement: GCS transfer obligations and completion are persistent content-ID-keyed transfer-queue facts in the MetadataStore authority. Put commits the Entry and idempotently enqueues its content ID in one backend atomic transaction; SQLite stores both in the existing Metadata database, and alternate adapters provide the same semantic atomicity without exposing backend transactions. Restart retries unconfirmed content IDs. A successful GCS API response confirms transfer; ambiguous responses and existing-name results converge through final-object lookup and API attributes. Queue state is not an Entry-level Pending state, Operation Record, or resumption of the original Put. Detailed queue fields, retry scheduling, and idempotent completion updates remain open.
+    statement: The MetadataStore owns a content-ID-keyed queue of uncompleted GCS transfers. Put commits the Entry and idempotently enqueues its content ID in one backend atomic transaction; SQLite stores both in the existing Metadata database, and alternate adapters provide the same semantic atomicity without exposing backend transactions. The periodic Maintenance Job retries remaining rows from complete Local content. A successful GCS API response, or final-object API attributes resolving an ambiguous/existing-name result, confirms transfer and causes the queue row to be deleted. A crash before deletion leaves the row for retry; retry is idempotent. The queue is not an Entry-level Pending state, Operation Record, or resumption of the original Put. No persistent retry state machine is required.
     attributes:
       confirmed_delivery_evidence: GCS-success-response-or-ambiguous-response-object-query-using-API-attributes
       retained_remote_metadata: [GCS-generation, API-attributes-required-for-conditional-operations]
       full_object_readback_SHA256: not-required
-      absent_or_unconfirmed_state: must-be-re-discoverable-after-restart
-      duplicate_transfer: allowed-if-no-replace-and-verified
+      uncompleted_queue_rows: durable-retry-source-after-restart
+      completed_transfer: delete-row-after-GCS-API-contract-confirmation
+      queue_completion: delete-row-after-GCS-API-contract-confirmation
+      retry: periodic-retry-while-row-remains;no-persistent-retry-state-machine
+      duplicate_transfer: idempotent-enqueue-and-API-attribute-reconciliation
       no_temporary_GCS_object: true
     provenance:
       origin: imported
   - id: DES-RESOURCE-LEASES
     level: system_design
     kind: gc-protection-protocol
-    statement: A single Resource Lease model uses resource ID, operation ID, RLock/WLock mode, expiry, and extensible information; one operation may protect multiple resource IDs. RLocks are shared and WLocks exclusive for the same resource. Local and GCS use identical Lease states and transitions. The dedicated resource-lock area is managed atomically with SQLite transactions and is the sole GC protection mechanism. Put obtains a temporary-resource RLock before Stage creation, then a content-ID RLock after hashing while retaining the first through Local Publish and Metadata Commit. Get, Cat, upload, and download hold and heartbeat RLocks through resource use. GC obtains and heartbeats a WLock, then rechecks references, replica status, and deletion eligibility before physical removal. All locks release when their operation completes. Renewal failure or expiry stops further Publish, Commit, or state confirmation; an I/O request sent before expiry may still complete late. This may make an object unavailable (including a read 404); that is a localized operation failure and does not mutate Metadata. No fencing token, deleting state, storage-specific transition, or long Coordinator lock is required.
+    statement: A single Resource Lease model uses resource ID, operation ID, RLock/WLock mode, expiry, and extensible information; one operation may protect multiple resource IDs. RLocks are shared and WLocks exclusive for the same resource. Local and GCS use identical Lease states and transitions. The dedicated resource-lock area is managed atomically with SQLite transactions and is the sole GC protection mechanism. Leases default to a configurable 30-second TTL and 5-second heartbeat; SQLite database time is the expiry comparison basis. Put obtains a temporary-resource RLock before Stage creation, then a content-ID RLock after hashing while retaining the first through Local Publish and Metadata Commit. Get, Cat, upload, and download hold and heartbeat RLocks through resource use. GC obtains and heartbeats a WLock, then rechecks references, replica status, and deletion eligibility before physical removal. All locks release when their operation completes. Renewal failure or expiry stops further Publish, Commit, or state confirmation; an I/O request sent before expiry may still complete late. This may make an object unavailable (including a read 404); that is a localized operation failure and does not mutate Metadata. No fencing token, deleting state, storage-specific transition, or long Coordinator lock is required.
     attributes:
       lock_scope: resource-ID-content-or-temporary-ID
       lock_modes: [RLock-for-Put-Get-Cat-upload-download, WLock-for-GC-physical-delete]
@@ -389,7 +396,7 @@ nodes:
   - id: DES-GC-CLASSES
     level: system_design
     kind: garbage-collection-model
-    statement: Capacity GC and invalid-orphan GC have separate eligibility rules and outcomes. Capacity GC releases Local space only from eligible replicas and never deletes Local-mode authority, unconfirmed GCS-mode content, or RLock-protected resources; inability to reclaim safe capacity fails the requesting operation. Invalid-orphan GC reconciles malformed, corrupt, or unreferenced Local artifacts and unreferenced GCS Objects while respecting Metadata references, RLocks, and the last known-good physical copy. Physical deletion requires a renewed resource WLock, after which GC rechecks references, replica status, and deletion eligibility, and GCS deletion targets the observed generation. An already-sent delete MAY complete after WLock expiry and cause temporary or persistent replica unavailability; later reads fail locally and do not alter Metadata. No stronger deletion-fencing guarantee is made.
+    statement: Capacity GC and orphan/invalid GC are separate subtasks under the single periodic Maintenance Job. Capacity GC reads Repository capacity settings and reclaims Local space only when required; it preserves Local-mode authority, untransferred GCS-mode Objects, and RLock-protected resources. If an operation encounters actual capacity exhaustion, it returns a capacity error without requiring a reservation guarantee. Orphan/invalid GC reconciles malformed, corrupt, or unreferenced Local artifacts and unreferenced GCS Objects while respecting Metadata references, RLocks, and the last known-good physical copy. Physical deletion requires a renewed resource WLock, after which that subtask rechecks references, transfer status, and deletion eligibility; GCS deletion uses the observed generation. An already-sent delete MAY complete after WLock expiry and cause replica unavailability; a later read fails locally without changing Metadata.
     attributes:
       capacity_gc: [GCS-mode-only-eviction-of-confirmed-Local-cache-replicas, resource-RLock-aware]
       invalid_orphan_gc: [Local-invalid, Local-unreferenced, GCS-unreferenced, resource-WLock-before-physical-delete]
@@ -398,6 +405,17 @@ nodes:
       gcs_delete: generation-conditional
       delayed_delete_after_expiry: allowed;availability-risk-recorded
       shared_protection_authority: resource-RWLock-only
+    provenance:
+      origin: imported
+  - id: DES-MAINTENANCE-JOB
+    level: system_design
+    kind: periodic-maintenance
+    statement: A single periodic Maintenance Job is the shared start and schedule for three independent subtasks (uncompleted transfer-queue processing, Capacity GC, and Orphan/Invalid GC). The schedule is their only shared responsibility. Each subtask owns its work and failure result; a transfer failure MUST NOT prevent either GC subtask from running, and a GC failure MUST NOT prevent the other subtasks. This is not a general job-management framework.
+    attributes:
+      subtasks: [transfer-queue-processing, Capacity-GC, Orphan-Invalid-GC]
+      shared_behavior: [start, schedule]
+      failure_isolation: independent-per-subtask
+      general_job_framework: prohibited
     provenance:
       origin: imported
   - id: DES-GCS-READ-THROUGH
@@ -415,7 +433,7 @@ nodes:
   - id: DES-METADATA-BACKEND-PORTABILITY
     level: system_design
     kind: metadata-adapter-contract
-    statement: MetadataStore remains the semantic boundary for logical Entry state and the content-ID transfer queue while SQLite remains the current implementation. SQLite transactions, SQL, UNIQUE errors, and schema details do not leak through the common API. Every adapter must provide atomic conditional Create, Update, Move, and Delete semantics; expected-revision checks, sibling uniqueness, parent existence/kind, and ancestry-cycle validation are evaluated atomically with the mutation. The semantic API also atomically commits a Put Entry mutation with transfer-queue enqueue and records verified transfer completion; SQLite uses one transaction in the existing Metadata database and alternate adapters provide equivalent atomicity. Repository coordination and consistent reference enumeration required by GC must also be defined for any alternate backend. Firestore implementation details and distributed coordination are not selected here.
+    statement: MetadataStore remains the semantic boundary for logical Entry state and the content-ID transfer queue while SQLite remains the current implementation. SQLite transactions, SQL, UNIQUE errors, and schema details do not leak through the common API. Every adapter must provide atomic conditional Create, Update, Move, and Delete semantics; expected-revision checks, sibling uniqueness, parent existence/kind, and ancestry-cycle validation are evaluated atomically with the mutation. The semantic API atomically commits a Put Entry mutation with transfer-queue enqueue and deletes the queue row after GCS API-contract completion; SQLite uses one transaction in the existing Metadata database and alternate adapters provide equivalent atomicity. Repository coordination and consistent reference enumeration required by GC must also be defined for any alternate backend. Firestore implementation details and distributed coordination are not selected here.
     attributes:
       current_adapter: SQLite
       candidate_adapter: Firestore
@@ -434,7 +452,7 @@ nodes:
   - id: DES-FAILURE-BOUNDARIES
     level: system_design
     kind: failure-model
-    statement: Logical Repository operation progress is not persisted. Before Local Object Commit, incomplete temporary data is cleanup-only. After Local Object Commit and before Metadata Commit, the unreferenced Object remains protected by the Put-held content-ID RLock; it becomes GC-eligible only after that lock is released or expires. After Metadata Commit, the Entry is published immediately and the content-ID transfer obligation is already atomically queued in the MetadataStore; asynchronous GCS transfer follows.
+    statement: Logical Repository operation progress is not persisted. Before Local Object Commit, incomplete temporary data is cleanup-only. After Local Object Commit and before Metadata Commit, the unreferenced Object remains protected by the Put-held content-ID RLock; it becomes GC-eligible only after that lock is released or expires. After Metadata Commit, the Entry is published immediately and the content-ID transfer obligation is already atomically queued in the MetadataStore. The periodic Maintenance Job retries the row until GCS API-contract completion, then deletes it.
     provenance:
       origin: imported
   - id: DES-REVISION-SEMANTICS
@@ -587,7 +605,7 @@ nodes:
   - id: DES-PHASE6-GCS
     level: system_design
     kind: roadmap-phase
-    statement: Phase 6 adds repository-selected Local and GCS delivery modes while keeping MetadataStore's logical namespace contract backend-independent. GCS mode commits Local content and atomically commits Metadata plus a content-ID transfer-queue item before asynchronous replication; the queue supports restart rediscovery, retry, and verified completion but does not resume the original Put. Reads prefer Local and hydrate completely verified content on misses. Resource-scoped expiring RWLocks use RLock for Put/Get/upload/download and WLock for GC physical deletion, without long Repository-wide exclusion or duplicate protection mechanisms. Capacity eviction and invalid-orphan reconciliation remain distinct. Phase 6 target contracts are defined by the requirements below; remaining Open Items concern queue field/retry details, Lease timing values, capacity admission, mode migration, diagnostics, bucket policy, and alternate-backend deployment boundaries. Delayed in-flight I/O is an accepted availability risk, not a fencing blocker.
+    statement: Phase 6 adds Repository-settings-selected Local and GCS delivery modes, bucket selection, and capacity policy while keeping MetadataStore's logical namespace contract backend-independent. GCS mode commits Local content and atomically enqueues the content ID with Metadata Commit; the single periodic Maintenance Job independently runs queue processing, Capacity GC, and Orphan/Invalid GC. Queue rows are retried periodically and deleted after GCS API-contract completion; the queue is not a retry-state machine and does not resume the original Put. Reads prefer Local and hydrate completely verified content on misses. Resource-scoped expiring RWLocks use RLock for Put/Get/upload/download and WLock for GC physical deletion, without long Repository-wide exclusion or duplicate protection mechanisms. Capacity GC checks configured policy when it runs; actual Put/Download exhaustion returns a capacity error without a reservation guarantee. Capacity eviction and invalid-orphan reconciliation remain distinct. Phase 6 target contracts are defined by the requirements below; remaining Open Items concern GCS bucket policy, existing-repository mode migration, diagnostics, backups, and alternate-backend deployment boundaries. Delayed in-flight I/O is an accepted availability risk, not a fencing blocker.
     provenance:
       origin: imported
     attributes:
@@ -596,16 +614,17 @@ nodes:
         - Local mode runs without constructing, configuring, or contacting GCS
         - GCS Put commits Local, Entry Metadata, and a content-ID transfer-queue item in one MetadataStore atomic operation before asynchronous transfer; SQLite uses the existing Metadata database and a single SQLite transaction
         - MetadataStore exposes backend-neutral atomic Put-and-enqueue and transfer-completion semantics; a Firestore adapter must provide equivalent transaction semantics without SQL leakage
-        - unconfirmed queue items are rediscovered after restart, retried idempotently from complete Local content, and marked complete after the GCS API success/reconciliation contract
+        - periodic Maintenance Job retries each remaining queue row from complete Local content and deletes the row after authoritative GCS API success or ambiguous-response reconciliation
         - direct resumable upload targets objects/{content_id}, uses no temporary GCS Object or copy, and never overwrites an existing live Object
-        - transfer completion is persisted after authoritative GCS API success or ambiguous-response reconciliation using final-object API attributes; generation and required API metadata are retained
+        - existing-name and ambiguous upload responses converge through final-object API attributes; GCS generation and required API metadata are used for conditional operations
         - GCS-mode Get/Cat prefer Local; a miss downloads to shared temporary storage and publishes only complete content verified against its ID
         - Local capacity GC retains unconfirmed content and RLock-protected resources, and evicts only eligible confirmed replicas under a resource WLock
         - invalid-orphan GC protects Metadata references and resource RLocks/WLocks and can eventually collect GCS orphans using generation-conditional deletion
-        - a failed capacity reservation returns an error without deleting the last known-good physical Object
+        - periodic Capacity GC checks Repository capacity settings and reclaims only needed eligible space; a Put/Download that encounters actual capacity exhaustion returns a capacity error without a reservation guarantee
         - MetadataStore conformance semantics include atomic revisions, namespace uniqueness, parent validation, and cycle rejection without SQL/API leakage
         - resource RLocks protect Put/Get/upload/download and resource WLocks protect GC physical deletion; lock state is managed atomically in SQLite and no second GC protection mechanism exists
         - Repository coordination is not held during long input, GCS network, download, or response I/O
+        - the single periodic Maintenance Job runs transfer-queue processing, Capacity GC, and Orphan/Invalid GC as independent subtasks; failure in one does not prevent the others
         - existing Local-only CAS, Get atomic export, Doctor, GC, CLI, and SQLite migration compatibility tests remain covered
   - id: DES-PHASE0-SCAFFOLDING
     level: system_design
@@ -864,6 +883,14 @@ relations:
     from: DES-RESOURCE-LEASES
     type: depends_on
     to: REQ-READ-GC-EXCLUSION
+  - id: REL-MAINTENANCE-QUEUE
+    from: DES-MAINTENANCE-JOB
+    type: depends_on
+    to: DES-REPLICATION-STATE
+  - id: REL-MAINTENANCE-GC
+    from: DES-MAINTENANCE-JOB
+    type: depends_on
+    to: DES-GC-CLASSES
   - id: REL-GC-CAPACITY
     from: DES-GC-CLASSES
     type: depends_on
@@ -976,6 +1003,10 @@ relations:
     from: DES-PHASE6-GCS
     type: depends_on
     to: DES-RESOURCE-LEASES
+  - id: REL-PHASE6-MAINTENANCE
+    from: DES-PHASE6-GCS
+    type: depends_on
+    to: DES-MAINTENANCE-JOB
   - id: REL-PHASE6-GC
     from: DES-PHASE6-GCS
     type: depends_on
@@ -1109,32 +1140,20 @@ open_items:
     statement: Decide whether removed Entries are represented as tombstones, physically removed, or compacted, and define any retention policy without changing committed namespace visibility semantics.
     status: open
     related_refs: [DES-EXPLICIT-DIRECTORY-MODEL]
-  - id: OPEN-REPLICATION-QUEUE-SEMANTICS
-    statement: The queue authority and atomic enqueue boundary are decided; it belongs to MetadataStore semantics, SQLite stores it in the existing Metadata database, and Put Entry mutation plus queue insertion share one SQLite transaction. Alternate backends must expose equivalent atomic semantics. Specify queue row fields and state transitions, retry/backoff, and duplicate enqueue/completion semantics while preserving restart rediscovery and no-Pending/no-resume semantics; the semantic API must expose atomic Put-and-enqueue and completion operations without backend transaction types.
-    status: open
-    related_refs: [REQ-REPLICATION-OBLIGATION, DES-REPLICATION-STATE, DES-METADATA-BACKEND-PORTABILITY]
-  - id: OPEN-RESOURCE-LEASE-TIMING
-    statement: Select only operational Resource Lease expiry duration, heartbeat cadence, and clock source. The lifecycle contract is decided; heartbeat until completion, explicitly release on completion, stop on renewal failure/expiry, and prohibit subsequent Publish/Metadata Commit/queue confirmation. Requests sent before expiry may finish late, causing localized read failure or replica unavailability without Metadata mutation.
-    status: open
-    related_refs: [DES-RESOURCE-LEASES, DES-REPLICATION-STATE]
   - id: OPEN-GCS-GENERATION-AND-BUCKET-POLICY
     statement: GCS generation and required API metadata are retained for conditional operations. Define behavior under bucket versioning, soft delete, retention, external overwrite/delete, bucket/prefix changes, and object recreation, including how noncurrent generations affect availability. Arbitrary external GCS corruption is not guaranteed to be detected.
     status: open
     related_refs: [REQ-GCS-PUBLICATION, REQ-LOCAL-GCS-IMMUTABILITY, DES-GC-CLASSES]
-  - id: OPEN-CAPACITY-ADMISSION-AND-LIMITS
-    statement: Define capacity scope and admission behavior for the shared Put-spool/download-staging volume, Local object cache, and concurrent operations. Specify reservation accounting, GC trigger, required free-space headroom, concurrent upload/download limits, prioritization, and deterministic capacity errors without allowing GC to remove unconfirmed or RLock-protected content.
-    status: open
-    related_refs: [REQ-LOCAL-CAPACITY-GC, DES-GC-CLASSES, DES-DELIVERY-MODES]
   - id: OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS
     statement: Define Doctor health in GCS mode when Local cache is missing/corrupt, replication remains pending, or the GCS Object is missing/corrupt; distinguish valid unreferenced content from invalid orphans without making Doctor destructive. Cat may have written a response prefix before writer failure. A read 404 after delayed delete is a localized read error and does not change Metadata; revision-change policy remains independent from GC safety.
     status: open
     related_refs: [REQ-READ-THROUGH, REQ-DOCTOR-NONDESTRUCTIVE, DES-DOCTOR, DES-GCS-READ-THROUGH, OPEN-READ-REVISION-CHANGE]
-  - id: OPEN-DELIVERY-CONFIG-AND-MIGRATION
-    statement: Decide where repository-owned delivery mode, bucket identity, and backend selection are persisted and whether they belong in Repository Format compatibility metadata or a separate repository configuration. Define initialization, Local-to-GCS prefill and verification, bucket changes, GCS-to-Local recovery, rollback, and behavior for existing repositories without automatic destructive migration.
+  - id: OPEN-DELIVERY-MODE-MIGRATION
+    statement: Repository settings are the authority for Local/GCS mode, bucket, and capacity policy. Decide only compatibility and migration behavior for existing repositories, Local-to-GCS prefill, bucket changes, GCS-to-Local recovery, and rollback; do not introduce a new settings persistence framework.
     status: open
     related_refs: [DES-CONSTRUCTION, DES-DELIVERY-MODES, DES-PHASE1-FORMAT]
   - id: OPEN-FIRESTORE-COORDINATION-AND-SNAPSHOT
-    statement: Define the deployment boundary for a Firestore MetadataStore behind MetadataStore semantics. The current SQLite Coordinator is process-wide only for processes sharing one local repository path; decide whether Firestore is limited to that single-host deployment or requires a shared distributed Coordinator and a consistent ReferencedObjectIDs snapshot/conditional GC contract across hosts and writers.
+    statement: Define the deployment boundary for a Firestore MetadataStore behind MetadataStore semantics. The current SQLite Coordinator and Resource Lease store coordinate processes sharing one local repository path; decide whether Firestore is limited to that single-host deployment or requires a shared distributed Coordinator and a consistent ReferencedObjectIDs snapshot/conditional GC contract across hosts and writers. The MetadataStore adapter must retain atomic Put-and-enqueue and queue-row deletion semantics.
     status: open
     related_refs: [REQ-METADATA-PORTABILITY, REQ-PUT-GC-EXCLUSION, REQ-READ-GC-EXCLUSION, DES-METADATA-BACKEND-PORTABILITY, DES-REPOSITORY-BOUNDARIES]
   - id: OPEN-METADATA-BACKUP-PROCEDURE
