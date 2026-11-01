@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/content"
@@ -259,19 +260,24 @@ func TestLegacyStableEntryRecoveryRestoresObjectIDOnlyAtOriginalRevision(t *test
 			current := entry
 			current.Revision = tc.currentRevision
 			fake := &fakeRepositoryUseCases{entry: &current}
-			directory := t.TempDir()
-			stage := filepath.Join(directory, "session.stage")
+			root := t.TempDir()
+			directory := filepath.Join(root, "temp", "rpc-sessions")
+			if err := os.MkdirAll(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			sessionID := "8f557f3d-e540-481f-87a9-5fd974137fba"
+			stage := filepath.Join(directory, sessionID+".stage")
 			if err := os.WriteFile(stage, []byte("recoverable"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			zeroObjectID := content.ID{}
 			legacy := recoveryRecord{
-				Version: 1, SessionID: "session", StagingPath: stage, RepositoryPath: "/file",
+				Version: 1, SessionID: sessionID, StagingPath: stage, RepositoryPath: "/file",
 				Expectation:   repository.PutExpectation{EntryID: entry.ID, Revision: entry.Revision},
 				FollowEntryID: true, ObservedEntry: entry, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(2, 0),
 			}
 			legacy.ObservedEntry.ObjectID = &zeroObjectID
-			manager := &sessionManager{app: fake, directory: directory, files: osSessionFiles{}}
+			manager := &sessionManager{app: fake, root: root, directory: directory, files: osSessionFiles{}}
 			if err := manager.persistRecord(&legacy); err != nil {
 				t.Fatal(err)
 			}
@@ -429,6 +435,235 @@ func TestDaemonRestartPromotesActiveStagingToRecovery(t *testing.T) {
 	}
 	if data, err := os.ReadFile(stagePath); err != nil || string(data) != "survive daemon crash" {
 		t.Fatalf("restart lost interrupted staging: bytes=%q err=%v", data, err)
+	}
+	manifestData, err := os.ReadFile(restarted.recordPath(result.SessionID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest recoveryRecord
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != 2 || manifest.StagingPath != filepath.ToSlash(filepath.Join("temp", "rpc-sessions", result.SessionID+".stage")) {
+		t.Fatalf("crash recovery did not persist the root-relative manifest: %+v", manifest)
+	}
+}
+
+func TestRecoveryRetryAfterRepositoryRelocationUsesRootRelativeManifest(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	fake := &fakeRepositoryUseCases{}
+	first, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin, err := first.beginWrite(ctx, "/relocated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, begin.ResourceURI)
+	want := []byte("recovery bytes survive a root move")
+	if err := os.WriteFile(stage, want, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.close(); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := first.recordPath(begin.SessionID)
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest recoveryRecord
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != 2 || manifest.StagingPath != filepath.ToSlash(filepath.Join("temp", "rpc-sessions", begin.SessionID+".stage")) || filepath.IsAbs(manifest.StagingPath) {
+		t.Fatalf("manifest did not store canonical relative staging path: %+v", manifest)
+	}
+
+	// Model a backup made by the previous binary: its V1 manifest contains the
+	// old root's absolute path, while the staging file and manifest move together.
+	manifest.Version = 1
+	manifest.StagingPath = stage
+	manifestData, err = json.Marshal(&manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifestData, 0600); err != nil {
+		t.Fatal(err)
+	}
+	movedRoot := filepath.Join(t.TempDir(), "restored-repository")
+	if err := os.Rename(root, movedRoot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old absolute staging location unexpectedly remains accessible: %v", err)
+	}
+
+	restarted, err := newSessionManagerWithTTL(fake, movedRoot, time.Hour)
+	if err != nil {
+		t.Fatalf("start Recovery after repository relocation: %v", err)
+	}
+	defer func() {
+		if err := restarted.close(); err != nil {
+			t.Errorf("close relocated Repository manager: %v", err)
+		}
+	}()
+	newStage := filepath.Join(movedRoot, "temp", "rpc-sessions", begin.SessionID+".stage")
+	if records := restarted.listRecoveries(); len(records) != 1 || records[0].SessionID != begin.SessionID {
+		t.Fatalf("relocated Recovery was not loaded: %+v", records)
+	}
+	manifestData, err = os.ReadFile(filepath.Join(movedRoot, "temp", "rpc-sessions", begin.SessionID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != 2 || manifest.StagingPath != filepath.ToSlash(filepath.Join("temp", "rpc-sessions", begin.SessionID+".stage")) {
+		t.Fatalf("legacy manifest was not migrated before Recovery exposure: %+v", manifest)
+	}
+	if err := restarted.retryRecovery(ctx, begin.SessionID); err != nil {
+		t.Fatalf("retry Recovery after relocation: %v", err)
+	}
+	if string(fake.content) != string(want) || fake.entry == nil || fake.entry.Size != int64(len(want)) {
+		t.Fatalf("recovered content mismatch: bytes=%q entry=%+v", fake.content, fake.entry)
+	}
+	for _, path := range []string{newStage, filepath.Join(movedRoot, "temp", "rpc-sessions", begin.SessionID+".json")} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("successful retry did not clean %q: %v", path, err)
+		}
+	}
+}
+
+func TestRecoveryManifestRejectsUnsafeStagingPathsAndSymlinks(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(t *testing.T, root, stage string, record *recoveryRecord)
+	}{
+		{name: "absolute version 2 path", mutate: func(_ *testing.T, _, stage string, record *recoveryRecord) { record.StagingPath = stage }},
+		{name: "parent traversal", mutate: func(_ *testing.T, _, _ string, record *recoveryRecord) {
+			record.StagingPath = "temp/rpc-sessions/../escape.stage"
+		}},
+		{name: "session filename mismatch", mutate: func(_ *testing.T, _, _ string, record *recoveryRecord) {
+			record.StagingPath = filepath.ToSlash(filepath.Join("temp", "rpc-sessions", uuid.NewString()+".stage"))
+		}},
+		{name: "staging symlink", mutate: func(t *testing.T, _, stage string, _ *recoveryRecord) {
+			if err := os.Remove(stage); err != nil {
+				t.Fatal(err)
+			}
+			outside := filepath.Join(t.TempDir(), "outside")
+			if err := os.WriteFile(outside, []byte("do not read"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, stage); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "staging directory", mutate: func(t *testing.T, _, stage string, _ *recoveryRecord) {
+			if err := os.Remove(stage); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(stage, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			manager, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			begin, err := manager.beginWrite(context.Background(), "/file")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stage := resourcePathFromURI(t, begin.ResourceURI)
+			if err := os.WriteFile(stage, []byte("data"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			manager.mu.Lock()
+			record := manager.sessions[begin.SessionID].recoveryRecord
+			manager.mu.Unlock()
+			if err := manager.close(); err != nil {
+				t.Fatal(err)
+			}
+			tc.mutate(t, root, stage, &record)
+			recordData, err := json.Marshal(&record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(manager.recordPath(begin.SessionID), recordData, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour); err == nil {
+				t.Fatal("startup accepted unsafe Recovery staging")
+			}
+		})
+	}
+}
+
+func TestRecoveryRejectsSymlinkedSessionDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "temp"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "temp", "rpc-sessions")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour); err == nil {
+		t.Fatal("startup accepted symlinked Recovery directory")
+	}
+}
+
+func TestLegacyRecoveryRequiresMatchingStageUnderRestoredRoot(t *testing.T) {
+	root := t.TempDir()
+	manager, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin, err := manager.beginWrite(context.Background(), "/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, begin.ResourceURI)
+	if err := os.WriteFile(stage, []byte("current root bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	record := manager.sessions[begin.SessionID].recoveryRecord
+	manager.mu.Unlock()
+	if err := manager.close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(stage); err != nil {
+		t.Fatal(err)
+	}
+	oldStage := filepath.Join(t.TempDir(), "old-root", "temp", "rpc-sessions", begin.SessionID+".stage")
+	if err := os.MkdirAll(filepath.Dir(oldStage), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oldStage, []byte("must never be opened"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	record.Version = 1
+	record.StagingPath = oldStage
+	data, err := json.Marshal(&record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manager.recordPath(begin.SessionID), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour); err == nil || !strings.Contains(err.Error(), "inspect Recovery staging") {
+		t.Fatalf("legacy manifest without a matching current-root stage did not fail explicitly: %v", err)
+	}
+	got, err := os.ReadFile(oldStage)
+	if err != nil || string(got) != "must never be opened" {
+		t.Fatalf("legacy absolute path was touched: bytes=%q err=%v", got, err)
 	}
 }
 
@@ -722,7 +957,7 @@ func TestDiscardTombstonePrecedesCleanupAndRestartFinishesPartialRemoval(t *test
 	}
 	stopSessionManagerForCrash(sessions)
 	cleanup := &sessionManager{
-		directory: filepath.Dir(manifest), files: failingSessionFiles{removePath: manifest, removeErr: errors.New("injected restart cleanup failure")},
+		root: root, directory: filepath.Dir(manifest), files: failingSessionFiles{removePath: manifest, removeErr: errors.New("injected restart cleanup failure")},
 		sessions: make(map[string]*writeSession), reads: make(map[string]*readSession), recoveries: make(map[string]*recoveryRecord),
 	}
 	if err := cleanup.loadRecoveries(); err == nil {

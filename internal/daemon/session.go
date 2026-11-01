@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -107,6 +106,7 @@ func (osSessionFiles) ReadFile(path string) ([]byte, error)       { return os.Re
 
 type sessionManager struct {
 	app        repositoryUseCases
+	root       string
 	directory  string
 	ttl        time.Duration
 	mu         sync.Mutex
@@ -126,15 +126,26 @@ func newSessionManagerWithTTL(application repositoryUseCases, repoDir string, tt
 	if ttl <= 0 {
 		return nil, errors.New("resource session TTL must be positive")
 	}
-	directory := filepath.Join(repoDir, "temp", "rpc-sessions")
+	root, err := filepath.Abs(repoDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Repository root: %w", err)
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Repository root symlinks: %w", err)
+	}
+	directory := filepath.Join(root, "temp", "rpc-sessions")
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return nil, fmt.Errorf("create daemon Resource session directory: %w", err)
+	}
+	if err := validateSessionDirectories(root, directory); err != nil {
+		return nil, err
 	}
 	if err := syncDirectory(filepath.Dir(directory)); err != nil {
 		return nil, fmt.Errorf("sync daemon Resource session parent directory: %w", err)
 	}
 	manager := &sessionManager{
-		app: application, directory: directory, ttl: ttl,
+		app: application, root: root, directory: directory, ttl: ttl,
 		sessions: make(map[string]*writeSession), reads: make(map[string]*readSession),
 		recoveries: make(map[string]*recoveryRecord), files: osSessionFiles{}, done: make(chan struct{}),
 	}
@@ -221,7 +232,7 @@ func (m *sessionManager) createWriteSession(normalized string, expectation repos
 		observedObjectID = observedEntry.ObjectID.String()
 	}
 	session := &writeSession{recoveryRecord: recoveryRecord{
-		Version: 1, SessionID: id, StagingPath: resourcePath, RepositoryPath: normalized, Expectation: expectation, FollowEntryID: followID && expectation.EntryID != "", ObservedEntry: observedEntry,
+		Version: 2, SessionID: id, StagingPath: resourcePath, RepositoryPath: normalized, Expectation: expectation, FollowEntryID: followID && expectation.EntryID != "", ObservedEntry: observedEntry,
 		ObservedObjectID: observedObjectID,
 		CreatedAt:        now, UpdatedAt: now,
 	}, expiresAt: time.Now().Add(m.ttl)}
@@ -818,7 +829,13 @@ func (m *sessionManager) preserve(record *recoveryRecord, reason string) error {
 }
 
 func (m *sessionManager) persistRecord(record *recoveryRecord) error {
-	data, err := json.Marshal(record)
+	if err := m.validateRuntimeStage(record.SessionID, record.StagingPath, record.Committed || record.Discarding); err != nil {
+		return err
+	}
+	persisted := *record
+	persisted.Version = 2
+	persisted.StagingPath = m.relativeStagePath(record.SessionID)
+	data, err := json.Marshal(&persisted)
 	if err != nil {
 		return err
 	}
@@ -904,6 +921,13 @@ func (m *sessionManager) loadRecoveries() error {
 			continue
 		}
 		path := filepath.Join(m.directory, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			return fmt.Errorf("inspect Resource recovery record %q: %w", path, err)
+		}
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("invalid Resource recovery record %q: not a regular file", path)
+		}
 		data, err := m.files.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("read Resource recovery record %q: %w", path, err)
@@ -912,8 +936,11 @@ func (m *sessionManager) loadRecoveries() error {
 		if err := json.Unmarshal(data, &record); err != nil {
 			return fmt.Errorf("decode Resource recovery record %q: %w", path, err)
 		}
-		if record.Version != 1 || record.SessionID == "" || (record.Committed && record.Discarding) || filepath.Base(m.recordPath(record.SessionID)) != entry.Name() || !m.ownsStagePath(record.StagingPath) {
+		if err := validateSessionID(record.SessionID); err != nil || (record.Committed && record.Discarding) || m.recordPath(record.SessionID) != path {
 			return fmt.Errorf("invalid Resource recovery record %q", path)
+		}
+		if err := m.resolveManifestStage(&record); err != nil {
+			return fmt.Errorf("invalid Resource recovery record %q: %w", path, err)
 		}
 		if record.ObservedObjectID != "" {
 			objectID, err := content.ParseID(record.ObservedObjectID)
@@ -980,9 +1007,90 @@ func (m *sessionManager) restoreLegacyObservedObjectID(record *recoveryRecord) e
 
 func (m *sessionManager) recordPath(id string) string { return filepath.Join(m.directory, id+".json") }
 
-func (m *sessionManager) ownsStagePath(path string) bool {
-	rel, err := filepath.Rel(m.directory, path)
-	return err == nil && rel != "." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".."
+func validateSessionID(id string) error {
+	parsed, err := uuid.Parse(id)
+	if err != nil || parsed.String() != id {
+		return fmt.Errorf("session ID is not a canonical UUID")
+	}
+	return nil
+}
+
+func (m *sessionManager) relativeStagePath(id string) string {
+	return filepath.ToSlash(filepath.Join("temp", "rpc-sessions", id+".stage"))
+}
+
+func (m *sessionManager) expectedStagePath(id string) string {
+	return filepath.Join(m.directory, id+".stage")
+}
+
+func validateSessionDirectories(root, directory string) error {
+	for _, path := range []string{filepath.Join(root, "temp"), directory} {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return fmt.Errorf("inspect Recovery directory %q: %w", path, err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("recovery path %q is not a real directory", path)
+		}
+	}
+	return nil
+}
+
+func (m *sessionManager) validateRuntimeStage(id, path string, allowMissing bool) error {
+	if err := validateSessionID(id); err != nil {
+		return err
+	}
+	expected := m.expectedStagePath(id)
+	if filepath.Clean(path) != expected {
+		return fmt.Errorf("staging path does not match session ID %q", id)
+	}
+	if err := validateSessionDirectories(m.root, m.directory); err != nil {
+		return err
+	}
+	info, err := os.Lstat(expected)
+	if errors.Is(err, os.ErrNotExist) && allowMissing {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect Recovery staging %q: %w", expected, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("recovery staging %q is not a regular file", expected)
+	}
+	return nil
+}
+
+func (m *sessionManager) resolveManifestStage(record *recoveryRecord) error {
+	switch record.Version {
+	case 2:
+		if filepath.IsAbs(record.StagingPath) || record.StagingPath != m.relativeStagePath(record.SessionID) {
+			return errors.New("version 2 staging path is not the canonical Repository-relative session path")
+		}
+	case 1:
+		old := record.StagingPath
+		if !filepath.IsAbs(old) || filepath.Clean(old) != old || filepath.Base(old) != record.SessionID+".stage" ||
+			filepath.Base(filepath.Dir(old)) != "rpc-sessions" || filepath.Base(filepath.Dir(filepath.Dir(old))) != "temp" {
+			return errors.New("version 1 staging path is not an unambiguous legacy session path")
+		}
+	default:
+		return fmt.Errorf("unsupported Recovery manifest version %d", record.Version)
+	}
+
+	stagePath := m.expectedStagePath(record.SessionID)
+	allowMissing := record.Committed || record.Discarding
+	if err := m.validateRuntimeStage(record.SessionID, stagePath, allowMissing); err != nil {
+		return err
+	}
+	if record.Version == 1 {
+		record.Version = 2
+		record.StagingPath = stagePath
+		if err := m.persistRecord(record); err != nil {
+			return fmt.Errorf("persist migrated Recovery manifest: %w", err)
+		}
+	} else {
+		record.StagingPath = stagePath
+	}
+	return nil
 }
 
 func (m *sessionManager) close() error {

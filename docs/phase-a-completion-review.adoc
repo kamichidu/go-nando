@@ -274,7 +274,7 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |Packaging implementation present. Runtime lifecycle status is limited to the verification evidence recorded for the current host; system scope is not a Phase A blocker.
 
 |PA-06 — *P2 operational decision*
-|Resolved as a responsibility boundary. The operator runbook defines the normal static point after clients stop and daemon shutdown completes, requires a consistent full-Repository set while stopped, preserves pending GCS obligations, and separates host credentials/configuration. It does not mandate LVM, a particular snapshot technology, or a new backup feature. Current Recovery manifests constrain restore to the original absolute Repository path.
+|Resolved as a responsibility boundary. The operator runbook defines the normal static point after clients stop and daemon shutdown completes, requires a consistent full-Repository set while stopped, preserves pending GCS obligations, and separates host credentials/configuration. It does not mandate LVM, a particular snapshot technology, or a new backup feature. Recovery manifests now store Repository-root-relative stage paths; safe Version 1 manifests migrate only when the same-session stage exists as a regular file under the restored root, without following the stored absolute path.
 |Keep backup mechanism and credential handling under operator control. Treat forced termination as crash recovery, not a normal static point.
 |*PA-06 resolved by documentation; no runtime feature or test gate added*
 

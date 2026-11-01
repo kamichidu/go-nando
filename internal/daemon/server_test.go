@@ -151,6 +151,80 @@ func TestDaemonWriteResourceVerticalSlice(t *testing.T) {
 	serverStopped = true
 }
 
+func TestRecoveryRetryAfterRepositoryMoveWithRealLocalRepository(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	if err := app.InitRepository(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	application, closeRepository := openTestApplication(t, root)
+	manager, err := newSessionManagerWithTTL(application, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin, err := manager.beginWrite(ctx, "/moved-recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, begin.ResourceURI)
+	want := []byte("real Repository recovery payload after relocation")
+	if err := os.WriteFile(stage, want, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := closeRepository(); err != nil {
+		t.Fatal(err)
+	}
+	movedRoot := filepath.Join(t.TempDir(), "repository-at-new-path")
+	if err := os.Rename(root, movedRoot); err != nil {
+		t.Fatal(err)
+	}
+	application, closeRepository = openTestApplication(t, movedRoot)
+	defer func() {
+		if err := closeRepository(); err != nil {
+			t.Errorf("close relocated Repository: %v", err)
+		}
+	}()
+	manager, err = newSessionManagerWithTTL(application, movedRoot, time.Hour)
+	if err != nil {
+		t.Fatalf("start Recovery from relocated Repository: %v", err)
+	}
+	defer func() {
+		if err := manager.close(); err != nil {
+			t.Errorf("close relocated session manager: %v", err)
+		}
+	}()
+	if records := manager.listRecoveries(); len(records) != 1 || records[0].SessionID != begin.SessionID {
+		t.Fatalf("Recovery was not loaded after relocation: %+v", records)
+	}
+	if err := manager.retryRecovery(ctx, begin.SessionID); err != nil {
+		t.Fatalf("retry relocated Recovery: %v", err)
+	}
+	entry, err := application.Stat(ctx, "/moved-recovery")
+	if err != nil || entry.Size != int64(len(want)) {
+		t.Fatalf("committed Entry=%+v err=%v", entry, err)
+	}
+	_, readPath, release, err := application.BeginReadResource(ctx, "/moved-recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, readErr := os.ReadFile(readPath)
+	releaseErr := release()
+	if readErr != nil || releaseErr != nil || string(got) != string(want) {
+		t.Fatalf("recovered Repository bytes=%q readErr=%v releaseErr=%v", got, readErr, releaseErr)
+	}
+	for _, path := range []string{
+		filepath.Join(movedRoot, "temp", "rpc-sessions", begin.SessionID+".stage"),
+		filepath.Join(movedRoot, "temp", "rpc-sessions", begin.SessionID+".json"),
+	} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("successful Recovery retry left %q: %v", path, err)
+		}
+	}
+}
+
 func TestStableEntryWriteSessionFollowsRenameWithOriginalCAS(t *testing.T) {
 	ctx := context.Background()
 	repoDir := t.TempDir()

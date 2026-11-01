@@ -1017,9 +1017,14 @@ def g3_verify_recovery() -> None:
             raise GateFailure(f"Recovery manifest identity/path mismatch: {manifest}")
         if manifest.get("committed") is not False:
             raise GateFailure(f"Recovery manifest unexpectedly marks the interrupted write committed: {manifest}")
-        stage_path = Path(manifest["staging_path"]).resolve()
+        expected_relative_stage = Path("temp") / "rpc-sessions" / f"{session_id}.stage"
+        if manifest.get("version") != 2 or manifest.get("staging_path") != expected_relative_stage.as_posix():
+            raise GateFailure(
+                f"Recovery manifest staging path is not the canonical repository-relative path: {manifest}"
+            )
+        stage_path = Path(REPOSITORY) / expected_relative_stage
         stage_root = (Path(REPOSITORY) / "temp" / "rpc-sessions").resolve()
-        if stage_root not in stage_path.parents:
+        if stage_path.parent.resolve() != stage_root or not stat.S_ISREG(stage_path.lstat().st_mode):
             raise GateFailure(f"Recovery manifest points outside the repository staging directory: {stage_path}")
         recovered = stage_path.read_bytes()
         if recovered != expected:

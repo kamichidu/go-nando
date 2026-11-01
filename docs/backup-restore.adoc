@@ -66,11 +66,20 @@ and group for the service user. Restore the matching external config and ADC
 access separately; do not change Repository delivery settings as part of
 restore.
 
-Recovery manifests currently contain absolute staging paths and startup
-validation requires those paths to remain under the Repository's current
-`temp/rpc-sessions` directory. Restore a Repository containing Recovery
-manifests to its original absolute Repository path. Relocating such a
-Repository is not supported by the current Recovery format.
+Version 2 Recovery manifests store staging paths relative to the Repository
+root as `temp/rpc-sessions/<session-id>.stage`. Startup derives the expected
+filename from the session ID, rejects absolute/traversing paths and symlinks,
+and requires the staging object to be a regular file. Recovery can therefore
+be resolved under a different absolute Repository root.
+
+Version 1 manifests stored an absolute staging path. Startup never opens that
+stored path. It migrates a Version 1 record only when the stored value is a
+clean absolute path with the expected `temp/rpc-sessions/<session-id>.stage`
+suffix and the corresponding staging file exists as a regular file under the
+restored Repository's current root. If that current-root stage is absent or
+unsafe, startup reports an error and does not follow the historical absolute
+path. Version 1 records without an unambiguous matching stage require operator
+recovery from a valid copy.
 
 While services remain stopped, check the restored tree, owner/mode, Repository
 path, runtime config, and GCS credentials. Then start only the daemon, keeping

@@ -130,7 +130,11 @@ nodes:
       renewal: explicit-client-RPC
       expiry_clock: daemon-wall-clock
       manifest: durable-atomic-JSON
-      manifest_version: 1
+      manifest_version: 2
+      manifest_staging_path: repository-root-relative
+      manifest_staging_path_format: temp/rpc-sessions/<session-id>.stage
+      manifest_staging_path_validation: exact-session-match; reject-absolute-and-traversal; reject-symlinks; require-regular-file
+      legacy_manifest_v1: never-open-stored-absolute-path; migrate-only-when-current-root-expected-stage-exists-and-is-regular
       begin_manifest_reconstruction_anchor: true
       durable_commit_completion_marker: true
       durable_discard_tombstone_before_cleanup: true
@@ -1438,7 +1442,7 @@ open_items:
     status: open
     related_refs: [REQ-METADATA-PORTABILITY, REQ-PUT-GC-EXCLUSION, REQ-READ-GC-EXCLUSION, DES-METADATA-BACKEND-PORTABILITY, DES-REPOSITORY-BOUNDARIES]
   - id: OPEN-METADATA-BACKUP-PROCEDURE
-    statement: "Resolved by the Phase A operator runbook: quiesce FUSE/WebDAV, normally stop the daemon, and capture every Repository component as one consistent set while all Repository writes have ceased. Preserve SQLite and any sidecars, coordination DB, Local CAS objects, Recovery staging/manifests, repository settings, and pending GCS obligations. Restore the complete set while stopped with owner/mode/configuration checks; do not require GCS queue drain or prescribe a snapshot technology. External credentials and unit/configuration files remain separately managed. Recovery manifests currently require restoring to the original absolute Repository path."
+    statement: "Resolved by the Phase A operator runbook: quiesce FUSE/WebDAV, normally stop the daemon, and capture every Repository component as one consistent set while all Repository writes have ceased. Preserve SQLite and any sidecars, coordination DB, Local CAS objects, Recovery staging/manifests, repository settings, and pending GCS obligations. Restore the complete set while stopped with owner/mode/configuration checks; do not require GCS queue drain or prescribe a snapshot technology. External credentials and unit/configuration files remain separately managed. Version 2 Recovery manifests store Repository-root-relative staging paths and resolve them under the current root. Version 1 absolute paths are never followed; migration requires the expected current-root stage for the same session ID to exist as a regular file, otherwise startup reports an explicit error."
     status: resolved
     related_refs: [REQ-METADATA-BACKUP-RESPONSIBILITY, DES-METADATA-BACKEND-PORTABILITY, DES-REPLICATION-STATE]
   - id: OPEN-ADAPTER-AUTHORIZATION
