@@ -6,6 +6,7 @@ linters:
     - errcheck
     - govet
     - staticcheck
+    - depguard
   settings:
     errcheck:
       check-type-assertions: true
@@ -23,6 +24,76 @@ linters:
         - (io.Closer).Close
         - (io.ReadCloser).Close
         - (*github.com/kamichidu/go-nando/internal/metadata/sqlite.Store).Close
+    depguard:
+      rules:
+        controlrpc-is-public-contract:
+          list-mode: lax
+          files:
+            - "controlrpc/**/*.go"
+          deny:
+            - pkg: "github.com/kamichidu/go-nando/internal"
+              desc: the public controlrpc contract must not depend on implementation packages under internal
+        repository-stays-below-application:
+          list-mode: lax
+          files:
+            - "internal/repository/**/*.go"
+          deny:
+            - pkg: "github.com/kamichidu/go-nando/internal/app$"
+              desc: repository is a lower-level domain layer and must not depend on application orchestration
+            - pkg: "github.com/kamichidu/go-nando/internal/daemon$"
+              desc: repository must not depend on daemon transport or lifecycle implementation
+            - pkg: "github.com/kamichidu/go-nando/internal/cli$"
+              desc: repository must not depend on command-line composition or presentation
+            - pkg: "github.com/kamichidu/go-nando/controlrpc$"
+              desc: repository must stay independent of the public daemon wire protocol
+        app-stays-below-transport:
+          list-mode: lax
+          files:
+            - "internal/app/**/*.go"
+          deny:
+            - pkg: "github.com/kamichidu/go-nando/internal/daemon$"
+              desc: application orchestration must not depend on daemon transport or lifecycle implementation
+            - pkg: "github.com/kamichidu/go-nando/internal/cli$"
+              desc: application orchestration must not depend on command-line composition or presentation
+            - pkg: "github.com/kamichidu/go-nando/controlrpc$"
+              desc: application domain use cases must not depend on the daemon wire protocol
+        daemon-does-not-depend-on-cli:
+          list-mode: lax
+          files:
+            - "internal/daemon/**/*.go"
+          deny:
+            - pkg: "github.com/kamichidu/go-nando/internal/cli$"
+              desc: daemon lifecycle and RPC dispatch must not depend on CLI composition or presentation
+        metadata-stays-in-domain-core:
+          list-mode: lax
+          files:
+            - "internal/metadata/**/*.go"
+          deny:
+            - pkg: "github.com/kamichidu/go-nando/internal/app$"
+              desc: metadata is a domain core package and must not depend on application orchestration
+            - pkg: "github.com/kamichidu/go-nando/internal/daemon$"
+              desc: metadata must not depend on daemon transport or lifecycle implementation
+            - pkg: "github.com/kamichidu/go-nando/internal/cli$"
+              desc: metadata must not depend on command-line composition or presentation
+            - pkg: "github.com/kamichidu/go-nando/internal/repository$"
+              desc: metadata must remain below repository orchestration in the dependency graph
+            - pkg: "github.com/kamichidu/go-nando/controlrpc$"
+              desc: metadata wire representations are mapped at the daemon boundary, not imported into the domain core
+        objectstore-stays-in-domain-core:
+          list-mode: lax
+          files:
+            - "internal/objectstore/**/*.go"
+          deny:
+            - pkg: "github.com/kamichidu/go-nando/internal/app$"
+              desc: object storage is a domain infrastructure package and must not depend on application orchestration
+            - pkg: "github.com/kamichidu/go-nando/internal/daemon$"
+              desc: object storage must not depend on daemon transport or lifecycle implementation
+            - pkg: "github.com/kamichidu/go-nando/internal/cli$"
+              desc: object storage must not depend on command-line composition or presentation
+            - pkg: "github.com/kamichidu/go-nando/internal/repository$"
+              desc: object storage is a lower-level persistence adapter and must not depend on repository orchestration
+            - pkg: "github.com/kamichidu/go-nando/controlrpc$"
+              desc: object storage must remain independent of the daemon wire protocol
 
 formatters:
   enable:
