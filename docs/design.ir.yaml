@@ -351,7 +351,7 @@ nodes:
       adapter_calls: daemon-JSON-RPC-and-Resource-URI
       resource_schemes: extensible
       phase_a_resource_scheme: file
-      resource_contract_package: pkg/controlrpc
+      resource_contract_package: controlrpc
       remote_data_transport: deferred
       module_and_process_per_adapter: true
       Windows_Explorer: WSL-native-share

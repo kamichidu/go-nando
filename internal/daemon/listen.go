@@ -1,4 +1,4 @@
-package controlrpc
+package daemon
 
 import (
 	"crypto/tls"
@@ -19,7 +19,7 @@ type ListenConfig struct {
 	Token    string
 }
 
-func Listen(config ListenConfig) (net.Listener, error) {
+func listen(config ListenConfig) (net.Listener, error) {
 	u, err := url.Parse(config.Endpoint)
 	if err != nil || u.Scheme == "" {
 		return nil, fmt.Errorf("invalid daemon listen endpoint %q", config.Endpoint)
@@ -57,4 +57,17 @@ func Listen(config ListenConfig) (net.Listener, error) {
 	default:
 		return nil, fmt.Errorf("unsupported daemon listen scheme %q", u.Scheme)
 	}
+}
+
+func unixSocketPath(u *url.URL) (string, error) {
+	if u.Opaque != "" {
+		if u.Path != "" || u.Host != "" || !filepath.IsAbs(u.Opaque) {
+			return "", fmt.Errorf("unix endpoint must contain an absolute socket path")
+		}
+		return u.Opaque, nil
+	}
+	if u.Host != "" || !filepath.IsAbs(u.Path) {
+		return "", fmt.Errorf("unix endpoint must be unix:/absolute/path")
+	}
+	return u.Path, nil
 }

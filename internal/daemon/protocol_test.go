@@ -1,4 +1,4 @@
-package controlrpc
+package daemon
 
 import (
 	"context"
@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kamichidu/go-nando/controlrpc"
 )
 
 type echoAPI struct{}
@@ -36,15 +38,15 @@ func (echoAPI) Call(_ context.Context, method string, params json.RawMessage) (a
 func TestUnixJSONRPCClientRequiresBearerTokenWhenConfigured(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "nando.sock")
 	endpoint := "unix://" + socketPath
-	listener, err := Listen(ListenConfig{Endpoint: endpoint})
+	listener, err := listen(ListenConfig{Endpoint: endpoint})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &http.Server{Handler: NewHandler(echoAPI{}, "secret")}
+	server := &http.Server{Handler: newHandler(echoAPI{}, "secret")}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
 
-	unauthorized, err := NewClient(ClientConfig{Endpoint: endpoint})
+	unauthorized, err := controlrpc.NewClient(controlrpc.ClientConfig{Endpoint: endpoint})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +54,7 @@ func TestUnixJSONRPCClientRequiresBearerTokenWhenConfigured(t *testing.T) {
 		t.Fatal("request without bearer token succeeded")
 	}
 
-	client, err := NewClient(ClientConfig{Endpoint: endpoint, Token: "secret"})
+	client, err := controlrpc.NewClient(controlrpc.ClientConfig{Endpoint: endpoint, Token: "secret"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,21 +76,21 @@ func TestUnixJSONRPCClientRequiresBearerTokenWhenConfigured(t *testing.T) {
 
 func TestDefaultEndpointRoundTripsThroughListenerAndClient(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	endpoint, err := DefaultEndpoint(filepath.Join(t.TempDir(), "repo with spaces"))
+	endpoint, err := controlrpc.DefaultEndpoint(filepath.Join(t.TempDir(), "repo with spaces"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(endpoint, "unix:") {
 		t.Fatalf("default endpoint is not a Unix URI: %q", endpoint)
 	}
-	listener, err := Listen(ListenConfig{Endpoint: endpoint})
+	listener, err := listen(ListenConfig{Endpoint: endpoint})
 	if err != nil {
 		t.Fatalf("listen on DefaultEndpoint result %q: %v", endpoint, err)
 	}
-	server := &http.Server{Handler: NewHandler(echoAPI{}, "")}
+	server := &http.Server{Handler: newHandler(echoAPI{}, "")}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
-	client, err := NewClient(ClientConfig{Endpoint: endpoint})
+	client, err := controlrpc.NewClient(controlrpc.ClientConfig{Endpoint: endpoint})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +107,7 @@ func TestDefaultEndpointRoundTripsThroughListenerAndClient(t *testing.T) {
 }
 
 func TestTCPListenerRefusesMissingTLSAndAuthentication(t *testing.T) {
-	_, err := Listen(ListenConfig{Endpoint: "tcp://127.0.0.1:0"})
+	_, err := listen(ListenConfig{Endpoint: "tcp://127.0.0.1:0"})
 	if err == nil || !strings.Contains(fmt.Sprint(err), "requires") {
 		t.Fatalf("expected TCP security configuration error, got %v", err)
 	}
@@ -113,18 +115,18 @@ func TestTCPListenerRefusesMissingTLSAndAuthentication(t *testing.T) {
 
 func TestTCPJSONRPCUsesTLSAndBearerAuthentication(t *testing.T) {
 	certPEM, certPath, keyPath := writeTestCertificate(t)
-	listener, err := Listen(ListenConfig{Endpoint: "tcp://127.0.0.1:0", CertFile: certPath, KeyFile: keyPath, Token: "secret"})
+	listener, err := listen(ListenConfig{Endpoint: "tcp://127.0.0.1:0", CertFile: certPath, KeyFile: keyPath, Token: "secret"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &http.Server{Handler: NewHandler(echoAPI{}, "secret")}
+	server := &http.Server{Handler: newHandler(echoAPI{}, "secret")}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
 
-	if _, err := NewClient(ClientConfig{Endpoint: "tcp://" + listener.Addr().String()}); err == nil {
+	if _, err := controlrpc.NewClient(controlrpc.ClientConfig{Endpoint: "tcp://" + listener.Addr().String()}); err == nil {
 		t.Fatal("TCP client without bearer token was accepted")
 	}
-	client, err := NewClient(ClientConfig{Endpoint: "tcp://" + listener.Addr().String(), Token: "secret", CACertPEM: certPEM})
+	client, err := controlrpc.NewClient(controlrpc.ClientConfig{Endpoint: "tcp://" + listener.Addr().String(), Token: "secret", CACertPEM: certPEM})
 	if err != nil {
 		t.Fatal(err)
 	}

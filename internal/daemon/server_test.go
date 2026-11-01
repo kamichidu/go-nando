@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/content"
 	coordinatorsqlite "github.com/kamichidu/go-nando/internal/coordinator/sqlite"
@@ -16,7 +17,6 @@ import (
 	metadatasqlite "github.com/kamichidu/go-nando/internal/metadata/sqlite"
 	"github.com/kamichidu/go-nando/internal/objectstore/local"
 	"github.com/kamichidu/go-nando/internal/repository"
-	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 func TestDaemonWriteResourceVerticalSlice(t *testing.T) {
@@ -45,7 +45,7 @@ func TestDaemonWriteResourceVerticalSlice(t *testing.T) {
 	endpoint := (&url.URL{Scheme: "unix", Path: socketPath}).String()
 	serveCtx, cancel := context.WithCancel(ctx)
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- Serve(serveCtx, application, repoDir, controlrpc.ListenConfig{Endpoint: endpoint}) }()
+	go func() { serveErr <- Serve(serveCtx, application, repoDir, ListenConfig{Endpoint: endpoint}) }()
 	serverStopped := false
 	t.Cleanup(func() {
 		if serverStopped {
@@ -181,7 +181,7 @@ func TestDaemonUsesDefaultEndpoint(t *testing.T) {
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- Serve(serveCtx, application, repoDir, controlrpc.ListenConfig{Endpoint: endpoint}) }()
+	go func() { serveErr <- Serve(serveCtx, application, repoDir, ListenConfig{Endpoint: endpoint}) }()
 	client, err := controlrpc.NewClient(controlrpc.ClientConfig{Endpoint: endpoint})
 	if err != nil {
 		t.Fatal(err)
@@ -265,7 +265,7 @@ func TestReadResourceLeaseProtectsObjectUntilRelease(t *testing.T) {
 			t.Error("daemon did not stop")
 		}
 	})
-	go func() { serveErr <- Serve(serveCtx, application, repoDir, controlrpc.ListenConfig{Endpoint: endpoint}) }()
+	go func() { serveErr <- Serve(serveCtx, application, repoDir, ListenConfig{Endpoint: endpoint}) }()
 	client, err := controlrpc.NewClient(controlrpc.ClientConfig{Endpoint: endpoint})
 	if err != nil {
 		t.Fatal(err)

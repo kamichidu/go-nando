@@ -21,6 +21,13 @@ import (
 	"time"
 )
 
+const protocolVersion = "2.0"
+
+type rpcError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
 // ClientConfig selects the control transport. TCP requires TLS and a bearer
 // token; UDS is local and relies on socket permissions.
 type ClientConfig struct {

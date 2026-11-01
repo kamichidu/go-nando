@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/repository"
-	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 const (
@@ -69,7 +69,7 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 	case controlrpc.MethodStat:
 		var params pathParams
 		if err := decodeParams(raw, &params); err != nil {
-			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
 		}
 		entry, err := s.app.Stat(ctx, params.Path)
 		if err != nil {
@@ -79,7 +79,7 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 	case controlrpc.MethodList:
 		var params pathParams
 		if err := decodeParams(raw, &params); err != nil {
-			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
 		}
 		entries, err := s.app.List(ctx, params.Path)
 		if err != nil {
@@ -93,7 +93,7 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 	case controlrpc.MethodMove:
 		var params moveParams
 		if err := decodeParams(raw, &params); err != nil || params.Source == "" || params.Destination == "" {
-			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: errors.New("source and destination are required")}
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: errors.New("source and destination are required")}
 		}
 		if err := s.app.Move(ctx, app.MoveInput{SourcePath: params.Source, DestinationPath: params.Destination}); err != nil {
 			return nil, mapMethodError(err)
@@ -102,7 +102,7 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 	case controlrpc.MethodRemove:
 		var params pathParams
 		if err := decodeParams(raw, &params); err != nil {
-			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
 		}
 		if err := s.app.Remove(ctx, params.Path); err != nil {
 			return nil, mapMethodError(err)
@@ -134,10 +134,10 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 	case controlrpc.MethodBeginRead:
 		var params beginWriteParams
 		if err := decodeParams(raw, &params); err != nil {
-			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
 		}
 		if !containsScheme(params.ResourceSchemes, "file") {
-			return nil, &controlrpc.MethodError{Code: -32010, Err: errors.New("client did not declare support for daemon's file Resource URI")}
+			return nil, &methodError{Code: -32010, Err: errors.New("client did not declare support for daemon's file Resource URI")}
 		}
 		result, err := s.sessions.beginRead(ctx, params.Path)
 		if err != nil {
@@ -147,10 +147,10 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 	case controlrpc.MethodBeginWrite:
 		var params beginWriteParams
 		if err := decodeParams(raw, &params); err != nil {
-			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
 		}
 		if !containsScheme(params.ResourceSchemes, "file") {
-			return nil, &controlrpc.MethodError{Code: -32010, Err: errors.New("client did not declare support for daemon's file Resource URI")}
+			return nil, &methodError{Code: -32010, Err: errors.New("client did not declare support for daemon's file Resource URI")}
 		}
 		result, err := s.sessions.beginWrite(ctx, params.Path)
 		if err != nil {
@@ -160,7 +160,7 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 	case controlrpc.MethodCommit:
 		params, err := decodeSession(raw)
 		if err != nil {
-			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
 		}
 		if err := s.sessions.commit(ctx, params.SessionID); err != nil {
 			return nil, mapMethodError(err)
@@ -169,7 +169,7 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 	case controlrpc.MethodAbort:
 		params, err := decodeSession(raw)
 		if err != nil {
-			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
 		}
 		if err := s.sessions.abort(params.SessionID); err != nil {
 			return nil, mapMethodError(err)
@@ -178,7 +178,7 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 	case controlrpc.MethodRelease:
 		params, err := decodeSession(raw)
 		if err != nil {
-			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
 		}
 		if err := s.sessions.release(params.SessionID); err != nil {
 			return nil, mapMethodError(err)
@@ -187,7 +187,7 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 	case controlrpc.MethodRenew:
 		params, err := decodeSession(raw)
 		if err != nil {
-			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
 		}
 		expiresAt, err := s.sessions.renew(params.SessionID)
 		if err != nil {
@@ -197,7 +197,7 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 	case controlrpc.MethodRevoke:
 		params, err := decodeSession(raw)
 		if err != nil {
-			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
 		}
 		if err := s.sessions.revoke(params.SessionID); err != nil {
 			return nil, mapMethodError(err)
@@ -208,7 +208,7 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 	case controlrpc.MethodRecoveryRetry:
 		params, err := decodeSession(raw)
 		if err != nil {
-			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
 		}
 		if err := s.sessions.retryRecovery(ctx, params.SessionID); err != nil {
 			return nil, mapMethodError(err)
@@ -217,14 +217,14 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 	case controlrpc.MethodRecoveryDiscard:
 		params, err := decodeSession(raw)
 		if err != nil {
-			return nil, &controlrpc.MethodError{Code: jsonRPCInvalidParams, Err: err}
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
 		}
 		if err := s.sessions.discardRecovery(params.SessionID); err != nil {
 			return nil, mapMethodError(err)
 		}
 		return struct{}{}, nil
 	default:
-		return nil, &controlrpc.MethodError{Code: jsonRPCMethodNotFound, Err: fmt.Errorf("unknown method %q", method)}
+		return nil, &methodError{Code: jsonRPCMethodNotFound, Err: fmt.Errorf("unknown method %q", method)}
 	}
 }
 
@@ -276,11 +276,11 @@ func decodeParams(raw json.RawMessage, target any) error {
 func mapMethodError(err error) error {
 	switch {
 	case errors.Is(err, metadata.ErrEntryNotFound), errors.Is(err, errSessionNotFound):
-		return &controlrpc.MethodError{Code: jsonRPCEntryNotFound, Err: err}
+		return &methodError{Code: jsonRPCEntryNotFound, Err: err}
 	case errors.Is(err, errSessionExpired):
-		return &controlrpc.MethodError{Code: controlrpc.CodeResourceSessionExpired, Err: err}
+		return &methodError{Code: controlrpc.CodeResourceSessionExpired, Err: err}
 	case errors.Is(err, metadata.ErrEntryConflict), errors.Is(err, errSessionBusy), errors.Is(err, errSessionClosed):
-		return &controlrpc.MethodError{Code: jsonRPCEntryConflict, Err: err}
+		return &methodError{Code: jsonRPCEntryConflict, Err: err}
 	default:
 		return err
 	}

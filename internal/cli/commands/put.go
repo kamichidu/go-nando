@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/kamichidu/go-flagshim"
+	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/cli"
 	"github.com/kamichidu/go-nando/internal/paths"
-	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // PutCommand represents the "nando put" subcommand.

@@ -12,19 +12,18 @@ import (
 	"time"
 
 	"github.com/kamichidu/go-nando/internal/app"
-	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // Serve runs the daemon control plane. The caller must hold the repository
 // process lock for the full lifetime of Serve.
-func Serve(ctx context.Context, application *app.App, repoDir string, listenConfig controlrpc.ListenConfig) (retErr error) {
+func Serve(ctx context.Context, application *app.App, repoDir string, listenConfig ListenConfig) (retErr error) {
 	sessions, err := newSessionManager(application, repoDir)
 	if err != nil {
 		return err
 	}
 	defer func() { retErr = errors.Join(retErr, sessions.close()) }()
 
-	listener, err := controlrpc.Listen(listenConfig)
+	listener, err := listen(listenConfig)
 	if err != nil {
 		return err
 	}
@@ -48,7 +47,7 @@ func Serve(ctx context.Context, application *app.App, repoDir string, listenConf
 	}()
 
 	httpServer := &http.Server{
-		Handler:           controlrpc.NewHandler(newService(application, sessions), listenConfig.Token),
+		Handler:           newHandler(newService(application, sessions), listenConfig.Token),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}

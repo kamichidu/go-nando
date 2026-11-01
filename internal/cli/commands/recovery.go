@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/kamichidu/go-flagshim"
+	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/cli"
-	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // RecoveryCommand inspects and explicitly retries or discards failed write Resources.

@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/kamichidu/go-flagshim"
+	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/cli"
 	"github.com/kamichidu/go-nando/internal/cli/commands"
-	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 func executeCLI(ctx context.Context, stdout, stderr *bytes.Buffer, args []string) int {

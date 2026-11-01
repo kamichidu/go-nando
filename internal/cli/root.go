@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/kamichidu/go-flagshim"
+	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/config"
 	"github.com/kamichidu/go-nando/internal/content"
@@ -23,7 +24,6 @@ import (
 	"github.com/kamichidu/go-nando/internal/objectstore/local"
 	"github.com/kamichidu/go-nando/internal/repository"
 	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
-	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // ErrInvalidArguments is returned when CLI arguments are missing or invalid.

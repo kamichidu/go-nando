@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/paths"
 	"github.com/kamichidu/go-nando/internal/repository"
-	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 const defaultResourceSessionTTL = controlrpc.ResourceSessionTTL

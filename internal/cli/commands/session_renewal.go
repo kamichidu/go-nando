@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kamichidu/go-nando/pkg/controlrpc"
+	"github.com/kamichidu/go-nando/controlrpc"
 )
 
 func startSessionRenewal(parent context.Context, client *controlrpc.Client, sessionID string) (context.Context, func() error) {

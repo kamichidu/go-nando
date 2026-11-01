@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/repository"
-	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 type fakeRepositoryUseCases struct {
@@ -396,7 +396,7 @@ func TestExpiredCommitIsRejectedWithSessionExpiredRPCError(t *testing.T) {
 	sessions.sessions[begin.SessionID].expiresAt = time.Now().Add(-time.Second)
 	sessions.mu.Unlock()
 	_, err = service.Call(context.Background(), controlrpc.MethodCommit, marshalTestJSON(t, map[string]string{"session_id": begin.SessionID}))
-	var methodErr *controlrpc.MethodError
+	var methodErr *methodError
 	if !errors.As(err, &methodErr) || methodErr.Code != controlrpc.CodeResourceSessionExpired {
 		t.Fatalf("expired Commit error=%v, want session-expired RPC code", err)
 	}
@@ -948,7 +948,7 @@ func TestWriteResourceSessionUsesRevisionCAS(t *testing.T) {
 	if _, err := service.Call(context.Background(), controlrpc.MethodCommit, sessionParams); err == nil {
 		t.Fatal("stale write Resource session committed")
 	} else {
-		var methodErr *controlrpc.MethodError
+		var methodErr *methodError
 		if !errors.As(err, &methodErr) || methodErr.Code != jsonRPCEntryConflict {
 			t.Fatalf("expected mapped revision conflict, got %v", err)
 		}

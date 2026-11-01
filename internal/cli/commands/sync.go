@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/kamichidu/go-flagshim"
+	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/cli"
-	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // SyncCommand represents the "nando sync" subcommand.

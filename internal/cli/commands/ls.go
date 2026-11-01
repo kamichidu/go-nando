@@ -5,10 +5,10 @@ import (
 	"fmt"
 
 	"github.com/kamichidu/go-flagshim"
+	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/cli"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/paths"
-	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // LsCommand represents the "nando ls" subcommand.

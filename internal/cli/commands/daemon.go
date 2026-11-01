@@ -6,9 +6,9 @@ import (
 	"fmt"
 
 	"github.com/kamichidu/go-flagshim"
+	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/cli"
 	"github.com/kamichidu/go-nando/internal/daemon"
-	"github.com/kamichidu/go-nando/pkg/controlrpc"
 )
 
 // DaemonCommand runs the single Repository-owning daemon process.
@@ -81,7 +81,7 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 			return fmt.Errorf("read daemon bearer token: %w", err)
 		}
 	}
-	return daemon.Serve(ctx, application, repoDir, controlrpc.ListenConfig{
+	return daemon.Serve(ctx, application, repoDir, daemon.ListenConfig{
 		Endpoint: endpoint,
 		CertFile: firstNonEmpty(c.tlsCert, cfg.DaemonTLSCert),
 		KeyFile:  firstNonEmpty(c.tlsKey, cfg.DaemonTLSKey),
