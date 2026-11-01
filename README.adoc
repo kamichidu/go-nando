@@ -24,4 +24,4 @@ Run the host-native G0-G3 checks with:
 e2e/run.sh
 ----
 
-Docker Compose starts only fake GCS; the daemon, real FUSE mount, and scenario runner stay on the Linux/WSL host. The optional bounded FUSE stress profile is `e2e/run.sh --stress`. Scenarios, host requirements, fake-GCS limitations, and retained evidence are documented in link:docs/e2e-gates.md[docs/e2e-gates.md].
+Docker Compose starts only fake GCS; the daemon, real FUSE mount, scenario runner, and fault-injection proxy stay on the Linux/WSL host. The optional bounded binary/concurrency FUSE stress profile is `e2e/run.sh --stress`. Scenario assertions, host requirements, fake-GCS limitations, and retained evidence are documented in link:docs/e2e-gates.md[docs/e2e-gates.md].

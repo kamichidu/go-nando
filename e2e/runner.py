@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import http.client
 import json
 import os
+import random
+import re
 import signal
 import socket
 import stat
@@ -26,6 +29,7 @@ REPOSITORY = os.environ["E2E_REPOSITORY"]
 SOCKET = os.environ["E2E_SOCKET"]
 ENDPOINT = f"unix://{SOCKET}"
 FAKE_GCS = os.environ.get("E2E_FAKE_GCS", "http://127.0.0.1:4443")
+GCS_PROXY = os.environ.get("E2E_GCS_PROXY", "http://127.0.0.1:4444")
 BUCKET = "nando-e2e"
 FUSE_BIN = os.environ["E2E_FUSE_BIN"]
 NANDO_BIN = os.environ["E2E_NANDO_BIN"]
@@ -36,6 +40,38 @@ TEXT_LOG = ARTIFACTS / "scenarios.log"
 
 class GateFailure(RuntimeError):
     pass
+
+
+class RPCFailure(GateFailure):
+    def __init__(self, method: str, code: int, message: str):
+        super().__init__(f"RPC {method} failed ({code}): {message}")
+        self.method = method
+        self.code = code
+        self.message = message
+
+
+ACTIVE_PROCESSES: dict[int, tuple[subprocess.Popen, str]] = {}
+ACTIVE_MOUNTS: set[str] = set()
+PROCESS_LOG = ARTIFACTS / "processes.jsonl"
+ACTION_SCENARIOS = {
+    "g1": ["G1-01", "G1-02", "G1-03", "G1-04", "G1-05", "G1-06"],
+    "g2-init": ["G2-00"],
+    "g2-normal": ["G2-01", "G2-04"],
+    "g2-outage": ["G2-02"],
+    "g2-ack-crash": ["G2-05"],
+    "g2-ack-replay": ["G2-06"],
+    "g2-retry": ["G2-03"],
+    "g3-commit": ["G3-01"],
+    "g3-verify": ["G3-02"],
+    "g3-start-uncommitted": ["G3-03"],
+    "g3-crash-fuse": ["G3-04"],
+    "g3-verify-recovery": ["G3-05"],
+    "g4": ["G4-01"],
+}
+SCENARIO_EXPECTATIONS = {
+    "G2-05": "GCS accepted the object but daemon died before receiving the upload response or completing its durable transfer obligation",
+    "G2-06": "daemon replay completed the still-pending obligation without changing object generation or creating another name",
+}
 
 
 class UnixHTTPConnection(http.client.HTTPConnection):
@@ -62,17 +98,27 @@ def rpc_call(method: str, params: dict | None = None, timeout: float = 20.0):
         raise GateFailure(f"RPC HTTP status {response.status}: {payload}")
     if payload.get("error"):
         error = payload["error"]
-        raise GateFailure(f"RPC {method} failed ({error.get('code')}): {error.get('message')}")
+        raise RPCFailure(method, int(error.get("code", 0)), str(error.get("message", "")))
     return payload.get("result")
 
 
 def nando(*args: str, timeout: float = 20.0, check: bool = True) -> subprocess.CompletedProcess:
-    result = subprocess.run(
-        [NANDO_BIN, "--repository", REPOSITORY, "--daemon-endpoint", ENDPOINT, *args],
-        capture_output=True,
-        timeout=timeout,
-        check=False,
+    argv = [NANDO_BIN, "--repository", REPOSITORY, "--daemon-endpoint", ENDPOINT, *args]
+    process = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
     )
+    register_process(process, f"nando {' '.join(args)}")
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        terminate_process_group(process, f"nando {' '.join(args)}")
+        raise GateFailure(f"nando {' '.join(args)} exceeded {timeout}s")
+    finally:
+        ACTIVE_PROCESSES.pop(process.pid, None)
+    result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     if check and result.returncode != 0:
         raise GateFailure(
             f"nando {' '.join(args)} exited {result.returncode}: "
@@ -114,6 +160,138 @@ def wait_until(description: str, predicate, timeout: float = 15.0) -> None:
     raise GateFailure(f"timed out waiting for {description}; last error: {last_error}")
 
 
+def register_process(process: subprocess.Popen, description: str) -> None:
+    ACTIVE_PROCESSES[process.pid] = (process, description)
+    item = {"pid": process.pid, "pgid": process.pid, "description": description}
+    with PROCESS_LOG.open("a", encoding="utf-8") as output:
+        output.write(json.dumps(item, sort_keys=True) + "\n")
+        output.flush()
+        os.fsync(output.fileno())
+
+
+def process_state(pid: int) -> str | None:
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text()
+        return raw[raw.rfind(")") + 2 :].split()[0]
+    except (FileNotFoundError, ProcessLookupError, IndexError):
+        return None
+
+
+def process_group_members(pgid: int) -> list[tuple[int, str, str]]:
+    members = []
+    for item in Path("/proc").iterdir():
+        if not item.name.isdigit():
+            continue
+        try:
+            raw = (item / "stat").read_text()
+            fields = raw[raw.rfind(")") + 2 :].split()
+            if int(fields[2]) == pgid:
+                members.append((int(item.name), fields[0], (item / "comm").read_text().strip()))
+        except (OSError, IndexError, ValueError):
+            continue
+    return members
+
+
+def terminate_process_group(process: subprocess.Popen, description: str, *, force: bool = False) -> None:
+    pgid = process.pid
+    try:
+        os.killpg(pgid, signal.SIGKILL if force else signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + (2.0 if force else 5.0)
+    while time.monotonic() < deadline:
+        members = [(pid, state, name) for pid, state, name in process_group_members(pgid) if state != "Z"]
+        if not members:
+            break
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+    members = [(pid, state, name) for pid, state, name in process_group_members(pgid) if state != "Z"]
+    d_state = [(pid, name) for pid, state, name in members if state == "D"]
+    if d_state:
+        raise GateFailure(f"{description} remains in uninterruptible D state: {d_state}")
+    if members and not force:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and any(
+            state != "Z" for _, state, _ in process_group_members(pgid)
+        ):
+            time.sleep(0.05)
+        members = [(pid, state, name) for pid, state, name in process_group_members(pgid) if state != "Z"]
+    try:
+        process.wait(timeout=0.2)
+    except subprocess.TimeoutExpired:
+        pass
+    if members:
+        raise GateFailure(f"{description} process group did not exit: {members}")
+    ACTIVE_PROCESSES.pop(process.pid, None)
+
+
+def unmount_path(mountpoint: str) -> None:
+    if not mount_present(mountpoint):
+        ACTIVE_MOUNTS.discard(mountpoint)
+        return
+    errors = []
+    for args, timeout_s in ((["fusermount3", "-u", mountpoint], 8), (["fusermount3", "-uz", mountpoint], 5)):
+        try:
+            result = subprocess.run(args, timeout=timeout_s, capture_output=True, check=False)
+            if result.returncode != 0:
+                errors.append(result.stderr.decode(errors="replace"))
+        except subprocess.TimeoutExpired:
+            errors.append(f"{args[1]} timed out")
+        if not mount_present(mountpoint):
+            ACTIVE_MOUNTS.discard(mountpoint)
+            return
+    raise GateFailure(f"failed to unmount {mountpoint}: {'; '.join(errors)}")
+
+
+def cleanup_active() -> list[str]:
+    failures = []
+    for mountpoint in list(ACTIVE_MOUNTS):
+        try:
+            unmount_path(mountpoint)
+        except BaseException as exc:
+            failures.append(str(exc))
+    for process, description in list(ACTIVE_PROCESSES.values()):
+        try:
+            terminate_process_group(process, description)
+        except BaseException as exc:
+            failures.append(str(exc))
+    for mountpoint in list(ACTIVE_MOUNTS):
+        try:
+            unmount_path(mountpoint)
+        except BaseException as exc:
+            failures.append(str(exc))
+    return failures
+
+
+def _terminate_on_signal(signum, _frame):
+    failures = cleanup_active()
+    name = signal.Signals(signum).name
+    raise GateFailure(f"received {name}; cleanup: {failures or 'complete'}")
+
+
+def action_records_since(offset: int) -> list[dict]:
+    if not SCENARIO_LOG.exists():
+        return []
+    with SCENARIO_LOG.open("rb") as source:
+        source.seek(offset)
+        return [json.loads(line) for line in source if line.strip()]
+
+
+def action_failures(action: str, detail: str) -> None:
+    for scenario_id in ACTION_SCENARIOS.get(action, []):
+        expected = SCENARIO_EXPECTATIONS.get(scenario_id, "scenario assertions complete without error")
+        record(scenario_id, "FAIL", expected, detail)
+
+
+def detach_intentionally_live_crash_processes() -> None:
+    for pid in (int((ARTIFACTS / "g3-fuse-pid").read_text()), int((ARTIFACTS / "g3-holder-pid").read_text())):
+        ACTIVE_PROCESSES.pop(pid, None)
+    ACTIVE_MOUNTS.discard(str(ARTIFACTS / "g3-crash-mount"))
+
+
 def record(scenario_id: str, status: str, expected: str, observed: str) -> None:
     item = {
         "scenario": scenario_id,
@@ -132,21 +310,23 @@ def record(scenario_id: str, status: str, expected: str, observed: str) -> None:
     print(f"{status} {scenario_id}: {observed}", flush=True)
 
 
-def scenario(scenario_id: str, expected: str, fn) -> None:
+def scenario(scenario_id: str, expected: str, fn, *, timeout: float = 45.0) -> None:
     started = time.monotonic()
     old_handler = signal.signal(signal.SIGALRM, _scenario_timeout)
-    signal.setitimer(signal.ITIMER_REAL, 45.0)
+    signal.setitimer(signal.ITIMER_REAL, timeout)
     try:
         observed = fn()
-        record(scenario_id, "PASS", expected, str(observed))
     except BaseException as exc:
         record(scenario_id, "FAIL", expected, f"{type(exc).__name__}: {exc}")
         raise
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, old_handler)
-        if time.monotonic() - started > 45.0:
-            raise GateFailure(f"scenario {scenario_id} exceeded its 45s deadline")
+        if time.monotonic() - started > timeout:
+            failure = f"scenario {scenario_id} exceeded its {timeout:g}s deadline"
+            record(scenario_id, "FAIL", expected, failure)
+            raise GateFailure(failure)
+    record(scenario_id, "PASS", expected, str(observed))
 
 
 def _scenario_timeout(_signum, _frame):
@@ -171,48 +351,64 @@ def fuse_mount(label: str):
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
+    register_process(process, f"FUSE mount {mountpoint}")
+    ACTIVE_MOUNTS.add(mountpoint)
     try:
         wait_until(
             f"real FUSE mount {mountpoint}",
-            lambda: mount_present(mountpoint),
+            lambda: _mount_or_process_failed(process, mountpoint),
             timeout=15.0,
         )
         # Reading through the mount proves this is an active kernel FUSE mount.
         os.listdir(mountpoint)
         yield mountpoint
     finally:
+        cleanup_errors = []
+        try:
+            unmount_path(mountpoint)
+        except BaseException as exc:
+            cleanup_errors.append(str(exc))
+        try:
+            terminate_process_group(process, f"FUSE mount {mountpoint}")
+        except BaseException as exc:
+            cleanup_errors.append(str(exc))
         if mount_present(mountpoint):
             try:
-                subprocess.run(["fusermount3", "-u", mountpoint], timeout=8, check=True, capture_output=True)
-            except Exception:
-                subprocess.run(
-                    ["fusermount3", "-uz", mountpoint], timeout=5, check=False, capture_output=True
-                )
-        still_mounted = mount_present(mountpoint)
-        if still_mounted:
-            process.kill()
-        if process.poll() is None:
-            process.send_signal(signal.SIGTERM)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=2)
+                unmount_path(mountpoint)
+            except BaseException as exc:
+                cleanup_errors.append(str(exc))
         log_file.close()
-        if still_mounted:
-            raise GateFailure(f"FUSE mount remained after unmount attempt: {mountpoint}")
         if mount_present(mountpoint):
-            raise GateFailure(f"FUSE mount reappeared during cleanup: {mountpoint}")
-        os.rmdir(mountpoint)
+            cleanup_errors.append(f"FUSE mount remained after cleanup: {mountpoint}")
+        else:
+            try:
+                os.rmdir(mountpoint)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                cleanup_errors.append(f"could not remove mountpoint directory {mountpoint}: {exc}")
+        if cleanup_errors:
+            raise GateFailure("; ".join(cleanup_errors))
+
+
+def _mount_or_process_failed(process: subprocess.Popen, mountpoint: str) -> bool:
+    if process.poll() is not None and not mount_present(mountpoint):
+        raise GateFailure(f"FUSE server exited {process.returncode} before mounting {mountpoint}")
+    return mount_present(mountpoint)
 
 
 def committed_file(mountpoint: str, name: str, data: bytes) -> None:
     path = os.path.join(mountpoint, name)
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o644)
     try:
-        written = os.write(fd, data)
-        if written != len(data):
-            raise GateFailure(f"short FUSE write: {written}/{len(data)}")
+        view = memoryview(data)
+        total = 0
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise GateFailure(f"short FUSE write after {total}/{len(data)} bytes")
+            total += written
+            view = view[written:]
         os.fsync(fd)
     finally:
         os.close(fd)
@@ -393,6 +589,12 @@ def gcs_object(content_id: str):
         raise
 
 
+def proxy_control(path: str, *, method: str = "GET") -> dict:
+    request = urllib.request.Request(f"{GCS_PROXY}/__e2e/{path}", method=method)
+    with urllib.request.urlopen(request, timeout=3) as response:
+        return json.loads(response.read())
+
+
 def assert_gcs_object(content_id: str, expected: bytes) -> str:
     metadata = gcs_object(content_id)
     if metadata is None:
@@ -438,6 +640,10 @@ def g2_init() -> None:
     record("G2-00", "PASS", "fake-gcs bucket initialized through its JSON API", f"bucket {BUCKET} is available")
 
 
+def g2_proxy_ready() -> None:
+    wait_until("host GCS fault proxy", lambda: proxy_control("status").get("armed") is False, timeout=15)
+
+
 def g2_normal() -> None:
     data = b"replication-success-without-gcs-credentials"
     with fuse_mount("g2-normal") as mountpoint:
@@ -479,13 +685,128 @@ def g2_outage_commit() -> None:
             if cat_bytes("/replicated-outage") != data:
                 raise GateFailure("local content did not commit while GCS was stopped")
             try:
-                rpc_call("repository.maintenanceOnce", timeout=15)
-            except Exception as exc:
+                request_json(f"{FAKE_GCS}/storage/v1/b/{BUCKET}", timeout=1)
+            except urllib.error.URLError as exc:
+                reason = exc.reason
+                if isinstance(reason, (TimeoutError, socket.timeout)):
+                    pass
+                elif not isinstance(reason, OSError) or reason.errno not in (
+                    errno.ECONNREFUSED,
+                    errno.ECONNRESET,
+                    errno.ETIMEDOUT,
+                ):
+                    raise GateFailure(f"direct fake-GCS probe failed for an unexpected reason: {reason!r}") from exc
+            else:
+                raise GateFailure("direct fake-GCS API remained reachable while outage was expected")
+            try:
+                rpc_call("repository.maintenanceOnce", timeout=12)
+            except RPCFailure as exc:
+                expected_causes = (
+                    "fake-gcs upstream unavailable",
+                    "connection refused",
+                    "connection reset",
+                    "dial tcp",
+                    "i/o timeout",
+                    "deadline exceeded",
+                    "timed out",
+                )
+                if exc.code != -32000 or not any(term in exc.message.lower() for term in expected_causes):
+                    raise GateFailure(f"maintenance failed for a non-outage reason: {exc}") from exc
                 (ARTIFACTS / "g2-outage-content-id").write_text(content_id + "\n", encoding="ascii")
-                return f"Fsync succeeded; maintenance returned bounded outage error; local bytes remain visible ({exc})"
+                return f"direct GCS probe was connection-refused and maintenance returned transport outage RPC: {exc}"
+            except TimeoutError as exc:
+                (ARTIFACTS / "g2-outage-content-id").write_text(content_id + "\n", encoding="ascii")
+                return f"direct fake-GCS probe confirmed connection refusal; maintenance RPC hit its 12s deadline while delivery was unavailable ({exc})"
+            except OSError as exc:
+                raise GateFailure(f"maintenance RPC transport failed instead of returning the expected repository error: {exc}") from exc
             raise GateFailure("maintenance unexpectedly succeeded while fake GCS was stopped")
 
         scenario("G2-02", "Fsync remains local during GCS outage and failed delivery leaves durable work", commit_while_stopped)
+
+
+def g2_ack_crash() -> None:
+    data = random.Random(0xACCA11).randbytes(512 * 1024)
+
+    def commit_then_crash_before_ack():
+        proxy_control("arm", method="POST")
+        payload_path = ARTIFACTS / "ack-boundary.bin"
+        payload_path.write_bytes(data)
+        nando("put", str(payload_path), "/ack-boundary")
+        content_id = stat_hash("/ack-boundary")
+        if cat_bytes("/ack-boundary") != data:
+            raise GateFailure("local content was not committed before remote delivery")
+        if gcs_object(content_id) is not None:
+            raise GateFailure("fault-injection object unexpectedly exists before maintenance")
+
+        rpc_errors: list[BaseException] = []
+
+        def maintenance():
+            try:
+                rpc_call("repository.maintenanceOnce", timeout=50)
+            except BaseException as exc:
+                rpc_errors.append(exc)
+
+        worker = threading.Thread(target=maintenance, name="gcs-ack-maintenance", daemon=True)
+        worker.start()
+        wait_until("upstream object committed behind held upload response", lambda: gcs_object(content_id) is not None, timeout=30)
+        proxy = wait_proxy_committed()
+        if proxy["held_commits"] != 1:
+            raise GateFailure(f"proxy did not hold exactly one committed upload response: {proxy}")
+        object_metadata = gcs_object(content_id)
+        generation = int(object_metadata["generation"])
+        assert_gcs_object(content_id, data)
+
+        daemon_pid = int(os.environ["E2E_DAEMON_PID"])
+        try:
+            os.kill(daemon_pid, signal.SIGKILL)
+        except ProcessLookupError as exc:
+            raise GateFailure(f"daemon exited before the held GCS response boundary: pid={daemon_pid}") from exc
+        wait_until("daemon SIGKILL before delivery acknowledgement", lambda: process_state(daemon_pid) in (None, "Z"), timeout=5)
+        proxy_control("release", method="POST")
+        worker.join(timeout=8)
+        if worker.is_alive():
+            raise GateFailure("maintenance RPC thread remained blocked after daemon crash")
+        if not rpc_errors:
+            raise GateFailure("maintenance RPC succeeded even though daemon was killed before the upload response")
+        (ARTIFACTS / "g2-ack-boundary.json").write_text(
+            json.dumps({"content_id": content_id, "generation": generation, "sha256": hashlib.sha256(data).hexdigest()}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return f"host-native put committed locally; fake GCS exposed generation={generation}; upload response was held; daemon SIGKILL preceded transfer acknowledgement ({rpc_errors[0]})"
+
+    scenario("G2-05", SCENARIO_EXPECTATIONS["G2-05"], commit_then_crash_before_ack)
+
+
+def wait_proxy_committed() -> dict:
+    latest: dict = {}
+
+    def committed() -> bool:
+        nonlocal latest
+        latest = proxy_control("status")
+        return latest.get("held_commits", 0) == 1
+
+    wait_until("proxy confirmation of held post-commit response", committed, timeout=30)
+    return latest
+
+
+def g2_ack_replay() -> None:
+    expected_state = json.loads((ARTIFACTS / "g2-ack-boundary.json").read_text(encoding="utf-8"))
+    content_id = expected_state["content_id"]
+    data = random.Random(0xACCA11).randbytes(512 * 1024)
+
+    def retry_ambiguous_delivery():
+        before = proxy_control("status")["upload_puts"]
+        rpc_call("repository.maintenanceOnce", timeout=50)
+        after = proxy_control("status")
+        if after["upload_puts"] <= before or after["replay_preconditions"] != 1:
+            raise GateFailure(f"restart did not replay the pending object with a generation-match-zero rejection: before={before}, after={after}")
+        metadata = gcs_object(content_id)
+        if metadata is None or int(metadata["generation"]) != expected_state["generation"]:
+            raise GateFailure(f"idempotent replay changed or lost the committed generation: {metadata}")
+        evidence = assert_gcs_object(content_id, data)
+        return f"pending transfer was retried after restart; generation stayed {expected_state['generation']}; {evidence}"
+
+    scenario("G2-06", SCENARIO_EXPECTATIONS["G2-06"], retry_ambiguous_delivery, timeout=60)
 
 
 def g2_retry() -> None:
@@ -565,6 +886,8 @@ def g3_start_uncommitted() -> None:
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
+    register_process(fuse, f"crash-test FUSE mount {mountpoint}")
+    ACTIVE_MOUNTS.add(mountpoint)
     holder = None
     try:
         wait_until("crash-test FUSE mount", lambda: mount_present(mountpoint), timeout=15)
@@ -576,6 +899,7 @@ def g3_start_uncommitted() -> None:
             stderr=(ARTIFACTS / "g3-holder.log").open("ab", buffering=0),
             start_new_session=True,
         )
+        register_process(holder, "uncommitted FUSE holder")
         wait_until("uncommitted FUSE writer open", ready_file.exists, timeout=15)
         (ARTIFACTS / "g3-holder-pid").write_text(f"{holder.pid}\n", encoding="ascii")
         record(
@@ -584,29 +908,38 @@ def g3_start_uncommitted() -> None:
             "dirty unfsynced staging remains open while FUSE and daemon are crashed",
             f"FUSE pid={fuse.pid}; open writer pid={holder.pid}; no Fsync issued",
         )
+        detach_intentionally_live_crash_processes()
     except BaseException:
         if holder is not None:
-            holder.kill()
-        fuse.kill()
-        if mount_present(mountpoint):
-            subprocess.run(["fusermount3", "-uz", mountpoint], timeout=8, check=False, capture_output=True)
+            try:
+                terminate_process_group(holder, "uncommitted FUSE holder", force=True)
+            except BaseException as exc:
+                print(f"cleanup FAIL holder: {exc}", file=sys.stderr, flush=True)
+        try:
+            unmount_path(mountpoint)
+        except BaseException as exc:
+            print(f"cleanup FAIL mount: {exc}", file=sys.stderr, flush=True)
+        try:
+            terminate_process_group(fuse, f"crash-test FUSE mount {mountpoint}", force=True)
+        except BaseException as exc:
+            print(f"cleanup FAIL FUSE: {exc}", file=sys.stderr, flush=True)
         raise
     finally:
         log_file.close()
 
 
 def _process_state(pid: int) -> str | None:
-    try:
-        return Path(f"/proc/{pid}/stat").read_text().split()[2]
-    except (FileNotFoundError, ProcessLookupError):
-        return None
+    return process_state(pid)
 
 
 def g3_crash_fuse() -> None:
     mountpoint = str(ARTIFACTS / "g3-crash-mount")
     fuse_pid = int((ARTIFACTS / "g3-fuse-pid").read_text().strip())
     holder_pid = int((ARTIFACTS / "g3-holder-pid").read_text().strip())
-    os.kill(fuse_pid, signal.SIGKILL)
+    try:
+        os.killpg(fuse_pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
     def fuse_stopped():
         state = _process_state(fuse_pid)
         if state == "D":
@@ -616,13 +949,12 @@ def g3_crash_fuse() -> None:
     state = _process_state(fuse_pid)
     if state == "D":
         raise GateFailure(f"FUSE server entered uninterruptible D state, pid={fuse_pid}")
-    if mount_present(mountpoint):
-        unmount = subprocess.run(["fusermount3", "-uz", mountpoint], timeout=8, capture_output=True, check=False)
-        if unmount.returncode != 0 and mount_present(mountpoint):
-            raise GateFailure(f"could not detach crashed FUSE mount: {unmount.stderr.decode(errors='replace')}")
-    if mount_present(mountpoint):
-        raise GateFailure("crashed FUSE mount remains attached")
-    os.kill(holder_pid, signal.SIGTERM)
+    ACTIVE_PROCESSES.pop(fuse_pid, None)
+    unmount_path(mountpoint)
+    try:
+        os.killpg(holder_pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
     def holder_stopped():
         state = _process_state(holder_pid)
         if state == "D":
@@ -631,6 +963,7 @@ def g3_crash_fuse() -> None:
     wait_until("uncommitted holder exit", holder_stopped, timeout=5)
     if _process_state(holder_pid) == "D":
         raise GateFailure(f"open writer entered uninterruptible D state, pid={holder_pid}")
+    ACTIVE_PROCESSES.pop(holder_pid, None)
     record(
         "G3-04",
         "PASS",
@@ -646,10 +979,31 @@ def g3_verify_recovery() -> None:
         data = cat_bytes("/crash-persist")
         if data != b"fsync-success-survives-daemon-crash":
             raise GateFailure(f"committed file content after restart is {data!r}")
-        rows = nando("recovery", "list").stdout.decode()
-        if "/crash-uncommitted" not in rows or f"size={len(b'must-be-recovered-after-crash')}" not in rows:
-            raise GateFailure(f"uncommitted FUSE stage absent from Recovery after restart: {rows}")
-        return "fsync-success bytes persist; uncommitted open-writer Recovery record exposes its path and staged size"
+        rows = nando("recovery", "list").stdout.decode().splitlines()
+        matches = [row.split("\t") for row in rows if "/crash-uncommitted" in row]
+        expected = b"must-be-recovered-after-crash"
+        if len(matches) != 1 or len(matches[0]) < 3:
+            raise GateFailure(f"expected one Recovery record for /crash-uncommitted, got {rows}")
+        session_id = matches[0][0]
+        if f"size={len(expected)}" not in matches[0][2]:
+            raise GateFailure(f"Recovery staged size did not match expected payload length: {matches[0]}")
+        manifest_path = Path(REPOSITORY) / "temp" / "rpc-sessions" / f"{session_id}.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("session_id") != session_id or manifest.get("repository_path") != "/crash-uncommitted":
+            raise GateFailure(f"Recovery manifest identity/path mismatch: {manifest}")
+        if manifest.get("committed") is not False:
+            raise GateFailure(f"Recovery manifest unexpectedly marks the interrupted write committed: {manifest}")
+        stage_path = Path(manifest["staging_path"]).resolve()
+        stage_root = (Path(REPOSITORY) / "temp" / "rpc-sessions").resolve()
+        if stage_root not in stage_path.parents:
+            raise GateFailure(f"Recovery manifest points outside the repository staging directory: {stage_path}")
+        recovered = stage_path.read_bytes()
+        if recovered != expected:
+            raise GateFailure(
+                f"durable Recovery stage content mismatch: sha256={hashlib.sha256(recovered).hexdigest()}, "
+                f"expected={hashlib.sha256(expected).hexdigest()}, length={len(recovered)}"
+            )
+        return f"Recovery session {session_id} manifest and staged bytes verified exactly; SHA-256={hashlib.sha256(recovered).hexdigest()}"
 
     scenario("G3-05", "daemon crash recovery preserves dirty session and successful fsync commit", verify_recovery_and_committed_bytes)
 
@@ -658,19 +1012,61 @@ def g4_stress() -> None:
     with fuse_mount("g4-stress") as mountpoint:
         def parallel_fsyncs():
             workers = 8
+            path = os.path.join(mountpoint, "stress-shared.bin")
+            generator = random.Random(0x4E414E444F)
+            initial = generator.randbytes(2 * 1024 * 1024)
+            expected = bytearray()
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o644)
+            try:
+                for offset in range(0, len(initial), 64 * 1024):
+                    chunk = initial[offset : offset + 64 * 1024]
+                    if os.write(fd, chunk) != len(chunk):
+                        raise GateFailure("short write while creating 2 MiB binary stress input")
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            observed = cat_bytes("/stress-shared.bin")
+            if hashlib.sha256(observed).digest() != hashlib.sha256(initial).digest():
+                raise GateFailure("initial large binary content SHA-256 mismatch")
+
+            truncated_size = 1024 * 1024 + 317
+            fd = os.open(path, os.O_RDWR)
+            try:
+                os.ftruncate(fd, truncated_size)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            expected = bytearray(initial[:truncated_size])
+            truncated = cat_bytes("/stress-shared.bin")
+            if len(truncated) != truncated_size or hashlib.sha256(truncated).digest() != hashlib.sha256(expected).digest():
+                raise GateFailure("truncate did not persist the exact expected binary prefix")
+
+            # Each worker owns distinct 8 KiB regions but uses random offsets
+            # inside them, so the final byte array has an independent oracle.
+            regions = generator.sample(range(truncated_size // 8192), workers * 2)
+            patches = []
+            for index, region in enumerate(regions):
+                region_start = region * 8192
+                max_start = min(region_start + 4096, truncated_size - 2048)
+                offset = generator.randint(region_start, max_start)
+                patch_bytes = generator.randbytes(2048)
+                patches.append((index, offset, patch_bytes))
+                expected[offset : offset + len(patch_bytes)] = patch_bytes
+
             barrier = threading.Barrier(workers)
             errors: list[BaseException] = []
+            descriptors = [os.open(path, os.O_RDWR) for _ in range(workers)]
 
             def worker(index: int):
+                fd = descriptors[index]
                 try:
                     barrier.wait(timeout=8)
-                    data = f"stress-worker-{index}".encode()
-                    fd = os.open(os.path.join(mountpoint, f"stress-{index}"), os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o644)
-                    try:
-                        os.write(fd, data)
-                        os.fsync(fd)
-                    finally:
-                        os.close(fd)
+                    for patch_index in (index * 2, index * 2 + 1):
+                        _, offset, patch_bytes = patches[patch_index]
+                        written = os.pwrite(fd, patch_bytes, offset)
+                        if written != len(patch_bytes):
+                            raise GateFailure(f"short random-offset write: {written}/{len(patch_bytes)}")
+                    os.fsync(fd)
                 except BaseException as exc:
                     errors.append(exc)
 
@@ -679,24 +1075,36 @@ def g4_stress() -> None:
                 thread.start()
             for thread in threads:
                 thread.join(timeout=30)
+            for fd in descriptors:
+                os.close(fd)
             if any(thread.is_alive() for thread in threads):
                 raise GateFailure("stress writer exceeded 30s")
             if errors:
                 raise GateFailure(f"stress writer errors: {errors}")
-            for i in range(workers):
-                expected = f"stress-worker-{i}".encode()
-                if cat_bytes(f"/stress-{i}") != expected:
-                    raise GateFailure(f"stress object {i} has unexpected bytes")
-            return f"{workers} parallel files committed and were verified through daemon reads"
+            actual = cat_bytes("/stress-shared.bin")
+            expected_hash = hashlib.sha256(expected).hexdigest()
+            actual_hash = hashlib.sha256(actual).hexdigest()
+            if len(actual) != len(expected) or actual_hash != expected_hash:
+                raise GateFailure(
+                    f"same-file concurrent result mismatch: length={len(actual)}/{len(expected)} "
+                    f"sha256={actual_hash}/{expected_hash}"
+                )
+            return (
+                f"2 MiB binary write, truncate to {truncated_size}, and {workers} concurrent handles "
+                f"performed randomized-offset writes; final SHA-256={actual_hash}"
+            )
 
         scenario("G4-01", "optional bounded parallel create/write/fsync stress preserves every result", parallel_fsyncs)
 
 
 def main() -> int:
     if len(sys.argv) != 2:
-        print("usage: runner.py <wait-daemon|health|g1|g2-init|g2-normal|g2-outage|g2-retry|g3-commit|g3-verify|g3-start-uncommitted|g3-crash-fuse|g3-verify-recovery|g4>", file=sys.stderr)
+        print("usage: runner.py <wait-daemon|health|g1|g2-init|g2-proxy-ready|g2-normal|g2-outage|g2-ack-crash|g2-ack-replay|g2-retry|g3-commit|g3-verify|g3-start-uncommitted|g3-crash-fuse|g3-verify-recovery|g4>", file=sys.stderr)
         return 2
     action = sys.argv[1]
+    signal.signal(signal.SIGTERM, _terminate_on_signal)
+    signal.signal(signal.SIGINT, _terminate_on_signal)
+    log_offset = SCENARIO_LOG.stat().st_size if SCENARIO_LOG.exists() else 0
     try:
         if action == "wait-daemon":
             daemon_ready(deadline=30.0)
@@ -710,10 +1118,16 @@ def main() -> int:
             g1()
         elif action == "g2-init":
             g2_init()
+        elif action == "g2-proxy-ready":
+            g2_proxy_ready()
         elif action == "g2-normal":
             g2_normal()
         elif action == "g2-outage":
             g2_outage_commit()
+        elif action == "g2-ack-crash":
+            g2_ack_crash()
+        elif action == "g2-ack-replay":
+            g2_ack_replay()
         elif action == "g2-retry":
             g2_retry()
         elif action == "g3-commit":
@@ -731,7 +1145,32 @@ def main() -> int:
         else:
             raise GateFailure(f"unknown action {action!r}")
     except BaseException as exc:
+        cleanup_errors = cleanup_active()
+        detail = f"action {action} failed: {type(exc).__name__}: {exc}"
+        if cleanup_errors:
+            detail += f"; cleanup failures: {cleanup_errors}"
+        action_failures(action, detail)
         print(f"FAIL {action}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        if cleanup_errors:
+            print(f"CLEANUP FAIL {action}: {cleanup_errors}", file=sys.stderr, flush=True)
+        return 1
+    if action == "g3-start-uncommitted":
+        detach_intentionally_live_crash_processes()
+    else:
+        cleanup_errors = cleanup_active()
+        if cleanup_errors:
+            detail = f"action {action} cleanup failed: {cleanup_errors}"
+            action_failures(action, detail)
+            print(f"CLEANUP FAIL {action}: {cleanup_errors}", file=sys.stderr, flush=True)
+            return 1
+    observed = action_records_since(log_offset)
+    observed_by_id = {item["scenario"]: item["status"] for item in observed}
+    missing_or_failed = [scenario_id for scenario_id in ACTION_SCENARIOS.get(action, []) if observed_by_id.get(scenario_id) != "PASS"]
+    if missing_or_failed:
+        detail = f"action {action} did not produce PASS for required scenarios: {missing_or_failed}"
+        for scenario_id in missing_or_failed:
+            record(scenario_id, "FAIL", SCENARIO_EXPECTATIONS.get(scenario_id, "scenario assertions complete without error"), detail)
+        print(f"FAIL {action}: {detail}", file=sys.stderr, flush=True)
         return 1
     return 0
 

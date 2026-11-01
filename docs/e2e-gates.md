@@ -15,7 +15,7 @@ Run the optional bounded writer stress profile with `e2e/run.sh --stress`.
 
 The host needs Go 1.25.1, Python 3, Docker Compose v2, `golangci-lint`, `fusermount3`, and a readable/writable `/dev/fuse` that permits a real host mount. The validator checkout must be at commit `455ed318b7bc409d3e1da320620ef92d457042b9`; set `DESIGN_IR_REPO` to its path if it is not `../design-ir`.
 
-Every run creates an isolated temporary evidence and repository directory and a unique Compose project. The command starts fake GCS, then G0 runs root and FUSE-module unit and race tests, the repository lint configuration and lint checks for both modules, native binary builds, and the pinned Design IR validator. G1 uses only a Local-mode repository and makes no GCS requests. G2 uses a project-scoped named volume and loopback-only host port to test fake GCS delivery, outage, restart, and retry. Native binaries use the isolated repositories and Unix sockets. Exit cleanup stops native processes, captures Compose status and logs, runs `docker compose down --volumes --remove-orphans`, and retains evidence under the printed `/tmp/go-nando-e2e.*` path. No existing repository state or volume is reused.
+Every run creates an isolated temporary evidence and repository directory and a unique Compose project. The command starts fake GCS, then G0 runs root and FUSE-module unit and race tests, the repository lint configuration and lint checks for both modules, native binary builds, and the pinned Design IR validator. G1 uses only a Local-mode repository and makes no GCS requests. G2 uses a project-scoped named volume and loopback-only host port to test fake GCS delivery, outage, restart, and retry. A host-only HTTP fault proxy holds the successful upload response after fake GCS has durably accepted one object; the gate kills the daemon before the response can acknowledge transfer completion, restarts it, and verifies an actual replay keeps the same generation and single object name. The proxy is test infrastructure only; it adds no production hook. Native binaries use the isolated repositories and Unix sockets. Exit cleanup discovers only processes whose executable arguments refer to that run's artifact directory, terminates their process groups or recorded proxy PID with deadlines, unmounts only mounts under that directory, reports D-state processes, captures Compose status and logs, and runs `docker compose down --volumes --remove-orphans`. Any remaining process, mount, or cleanup failure makes the command fail. Evidence remains under the printed `/tmp/go-nando-e2e.*` path. No existing repository state or volume is reused.
 
 Missing FUSE prerequisites produce G1-G3 `SKIP` and a nonzero overall result. A failed or unavailable real mount never becomes PASS. Each scenario has a 45-second deadline; readiness and eventual conditions poll against monotonic deadlines, and each gate has an outer timeout. Logs include `gates.tsv`, per-gate command output, `scenarios.jsonl`, `scenarios.log`, native daemon/FUSE logs, and Compose logs. If a kernel operation becomes uninterruptible, the gate fails, attempts unmount and process cleanup, and leaves the evidence directory for diagnosis.
 
@@ -62,7 +62,7 @@ Missing FUSE prerequisites produce G1-G3 `SKIP` and a nonzero overall result. A 
 
 |G2 `G2-02`
 |Emulator outage
-|With fake GCS stopped, local fsync/read still succeed and bounded maintenance reports remote unavailability.
+|A direct fake-GCS API probe confirms connection refusal; local fsync/read still succeed; maintenance returns a repository transport error with an accepted upstream cause or hits its explicit 12-second RPC deadline.
 
 |G2 `G2-03`
 |Retry after restart
@@ -71,6 +71,14 @@ Missing FUSE prerequisites produce G1-G3 `SKIP` and a nonzero overall result. A 
 |G2 `G2-04`
 |Duplicate content idempotency
 |A second Entry with identical bytes reconciles the same object ID; listing has exactly one object name.
+
+|G2 `G2-05`
+|Lost acknowledgement after remote commit
+|The host proxy observes fake GCS accept and persist the upload, withholds the success response, and the gate SIGKILLs the daemon before transfer completion can be acknowledged.
+
+|G2 `G2-06`
+|Replay after ambiguous commit
+|After restart the pending transfer causes another upload PUT; content, generation, and the single external object name remain unchanged.
 
 |G3 `G3-01` / `G3-02`
 |Fsync and daemon restart
@@ -82,11 +90,11 @@ Missing FUSE prerequisites produce G1-G3 `SKIP` and a nonzero overall result. A 
 
 |G3 `G3-05`
 |Recovery
-|After daemon restart, Recovery reports the uncommitted path and staged size while fsync-committed bytes remain visible.
+|After daemon restart, Recovery reports the expected path and size; the durable session manifest's scoped staging path is read and byte-compared to the original payload, including SHA-256.
 
 |G4 `G4-01` (optional)
 |Bounded stress
-|Eight parallel host FUSE commits are read back with expected bytes.
+|A 2 MiB binary file is fsynced, truncated, then modified through eight simultaneous handles at seeded random offsets; final length and SHA-256 must match an independent byte-array oracle.
 |===
 
 == Emulator scope

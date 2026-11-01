@@ -23,6 +23,7 @@ export E2E_PROJECT="$PROJECT"
 export E2E_FAKE_GCS=http://127.0.0.1:4443
 overall=0
 compose_started=0
+cleanup_complete=0
 
 mark() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" | tee -a "$GATES"; }
 run_gate() {
@@ -39,6 +40,17 @@ run_gate() {
 cleanup() {
   local rc=$?
   set +e
+  if ((cleanup_complete == 0)); then
+    python3 "$ROOT/e2e/cleanup.py" "$ARTIFACTS" "$ROOT" >"$ARTIFACTS/host-cleanup.log" 2>&1
+    if (($? != 0)); then
+      cat "$ARTIFACTS/host-cleanup.log" >&2
+      mark CLEANUP FAIL "host process/mount cleanup failed; see host-cleanup.log"
+      overall=1
+    else
+      cat "$ARTIFACTS/host-cleanup.log"
+    fi
+    cleanup_complete=1
+  fi
   if ((compose_started)); then
     timeout -k 5s 25s "${COMPOSE[@]}" ps --all >"$ARTIFACTS/compose-ps.log" 2>&1
     timeout -k 5s 25s "${COMPOSE[@]}" logs --no-color >"$ARTIFACTS/compose.log" 2>&1
@@ -81,7 +93,7 @@ if ! run_gate G1 "host-native real FUSE CRUD/fsync/rename/unlink/writers/CAS" 48
   set -Eeuo pipefail
   "$1" --repository "$2" init --delivery-mode local
   export E2E_REPOSITORY="$2" E2E_SOCKET="$3"
-  "$1" --repository "$2" daemon --listen "unix://$3" >"$4/daemon-local.log" 2>&1 & daemon=$!
+  setsid "$1" --repository "$2" daemon --listen "unix://$3" >"$4/daemon-local.log" 2>&1 & daemon=$!
   trap "kill -TERM \$daemon 2>/dev/null || true; wait \$daemon 2>/dev/null || true" EXIT
   python3 "$5/e2e/runner.py" wait-daemon
   python3 "$5/e2e/runner.py" health
@@ -93,11 +105,14 @@ if ! run_gate G2 "host-native real FUSE with fake GCS outage/retry/idempotency" 
   set -Eeuo pipefail
   compose=(docker compose --project-directory "$1" -f "$1/e2e/compose.yaml" -p "$2")
   export E2E_REPOSITORY="$3" E2E_SOCKET="$4" E2E_FAKE_GCS=http://127.0.0.1:4443
-  export STORAGE_EMULATOR_HOST=http://127.0.0.1:4443 GOOGLE_CLOUD_PROJECT=nando-e2e
+  export E2E_GCS_PROXY=http://127.0.0.1:4444 GOOGLE_CLOUD_PROJECT=nando-e2e
   "$5" --repository "$3" init --delivery-mode gcs --gcs-bucket nando-e2e
   python3 "$6/e2e/runner.py" g2-init
-  "$5" --repository "$3" daemon --listen "unix://$4" >"$7/daemon-gcs.log" 2>&1 & daemon=$!
-  trap "kill -TERM \$daemon 2>/dev/null || true; wait \$daemon 2>/dev/null || true" EXIT
+  daemon="" proxy=""
+  export STORAGE_EMULATOR_HOST=http://127.0.0.1:4443
+  trap "if [[ -n \$daemon ]]; then kill -TERM \$daemon 2>/dev/null || true; wait \$daemon 2>/dev/null || true; fi; if [[ -n \$proxy ]]; then kill -TERM \$proxy 2>/dev/null || true; wait \$proxy 2>/dev/null || true; fi" EXIT
+  setsid "$5" --repository "$3" daemon --listen "unix://$4" >"$7/daemon-gcs.log" 2>&1 & daemon=$!
+  export E2E_DAEMON_PID=$daemon
   python3 "$6/e2e/runner.py" wait-daemon
   python3 "$6/e2e/runner.py" g2-normal
   "${compose[@]}" stop --timeout 3 fake-gcs
@@ -105,6 +120,28 @@ if ! run_gate G2 "host-native real FUSE with fake GCS outage/retry/idempotency" 
   "${compose[@]}" start fake-gcs
   python3 "$6/e2e/runner.py" g2-retry
   kill -TERM "$daemon"; wait "$daemon" || true
+  rm -f "$4"
+  ack_repository="$7/state/gcs-ack/repository"
+  ack_socket="$7/run/gcs-ack.sock"
+  mkdir -p "$(dirname "$ack_repository")"
+  "$5" --repository "$ack_repository" init --delivery-mode gcs --gcs-bucket nando-e2e
+  export E2E_REPOSITORY="$ack_repository" E2E_SOCKET="$ack_socket"
+  setsid python3 "$6/e2e/gcs_proxy.py" >"$7/gcs-proxy.log" 2>&1 & proxy=$!
+  printf "%s\tgcs-proxy\n" "$proxy" >>"$7/host-pids.tsv"
+  python3 "$6/e2e/runner.py" g2-proxy-ready
+  export STORAGE_EMULATOR_HOST=http://127.0.0.1:4444
+  setsid "$5" --repository "$ack_repository" daemon --listen "unix://$ack_socket" >>"$7/daemon-gcs.log" 2>&1 & daemon=$!
+  export E2E_DAEMON_PID=$daemon
+  python3 "$6/e2e/runner.py" wait-daemon
+  python3 "$6/e2e/runner.py" g2-ack-crash
+  wait "$daemon" || true
+  rm -f "$ack_socket"
+  setsid "$5" --repository "$ack_repository" daemon --listen "unix://$ack_socket" >>"$7/daemon-gcs.log" 2>&1 & daemon=$!
+  export E2E_DAEMON_PID=$daemon
+  python3 "$6/e2e/runner.py" wait-daemon
+  python3 "$6/e2e/runner.py" g2-ack-replay
+  kill -TERM "$daemon"; wait "$daemon" || true
+  kill -TERM "$proxy"; wait "$proxy" || true
 ' _ "$ROOT" "$PROJECT" "$ARTIFACTS/state/gcs/repository" "$ARTIFACTS/run/gcs.sock" "$E2E_NANDO_BIN" "$ROOT" "$ARTIFACTS"; then exit 1; fi
 
 export E2E_REPOSITORY="$ARTIFACTS/state/local/repository" E2E_SOCKET="$ARTIFACTS/run/nando.sock"
@@ -112,21 +149,21 @@ if ! run_gate G3 "native daemon/FUSE crash, restart and recovery" 480 bash -c '
   set -Eeuo pipefail
   rm -rf "$2"
   "$1" --repository "$2" init --delivery-mode local
-  "$1" --repository "$2" daemon --listen "unix://$3" >"$4/daemon-g3.log" 2>&1 & daemon=$!
+  setsid "$1" --repository "$2" daemon --listen "unix://$3" >"$4/daemon-g3.log" 2>&1 & daemon=$!
   trap "kill -TERM \$daemon 2>/dev/null || true; wait \$daemon 2>/dev/null || true" EXIT
   export E2E_REPOSITORY="$2" E2E_SOCKET="$3"
   python3 "$5/e2e/runner.py" wait-daemon
   python3 "$5/e2e/runner.py" g3-commit
   kill -KILL "$daemon"; wait "$daemon" || true
   rm -f "$3"
-  "$1" --repository "$2" daemon --listen "unix://$3" >>"$4/daemon-g3.log" 2>&1 & daemon=$!
+  setsid "$1" --repository "$2" daemon --listen "unix://$3" >>"$4/daemon-g3.log" 2>&1 & daemon=$!
   python3 "$5/e2e/runner.py" wait-daemon
   python3 "$5/e2e/runner.py" g3-verify
   python3 "$5/e2e/runner.py" g3-start-uncommitted
   python3 "$5/e2e/runner.py" g3-crash-fuse
   kill -KILL "$daemon"; wait "$daemon" || true
   rm -f "$3"
-  "$1" --repository "$2" daemon --listen "unix://$3" >>"$4/daemon-g3.log" 2>&1 & daemon=$!
+  setsid "$1" --repository "$2" daemon --listen "unix://$3" >>"$4/daemon-g3.log" 2>&1 & daemon=$!
   python3 "$5/e2e/runner.py" wait-daemon
   python3 "$5/e2e/runner.py" g3-verify-recovery
 ' _ "$E2E_NANDO_BIN" "$E2E_REPOSITORY" "$E2E_SOCKET" "$ARTIFACTS" "$ROOT"; then exit 1; fi
@@ -134,7 +171,7 @@ if ! run_gate G3 "native daemon/FUSE crash, restart and recovery" 480 bash -c '
 if ((STRESS)); then
   if ! run_gate G4 "optional bounded native FUSE concurrent writer stress" 180 bash -c '
     set -Eeuo pipefail
-    "$1" --repository "$2" daemon --listen "unix://$3" >"$4/daemon-g4.log" 2>&1 & daemon=$!
+    setsid "$1" --repository "$2" daemon --listen "unix://$3" >"$4/daemon-g4.log" 2>&1 & daemon=$!
     trap "kill -TERM \$daemon 2>/dev/null || true; wait \$daemon 2>/dev/null || true" EXIT
     export E2E_REPOSITORY="$2" E2E_SOCKET="$3"
     python3 "$5/e2e/runner.py" wait-daemon
