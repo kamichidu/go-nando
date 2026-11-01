@@ -43,3 +43,9 @@ gcs_sync_parallelism = 2
 ----
 
 The daemon runs transfer processing, Capacity GC, and Orphan/Invalid GC as independent tasks. GCS queue rows retain their durable enqueue timestamps so maximum-delay eligibility survives daemon restart. Idle is currently measured from the last successful content commit observed by the daemon; the Design IR still records the broader idle definition/default policy as an open decision. The scheduler also runs for Local repositories when these settings are explicitly configured; without an explicit policy, Local repositories keep their existing manual maintenance behavior.
+
+== Debian package and systemd
+
+The nfpm Debian package installs the CLI, FUSE and WebDAV executables, plus separate systemd user and system `nando@.service` templates. The user service is the supported Phase A mode and uses each user's XDG configuration, data, and per-user Unix socket. See link:packaging/README.md[Debian package and service setup] for instance configuration and lifecycle instructions. Installation and upgrade do not enable, start, or restart services; removal preserves repositories, configuration, credentials, and the dedicated system account.
+
+The system service template is experimental and is not a Phase A acceptance gate. It uses a dedicated non-login `nando` account, `/etc/nando/<instance>.toml`, `/var/lib/nando/<instance>`, and `/run/nando-<instance>`. Because the control socket remains mode 0600, system-mode FUSE and WebDAV clients must run under the same `nando` account. The template must not be treated as supported multi-user sharing.

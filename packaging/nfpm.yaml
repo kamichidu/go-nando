@@ -1,0 +1,50 @@
+name: go-nando
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: Kamichidu
+description: Single-user local repository daemon, FUSE adapter, and WebDAV adapter
+homepage: https://github.com/kamichidu/go-nando
+license: MIT
+depends:
+  - systemd
+recommends:
+  - fuse3
+contents:
+  - src: ${BUILD_DIR}/nando
+    dst: /usr/bin/nando
+    file_info:
+      mode: 0755
+  - src: ${BUILD_DIR}/nando-fuse
+    dst: /usr/bin/nando-fuse
+    file_info:
+      mode: 0755
+  - src: ${BUILD_DIR}/nando-webdav
+    dst: /usr/bin/nando-webdav
+    file_info:
+      mode: 0755
+  - src: packaging/nando@.user.service
+    dst: /usr/lib/systemd/user/nando@.service
+    file_info:
+      mode: 0644
+  - src: packaging/nando@.service
+    dst: /usr/lib/systemd/system/nando@.service
+    file_info:
+      mode: 0644
+  - src: packaging/README.md
+    dst: /usr/share/doc/go-nando/README.md
+    file_info:
+      mode: 0644
+  - src: packaging/config.user.example.toml
+    dst: /usr/share/doc/go-nando/config.user.example.toml
+    file_info:
+      mode: 0644
+  - src: packaging/config.system.example.toml
+    dst: /usr/share/doc/go-nando/config.system.example.toml
+    file_info:
+      mode: 0644
+scripts:
+  postinstall: packaging/postinstall.sh
+  postremove: packaging/postremove.sh

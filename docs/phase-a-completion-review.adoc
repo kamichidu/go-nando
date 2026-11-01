@@ -269,9 +269,9 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |*PA-04 closed; no Phase A blocker*
 
 |PA-05 — *P2 deployment evidence*
-|IR names a WSL systemd user service as the default lifecycle manager and permits system scope; no service unit/install manifest or lifecycle test was found here.
-|Confirm whether packaging lives outside this repository. If not, provide the Phase A service unit and test start/stop/restart/recovery under the selected scope.
-|Conditional operational acceptance
+|Implemented nfpm Debian packaging with separate user and system `nando@.service` templates. User scope is supported Phase A operation and follows XDG config/data/runtime paths. The system template is explicitly experimental, uses the retained non-login `nando` account plus per-instance `/var/lib/nando` and `/run/nando-*` paths, and requires all clients to share that account because UDS permissions remain 0700/0600. Package maintainer scripts do not enable/start/restart services or remove data/account/credentials. Both templates passed `systemd-analyze verify`; the deb contents/control scripts were inspected. The supported user unit completed an actual user-manager start, JSON-RPC request, restart, and stop with the locally built package binary. System-scope runtime remains unverified and is outside Phase A acceptance.
+|Keep user-scope lifecycle as the Phase A operational target. Treat system-scope runtime behavior as experimental and outside the Phase A completion gate; do not weaken UDS permissions or invent GCS scheduler defaults.
+|Packaging implementation present. Runtime lifecycle status is limited to the verification evidence recorded for the current host; system scope is not a Phase A blocker.
 
 |PA-06 — *P2 operational decision*
 |Backup/restore scope and quiescence are open (`OPEN-METADATA-BACKUP-PROCEDURE`). Losing association among SQLite, format/settings, Local objects, and queue can compromise recovery, but backup is assigned to operators.
@@ -332,7 +332,7 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 == Next actions
 
 . Complete PA-01 acceptance by resolving `OPEN-GCS-SCHEDULER-DEFAULTS`; implementation and no-manual-RPC G2 evidence are now present.
-. Confirm systemd packaging ownership and provide PA-05 lifecycle evidence if required for the WSL default.
+. Keep PA-05 user-service lifecycle evidence current on supported systemd hosts; system-scope operation remains experimental and is not a Phase A gate.
 . Publish the operator backup/restore procedure (PA-06) and choose the GCS deployment evidence threshold (PA-07).
 . Re-run G0–G5 after any fixes; run Litmus/cadaver only when available and retain strict per-group results. Then update `DES-PHASE-A-DAEMON` from `planned` only through an accepted Design IR change.
 

@@ -1,0 +1,21 @@
+[Unit]
+Description=Nando repository daemon (user instance %i)
+Documentation=https://github.com/kamichidu/go-nando
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nando --config %E/nando/%i.toml daemon
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+RuntimeDirectory=nando
+RuntimeDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=%h/.local/share/nando %t/nando
+
+[Install]
+WantedBy=default.target

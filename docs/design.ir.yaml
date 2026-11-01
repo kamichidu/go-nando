@@ -325,11 +325,15 @@ nodes:
   - id: DES-DAEMON-RUNTIME
     level: system_design
     kind: process-model
-    statement: Normal operation has one nando daemon as the execution owner of a Repository for the Phase A single-user, local-host deployment. The daemon constructs Metadata Store, Object Store, coordination, and Repository once, and serves peer CLI, FUSE, and WebDAV client processes. JSON-RPC 2.0 control messages use HTTP POST /rpc over configurable UDS or TCP; Phase A standard operation uses the per-user Unix-domain socket protected by a private parent directory (0700) and socket mode 0600. TCP support is retained and is rejected unless TLS and bearer authentication are configured, but TCP bind and credential lifecycle operations are outside standard Phase A acceptance. Phase A makes no guarantee of external exposure or multiple-OS-user authorization. The daemon owns Resource sessions, finite expiry, explicit renewal/revocation, and durable staging recovery. Expiry stops read-session repository-lease heartbeat; daemon shutdown releases read leases and promotes unfinished writes to recovery without deleting them. On the WSL Linux host, a systemd user service is the default lifecycle manager; a system service is also supported as an installation choice. GCS credentials use standard Application Default Credentials and are not persisted in repository configuration.
+    statement: Normal operation has one nando daemon as the execution owner of a Repository for the Phase A single-user, local-host deployment. The daemon constructs Metadata Store, Object Store, coordination, and Repository once, and serves peer CLI, FUSE, and WebDAV client processes. JSON-RPC 2.0 control messages use HTTP POST /rpc over configurable UDS or TCP; Phase A standard operation uses the per-user Unix-domain socket protected by a private parent directory (0700) and socket mode 0600. TCP support is retained and is rejected unless TLS and bearer authentication are configured, but TCP bind and credential lifecycle operations are outside standard Phase A acceptance. Phase A makes no guarantee of external exposure or multiple-OS-user authorization. The daemon owns Resource sessions, finite expiry, explicit renewal/revocation, and durable staging recovery. Expiry stops read-session repository-lease heartbeat; daemon shutdown releases read leases and promotes unfinished writes to recovery without deleting them. On the WSL Linux host, a systemd user service is the supported Phase A lifecycle manager and uses per-instance XDG configuration/data and the per-user runtime socket. A separately installed systemd system template is experimental and outside the Phase A runtime acceptance gate; it uses a dedicated non-login account and per-instance state/runtime paths, and its 0600 socket requires all clients to run as that account. Both scopes use separate nando@.service templates. GCS credentials use standard Application Default Credentials and are not persisted in repository configuration.
     attributes:
       default_host: WSL-Linux
       default_service_scope: systemd-user
-      supported_service_scope: [systemd-user, system]
+      supported_service_scope: [systemd-user]
+      experimental_service_scope: [system]
+      service_templates: [systemd-user:nando@.service, system:nando@.service]
+      service_package: nfpm-deb
+      system_service_phase_a_runtime_gate: excluded
       control_protocol: JSON-RPC-2.0
       control_framing: HTTP-POST-/rpc
       control_transports: [Unix-domain-socket, TCP]
