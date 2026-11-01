@@ -11,7 +11,6 @@ import (
 	"path"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -25,11 +24,10 @@ type rpcClient interface {
 }
 
 type FileSystem struct {
-	client  rpcClient
-	mounted atomic.Bool
-	mu      sync.Mutex
-	byID    map[string]*entryNode
-	writes  map[string]*writeState
+	client rpcClient
+	mu     sync.Mutex
+	byID   map[string]*entryNode
+	writes map[string]*writeState
 }
 
 type entryNode struct {
@@ -91,9 +89,6 @@ func (f *FileSystem) Mount(mountpoint string, options *fs.Options) (*fuse.Server
 	zero := time.Duration(0)
 	copy.EntryTimeout, copy.AttrTimeout, copy.NegativeTimeout = &zero, &zero, &zero
 	server, err := fs.Mount(mountpoint, f.Root(), &copy)
-	if err == nil {
-		f.mounted.Store(true)
-	}
 	return server, err
 }
 
@@ -613,7 +608,6 @@ func (h *fileHandle) Fsync(ctx context.Context, _ uint32) syscall.Errno {
 	state.lease, state.sessionID = nil, ""
 	state.dirty, state.lastErr = false, nil
 	state.pendingReleaseID = committedSessionID
-	state.node.owner.notifyContent(state.node)
 	if errno := state.node.owner.resolveNode(ctx, state.node); errno != 0 {
 		log.Printf("refresh committed Entry %s after Fsync: %v", state.node.entryID(), errno)
 	}
@@ -926,12 +920,9 @@ func (n *entryNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	if errno := n.owner.call(ctx, controlrpc.MethodRemoveEntry, controlrpc.RemoveEntryParams{EntryID: entry.ID}, nil); errno != 0 {
 		return errno
 	}
-	if child := n.GetChild(name); child != nil && n.owner.mounted.Load() {
-		if err := n.NotifyDelete(name, child); err != 0 {
-			log.Printf("invalidate unlinked FUSE entry %q: %v", name, err)
-		}
-	}
-	n.RmChild(name)
+	// go-fuse's rawBridge removes the cached child after this callback returns.
+	// Sending a synchronous FUSE notification here can block the request whose
+	// reply the kernel is waiting for; duplicate RmChild also races the bridge.
 	return 0
 }
 
@@ -950,12 +941,7 @@ func (n *entryNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	if errno := n.owner.call(ctx, controlrpc.MethodRemove, map[string]string{"path": p}, nil); errno != 0 {
 		return errno
 	}
-	if child := n.GetChild(name); child != nil && n.owner.mounted.Load() {
-		if err := n.NotifyDelete(name, child); err != 0 {
-			log.Printf("invalidate removed FUSE directory %q: %v", name, err)
-		}
-	}
-	n.RmChild(name)
+	// go-fuse's rawBridge removes the cached child after this callback returns.
 	return 0
 }
 
@@ -1003,24 +989,10 @@ func (n *entryNode) Rename(ctx context.Context, name string, newParent fs.InodeE
 	if errno := n.owner.call(ctx, controlrpc.MethodMoveEntry, controlrpc.MoveEntryParams{EntryID: source.ID, Destination: dst}, nil); errno != 0 {
 		return errno
 	}
-	child := n.GetChild(name)
-	if child == nil {
-		_, errno := n.owner.lookup(ctx, &n.Inode, n.currentPath(), name, &fuse.EntryOut{})
-		if errno != 0 {
-			return errno
-		}
-		child = n.GetChild(name)
-	}
-	if child != nil {
-		if n.owner.mounted.Load() {
-			if err := n.NotifyDelete(name, child); err != 0 {
-				log.Printf("invalidate renamed FUSE source %q: %v", name, err)
-			}
-		}
-		n.MvChild(name, &dstParent.Inode, newName, true)
-	}
 	n.owner.renameCached(src, dst)
-	n.owner.invalidate(n, name, dstParent, newName)
+	// rawBridge performs MvChild after this callback succeeds. Entry and
+	// attribute TTLs are zero, so external daemon mutations are looked up again;
+	// do not synchronously notify the kernel while it awaits this Rename reply.
 	return 0
 }
 
@@ -1043,26 +1015,6 @@ func (f *FileSystem) renameCached(oldPath, newPath string) {
 			node.path = newPath + strings.TrimPrefix(node.path, oldPath)
 		}
 		node.mu.Unlock()
-	}
-}
-
-func (f *FileSystem) invalidate(oldParent *entryNode, oldName string, newParent *entryNode, newName string) {
-	if !f.mounted.Load() {
-		return
-	}
-	if err := oldParent.NotifyEntry(oldName); err != 0 {
-		log.Printf("invalidate FUSE old entry %q: %v", oldName, err)
-	}
-	if err := newParent.NotifyEntry(newName); err != 0 {
-		log.Printf("invalidate FUSE new entry %q: %v", newName, err)
-	}
-}
-
-func (f *FileSystem) notifyContent(node *entryNode) {
-	if f.mounted.Load() {
-		if err := node.NotifyContent(0, -1); err != 0 {
-			log.Printf("invalidate FUSE content for Entry %s: %v", node.entryID(), err)
-		}
 	}
 }
 

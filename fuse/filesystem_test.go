@@ -246,6 +246,9 @@ func TestUnlinkMarksIntentAndKeepsOpenHandlePrivate(t *testing.T) {
 	if errno := root.Unlink(ctx, "file"); errno != 0 {
 		t.Fatalf("unlink: %v", errno)
 	}
+	if root.GetChild("file") == nil {
+		t.Fatal("Unlink callback changed inode tree before go-fuse rawBridge")
+	}
 	if _, errno := handle.Write(ctx, []byte("private"), 0); errno != 0 {
 		t.Fatalf("write through unlinked open handle: %v", errno)
 	}
@@ -260,6 +263,58 @@ func TestUnlinkMarksIntentAndKeepsOpenHandlePrivate(t *testing.T) {
 	}
 	if len(daemon.sessions) != 0 {
 		t.Fatalf("unlink left session state: %+v", daemon.sessions)
+	}
+}
+
+func TestRenameLeavesInodeTreeUpdateToGoFuseBridge(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("content"))
+	adapter := New(daemon)
+	root, ok := adapter.Root().(*entryNode)
+	if !ok {
+		t.Fatal("Root returned an unexpected node type")
+	}
+	_ = fs.NewNodeFS(root, &fs.Options{})
+	var out fuse.EntryOut
+	childInode, errno := root.Lookup(ctx, "file", &out)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	child, ok := childInode.Operations().(*entryNode)
+	if !ok {
+		t.Fatal("Lookup returned an unexpected node type")
+	}
+	if errno := root.Rename(ctx, "file", root, "renamed", 0); errno != 0 {
+		t.Fatalf("rename callback: %v", errno)
+	}
+	if daemon.path != "/renamed" || child.currentPath() != "/renamed" {
+		t.Fatalf("daemon path=%q cached Entry path=%q", daemon.path, child.currentPath())
+	}
+	if root.GetChild("file") != childInode || root.GetChild("renamed") != nil {
+		t.Fatal("Rename callback changed inode tree before go-fuse rawBridge")
+	}
+}
+
+func TestRmdirLeavesInodeTreeRemovalToGoFuseBridge(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, nil)
+	daemon.entry.Kind = "directory"
+	adapter := New(daemon)
+	root, ok := adapter.Root().(*entryNode)
+	if !ok {
+		t.Fatal("Root returned an unexpected node type")
+	}
+	_ = fs.NewNodeFS(root, &fs.Options{})
+	var out fuse.EntryOut
+	childInode, errno := root.Lookup(ctx, "file", &out)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	if errno := root.Rmdir(ctx, "file"); errno != 0 {
+		t.Fatalf("rmdir callback: %v", errno)
+	}
+	if root.GetChild("file") != childInode {
+		t.Fatal("Rmdir callback changed inode tree before go-fuse rawBridge")
 	}
 }
 
