@@ -174,7 +174,7 @@ nodes:
   - id: REQ-METADATA-BACKUP-RESPONSIBILITY
     level: system_requirement
     kind: operations-boundary
-    statement: Metadata backup and restoration are operator responsibilities; backup procedures MUST preserve the association between committed Entry Object IDs, Repository Format, and replication state required by the selected delivery mode.
+    statement: Metadata backup and restoration are operator responsibilities. A Phase A backup MUST capture the complete Repository at one consistent static point after FUSE/WebDAV clients have stopped and the daemon has shut down normally with all Repository writes ceased. It MUST preserve the association among SQLite Metadata and any WAL/SHM sidecars, Repository Format, delivery obligations, Local Objects, Recovery staging/manifests, coordination state, and repository-owned settings. Operators select the snapshot/copy mechanism; no storage technology is mandated. Restore MUST occur while stopped, preserve owner/mode and Repository configuration, and verify integrity before clients resume. Backup procedures do not require GCS delivery to drain; pending obligations are preserved for scheduler retry. Repository-external configuration and credentials remain operator-managed separately.
     provenance:
       origin: imported
   - id: REQ-ENTRY-ID
@@ -1438,8 +1438,8 @@ open_items:
     status: open
     related_refs: [REQ-METADATA-PORTABILITY, REQ-PUT-GC-EXCLUSION, REQ-READ-GC-EXCLUSION, DES-METADATA-BACKEND-PORTABILITY, DES-REPOSITORY-BOUNDARIES]
   - id: OPEN-METADATA-BACKUP-PROCEDURE
-    statement: Define operator backup/restore procedure and consistency boundaries for SQLite Metadata, Repository Format, content-ID transfer queue, Local objects, and repository-owned mode configuration; decide which components must be quiesced or backed up as one recoverable set.
-    status: open
+    statement: "Resolved by the Phase A operator runbook: quiesce FUSE/WebDAV, normally stop the daemon, and capture every Repository component as one consistent set while all Repository writes have ceased. Preserve SQLite and any sidecars, coordination DB, Local CAS objects, Recovery staging/manifests, repository settings, and pending GCS obligations. Restore the complete set while stopped with owner/mode/configuration checks; do not require GCS queue drain or prescribe a snapshot technology. External credentials and unit/configuration files remain separately managed. Recovery manifests currently require restoring to the original absolute Repository path."
+    status: resolved
     related_refs: [REQ-METADATA-BACKUP-RESPONSIBILITY, DES-METADATA-BACKEND-PORTABILITY, DES-REPLICATION-STATE]
   - id: OPEN-ADAPTER-AUTHORIZATION
     statement: "The user-approved Phase A decision is single-user local-host operation: daemon Unix sockets use OS permissions with a private 0700 parent and 0600 socket; WebDAV is unauthenticated plain HTTP bound only to loopback; external exposure, multiple-user authorization, WebDAV client authentication, and WebDAV TLS termination are deferred. WebDAV If-Match and If-None-Match use ETags from the Begin-time CAS snapshot, and unsupported conditional headers are rejected. Standard Phase A operation uses UDS; the existing optional TCP listener still requires TLS and bearer authentication, but TCP bind, certificate trust/rotation, token provisioning/rotation, and per-method authorization are not standard Phase A acceptance items. This open item tracks only decisions needed if a future phase expands beyond the approved boundary. ADC supplies GCS credentials only and is not client authorization."

@@ -75,8 +75,8 @@ Status meanings: *Implemented* means source and relevant existing tests support 
 
 |`REQ-METADATA-PORTABILITY`, `REQ-METADATA-BACKUP-RESPONSIBILITY`
 |Metadata semantic API and SQLite transaction boundaries are in `internal/metadata/` and `internal/metadata/sqlite/`. No alternate backend is claimed. Backup remains an operator responsibility; repository files include `metadata.sqlite`, `coordination.db`, objects, repository format/settings, and pending transfer rows.
-|SQLite migration and atomic queue tests pass. No backup/restore runbook or consistency procedure was found. `OPEN-METADATA-BACKUP-PROCEDURE` remains open.
-|SQLite contract implemented; operator procedure unresolved
+|SQLite migration and atomic queue behavior is covered by existing tests. `docs/backup-restore.adoc` defines the cold static point and full consistent set; no backup implementation is claimed.
+|SQLite contract implemented; operator procedure documented; no backup mechanism claimed
 |===
 
 === Resource sessions, Recovery, and durable failure outcomes
@@ -141,7 +141,7 @@ G2's PASS establishes behavior against `fake-gcs-server:1.52.3`, including daemo
 |*Partial — deployment artifact/evidence missing.*
 
 |`REQ-METADATA-BACKUP-RESPONSIBILITY`, `OPEN-METADATA-BACKUP-PROCEDURE`
-|No backup/restore command or operator procedure found; responsibility is assigned to operator but atomic backup set/quiescence requirements remain open.
+|Operator runbook documents quiescence, full Repository set, SQLite sidecars, Recovery/path constraint, pending GCS obligations, restore ownership/config checks, and rollback. No backup/restore command or mechanism is implemented or required.
 |Open operational decision; not a runtime code invariant failure.
 |===
 
@@ -274,9 +274,9 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |Packaging implementation present. Runtime lifecycle status is limited to the verification evidence recorded for the current host; system scope is not a Phase A blocker.
 
 |PA-06 — *P2 operational decision*
-|Backup/restore scope and quiescence are open (`OPEN-METADATA-BACKUP-PROCEDURE`). Losing association among SQLite, format/settings, Local objects, and queue can compromise recovery, but backup is assigned to operators.
-|Publish the minimal operator backup/restore procedure and specify whether daemon quiescence is required; no new backup framework is implied.
-|Operational sign-off item
+|Resolved as a responsibility boundary. The operator runbook defines the normal static point after clients stop and daemon shutdown completes, requires a consistent full-Repository set while stopped, preserves pending GCS obligations, and separates host credentials/configuration. It does not mandate LVM, a particular snapshot technology, or a new backup feature. Current Recovery manifests constrain restore to the original absolute Repository path.
+|Keep backup mechanism and credential handling under operator control. Treat forced termination as crash recovery, not a normal static point.
+|*PA-06 resolved by documentation; no runtime feature or test gate added*
 
 |PA-07 — *P2 production evidence*
 |G2 proves fake emulator behavior only. ADC/IAM, real GCS, bucket versioning/retention, external overwrite/delete, and policy are not verified; some are explicitly open or excluded by IR.
@@ -333,6 +333,6 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 
 . Complete PA-01 acceptance by resolving `OPEN-GCS-SCHEDULER-DEFAULTS`; implementation and no-manual-RPC G2 evidence are now present.
 . Keep PA-05 user-service lifecycle evidence current on supported systemd hosts; system-scope operation remains experimental and is not a Phase A gate.
-. Publish the operator backup/restore procedure (PA-06) and choose the GCS deployment evidence threshold (PA-07).
+. Choose the GCS deployment evidence threshold (PA-07).
 . Re-run G0–G5 after any fixes; run Litmus/cadaver only when available and retain strict per-group results. Then update `DES-PHASE-A-DAEMON` from `planned` only through an accepted Design IR change.
 

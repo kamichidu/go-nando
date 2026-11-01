@@ -1,0 +1,95 @@
+= Repository Backup and Restore (Phase A)
+
+== Responsibility and consistency boundary
+
+Backup and restore are operator responsibilities. A backup must preserve one
+consistent Repository state across all persistent components. Operators choose
+the mechanism. A stopped filesystem copy or a storage snapshot (for example
+LVM, ZFS, or Btrfs) are possible approaches; none is required or preferred by
+go-nando. If Repository files span volumes, stop writes first and preserve all
+of those volumes as one consistent set while stopped.
+
+The Repository boundary is the configured Repository directory. Preserve the
+complete directory, including:
+
+* `metadata.sqlite` and any `metadata.sqlite-wal` or `metadata.sqlite-shm`
+  sidecars present. Metadata, Repository Format, schema history, and pending
+  GCS delivery obligations share the Metadata database.
+* `coordination.db` and any SQLite sidecars. It contains the Repository's
+  coordination/resource-lock state.
+* `objects/`, including all content-addressed Local Objects.
+* `repository.json`, which records Repository-owned delivery settings.
+* `temp/`, especially `temp/rpc-sessions/` Recovery staging and manifests.
+
+Include the complete `objects/` directory rather than filtering to currently
+referenced IDs: valid unreferenced Objects are GC-eligible and the Repository
+must be captured as one state. Do not run GC as a backup-preparation step.
+
+The current SQLite setup does not explicitly enable WAL mode. Still, do not
+copy a live database file by itself. Quiesce the daemon and let its SQLite
+connections close; if sidecars exist, preserve them together with their
+database. `daemon.lock` is a kernel advisory lock held on a file, not durable
+Repository state; the file may remain after shutdown and can be recreated.
+
+Per-user TOML configuration, systemd units/drop-ins, environment variables,
+and ADC credentials are outside the Repository boundary. Manage those through
+the host's separate configuration and secret-backup procedures. Do not put
+credentials in a Repository archive by default.
+
+== Cold backup static point
+
+The Phase A static point is reached only after:
+
+. Stop new FUSE and WebDAV accesses. Unmount FUSE normally and wait for it to
+finish; stop WebDAV and other clients so no new daemon requests arrive.
+. Stop the daemon normally and wait for shutdown to complete. This lets the
+HTTP server drain, the scheduler stop, SQLite connections close, and unfinished
+Resource write sessions be preserved as Recovery rather than deleted.
+. Confirm the daemon process has exited and no process can write to any part of
+the Repository.
+. While it remains stopped, capture all Repository components as one
+consistent set, including components on other volumes.
+
+Do not wait for GCS delivery to finish. Preserve pending queue rows and their
+Local Objects together; after restore, the daemon scheduler can retry them.
+An abrupt kill or power loss is not a normal static point. It may leave
+Recovery work and must be treated as crash recovery, not as a cleanly quiesced
+backup.
+
+== Restore
+
+Keep the daemon and all clients stopped while restoring the complete
+Repository set. Restore into an empty destination rather than overlaying an
+existing Repository. Retain the saved copy until the restored Repository has
+been checked and accepted. Preserve file modes and restore the intended owner
+and group for the service user. Restore the matching external config and ADC
+access separately; do not change Repository delivery settings as part of
+restore.
+
+Recovery manifests currently contain absolute staging paths and startup
+validation requires those paths to remain under the Repository's current
+`temp/rpc-sessions` directory. Restore a Repository containing Recovery
+manifests to its original absolute Repository path. Relocating such a
+Repository is not supported by the current Recovery format.
+
+While services remain stopped, check the restored tree, owner/mode, Repository
+path, runtime config, and GCS credentials. Then start only the daemon, keeping
+FUSE/WebDAV and other clients stopped; run `nando doctor` and inspect
+`nando recovery list` before resuming clients or deciding whether to retry or
+discard any Recovery record. The current `doctor` command requires the daemon
+RPC, so logical validation happens with the daemon running but before clients
+resume. `doctor` checks Metadata hierarchy and verifies referenced
+Local Object hashes, but it does not validate the backup archive, Recovery
+manifests, pending queue completeness, or remote GCS bytes.
+
+GCS delivery resumes asynchronously when the GCS Repository is opened with its
+explicit scheduler settings and usable ADC credentials. Existing immutable
+content IDs are reconciled through GCS API attributes, so retry after an
+ambiguous upload does not create another object under that name. The current
+implementation does not read all remote bytes back to hash-verify them, and
+there is no CLI command that reports queue drain completion. A GCS outage may
+therefore leave delivery pending while local Repository operation continues.
+
+If restore checks fail, stop the daemon, retain the failed tree for diagnosis,
+and restore the prior accepted copy while stopped. Do not merge a backup over
+the failed tree.

@@ -49,3 +49,7 @@ The daemon runs transfer processing, Capacity GC, and Orphan/Invalid GC as indep
 The nfpm Debian package installs the CLI, FUSE and WebDAV executables, plus separate systemd user and system `nando@.service` templates. The user service is the supported Phase A mode and uses each user's XDG configuration, data, and per-user Unix socket. See link:packaging/README.md[Debian package and service setup] for instance configuration and lifecycle instructions. Installation and upgrade do not enable, start, or restart services; removal preserves repositories, configuration, credentials, and the dedicated system account.
 
 The system service template is experimental and is not a Phase A acceptance gate. It uses a dedicated non-login `nando` account, `/etc/nando/<instance>.toml`, `/var/lib/nando/<instance>`, and `/run/nando-<instance>`. Because the control socket remains mode 0600, system-mode FUSE and WebDAV clients must run under the same `nando` account. The template must not be treated as supported multi-user sharing.
+
+== Backup and restore
+
+Backup and restore are operator-managed. Preserve the entire stopped Repository as one consistent set, including SQLite and any sidecars, CAS objects, Recovery staging/manifests, coordination state, repository settings, and pending GCS delivery obligations. The operator chooses the snapshot or copy mechanism; no particular storage technology is required. See link:docs/backup-restore.adoc[Repository Backup and Restore] for the static point, restore checks, and current Recovery path constraint.
