@@ -4,12 +4,14 @@
 :review-commit: b49b705
 :pa-01-implementation-review: 2026-11-01
 :pa-01-evidence: /tmp/go-nando-e2e.Ldezz3
+:pa-02-evidence: /tmp/go-nando-e2e.xPIZJw
 
 [cols="1,3"]
 |===
 |Review date |{review-date}
 |Reviewed main |`{review-commit}` (`feat(webdav): add phase A daemon adapter`)
 |Authority |`docs/design.ir.yaml` at the reviewed commit; PA-01 follow-up checks the same canonical requirements
+|PA-02 follow-up evidence |`{pa-02-evidence}`: G0–G5 and optional G4 stress PASS; host cleanup PASS
 |Result |*CONDITIONAL — Phase A completion is not yet established*
 |===
 
@@ -17,14 +19,14 @@
 
 The repository has a substantial, tested single-host Phase A implementation: Local and GCS repository modes, the SQLite Metadata and transfer queue, daemon-owned Resource sessions and Recovery, peer CLI/FUSE/WebDAV processes, and real host FUSE and HTTP checks are present. This review does not find a broad failure of the Repository or CAS core.
 
-Phase A cannot be signed off as complete from this checkout. The PA-01 implementation follow-up now adds a daemon-owned configured scheduler and its host E2E evidence, but the Design IR still leaves scheduler operational defaults and the exact meaning of idle open. This follow-up does not silently close that design decision. Other completion blockers remain:
+Phase A cannot be signed off as complete from this checkout. The PA-01 implementation follow-up adds a daemon-owned configured scheduler, and this PA-02 follow-up records the approved single-user local-host security boundary. Scheduler operational defaults and the meaning of idle remain open, as do the other completion items:
 
 . Design IR `OPEN-GCS-SCHEDULER-DEFAULTS` still leaves timing defaults and whether idle means no repository writes or no dirty handles unresolved. GCS mode therefore requires all four scheduler settings explicitly; current code measures idle from the last successful content commit observed by the daemon. That mechanism is implemented and exercised, but this review does not treat the chosen operational interpretation as an accepted Design IR decision. Local-mode GC scheduling also starts only when these scheduler settings are explicitly configured.
-. Design IR `OPEN-ADAPTER-AUTHORIZATION` still leaves WebDAV bind, authentication, TLS, and conditional-write policy unresolved. The implementation chooses loopback-only unauthenticated HTTP as a temporary restriction, but that is an implementation limit, not an accepted resolution of the open policy.
+. PA-02 is resolved for Phase A by the approved policy recorded in `DES-PHASE-A-DAEMON` and `DES-ADAPTERS-FILESYSTEM`: private per-user Unix socket, loopback-only unauthenticated HTTP WebDAV, no external exposure or multi-user authorization, and explicit conditional PUT handling. `OPEN-ADAPTER-AUTHORIZATION` now tracks future expansion choices only and is not a Phase A blocker.
 
 The Design IR also still labels `DES-PHASE-A-DAEMON.phase_status` as `planned`. That is a formal status mismatch: implementation evidence cannot by itself change the canonical roadmap state. It should be changed only after the owner accepts the remaining decisions and evidence.
 
-These are blockers to a *formal Phase A complete* decision. The findings below distinguish those blockers from intentionally deferred work, operational limitations, and evidence that is not part of the Phase A contract. The original gap review was documentation-only; the PA-01 follow-up changed scheduler implementation, configuration, and E2E verification only.
+These are blockers to a *formal Phase A complete* decision. The findings below distinguish those blockers from intentionally deferred work, operational limitations, and evidence that is not part of the Phase A contract. The original gap review was documentation-only; PA-01 and PA-02 follow-ups made only the scheduler and approved local security-boundary changes.
 
 == Scope and method
 
@@ -124,15 +126,15 @@ G2's PASS establishes behavior against `fake-gcs-server:1.52.3`, including daemo
 |Repository-facing `put/get/cat/list/stat/mkdir/move/remove/gc/doctor/recovery/maintenance` commands use `controlrpc` (`internal/cli/commands/`). `init` is provisioning; `daemon` is the composition root. TOML/CLI/XDG precedence and legacy-path migration guard are in `internal/config/config.go` and CLI root. Tests are in `commands_test.go` and `config_test.go`.
 |Implemented; G0 PASS. `nando sync` is Phase 7 deferred as noted above.
 
-|`DES-DEPENDENCY-DIRECTION`, `DES-DAEMON-RUNTIME`, `DES-REPOSITORY-BOUNDARIES`
-|Daemon is the sole Repository owner. CLI, FUSE and WebDAV are separate processes; FUSE and WebDAV have separate Go modules and import the public `controlrpc`, not `internal/*`. Daemon enforces one process per repository. Root Unix socket parent is mode 0700 and socket mode 0600; TCP requires TLS and bearer token.
-|Implemented; module tests, dependency inspection, protocol tests and E2E process runs PASS.
+|`DES-DEPENDENCY-DIRECTION`, `DES-DAEMON-RUNTIME`, `DES-REPOSITORY-BOUNDARIES`, approved `OPEN-ADAPTER-AUTHORIZATION` Phase A decision
+|Daemon is the sole Repository owner. CLI, FUSE and WebDAV are separate processes; FUSE and WebDAV have separate Go modules and import the public `controlrpc`, not `internal/*`. Standard Phase A uses the per-user Unix socket; its parent is mode 0700 and socket mode 0600, and insecure existing parent directories are rejected. TCP remains available only with TLS and bearer token but is outside standard Phase A operations. WebDAV checks `localhost` resolution and accepts only loopback addresses; client authentication/TLS are excluded by approved scope.
+|Implemented and policy decided; socket permission/address tests and G0/G5 PASS.
 
 |`DES-ERROR-MODEL`, `DES-CLI-BOUNDARY`, FUSE errno mapping in `REQ-FUSE-FILE-HANDLES`
 |Daemon emits stable JSON-RPC codes; FUSE explicitly maps missing/conflict/stale/permission/local errno. CLI maps the main not-found/conflict/invalid/corruption classes to exit codes. WebDAV maps Entry conflicts to HTTP precondition responses for PUT/MOVE/COPY and uses explicit 501 boundaries.
 |Implemented for tested surfaces. WebDAV lacks comprehensive status-mapping tests for all methods; broader adapter matrix is verification-incomplete.
 
-|`DES-DAEMON-RUNTIME` default systemd-user lifecycle; `OPEN-ADAPTER-AUTHORIZATION`
+|`DES-DAEMON-RUNTIME` default systemd-user lifecycle
 |Foreground daemon command and graceful signal/shutdown handling exist. No `.service` or `.timer` unit, installation manifest, or systemd integration test was found in this repository. The design says a WSL systemd user service is the default lifecycle manager.
 |*Partial — deployment artifact/evidence missing.*
 
@@ -141,7 +143,7 @@ G2's PASS establishes behavior against `fake-gcs-server:1.52.3`, including daemo
 |Open operational decision; not a runtime code invariant failure.
 |===
 
-Security policy remains a required human decision. Unix socket permissions and TCP transport protection are implemented, but TCP bind-address/certificate/token rotation and per-method authorization details are still open. WebDAV binds only loopback and has no client auth/TLS; this prevents remote exposure but does not authenticate other local users. Treat the listener as local-user accessible, not as per-user authorized. `ADC` is storage credential configuration, not WebDAV/client authorization.
+The accepted security boundary is single-user local-host operation. Unix socket parent/socket modes are enforced; TCP TLS+bearer support remains, while TCP bind/certificate/token lifecycle is outside standard Phase A. WebDAV is loopback-only plain HTTP without client authentication, so processes of the same local OS user share its access. `ADC` is storage credential configuration, not WebDAV/client authorization.
 
 === FUSE adapter
 
@@ -157,12 +159,12 @@ Phase A's IR says read-write WebDAV and requires a separate peer process using t
 
 * `LOCK`/`UNLOCK`, `PROPPATCH`/dead properties, directory COPY, and overwrite semantics are *not independently mandated Phase A features* by the current IR. Their absence is an explicit partial protocol surface, not by itself a Phase A blocker. `DAV:1` is advertised; the adapter refuses LOCK/UNLOCK/PROPPATCH with 501. COPY supports only files to absent destinations; MOVE supports non-replacing namespace moves. Full Litmus `copymove`, `props`, and `locks` compliance cannot be claimed.
 * `nando-webdav` is a separate module/process using controlrpc and daemon file resources. PUT commits before 201/204 and uses Begin-time Entry/revision/absence as its CAS snapshot for conditional PUT. GET/HEAD/PROPFIND and tested namespace methods use daemon state. G5 curl covered the tested operations.
-* `OPEN-ADAPTER-AUTHORIZATION` explicitly makes WebDAV listener/auth/TLS and conditional-write requirements unresolved. Loopback-only HTTP is a temporary boundary, not a completed security decision. This remains a formal completion blocker.
+* The approved Phase A boundary is loopback-only unauthenticated HTTP and same-user local operation. WebDAV PUT enforces `If-Match`/`If-None-Match` against the Begin-time CAS snapshot and rejects unsupported conditions. External exposure, client auth, TLS termination, multi-user authorization, and TCP operations are deferred; these are not Phase A acceptance requirements.
 * Litmus and cadaver are unavailable; their suite/client status is SKIP, not PASS. This is not a Phase A scope blocker because neither tool nor full RFC compliance is a Design IR acceptance item. It leaves broader interoperability unverified.
 
 A concrete WebDAV defect was observed in addition to the intentional method limits: x/net/webdav's default PROPFIND allprop reports `<DAV:supportedlock>` as an exclusive write lock while this adapter intercepts LOCK and returns 501. This is contradictory capability metadata. It is a *P2 protocol correctness issue*, even though a full lock implementation is not required. Fix by preventing the adapter from advertising a capability it rejects, without inventing lock semantics; add a focused HTTP assertion before claiming the WebDAV surface internally consistent.
 
-Other unverified WebDAV behavior includes conditionals on methods beyond PUT, concurrent HTTP updates, non-empty collection DELETE behavior, MOVE/COPY precondition handling, persisted content-type presentation, and errors at every Resource cleanup boundary. The IR's conditional-write policy is open, so these are not all contractual failures today; the policy must be decided before accepting broader clients.
+Other unverified WebDAV behavior includes conditions on methods beyond PUT, concurrent HTTP updates, non-empty collection DELETE behavior, MOVE/COPY precondition handling, persisted content-type presentation, and errors at every Resource cleanup boundary. The approved contract covers PUT's Begin-time ETag conditions; this review does not extend that contract to other methods.
 
 [cols="1,2,2"]
 |===
@@ -249,14 +251,14 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |Accept the idle interpretation or select another, and select deployment values for all four settings. Decide whether Local-mode GC must also be enabled by mandatory explicit scheduler configuration. Update the Design IR in a separate accepted design change.
 |Scheduler implementation complete; formal PA-01 acceptance conditional on the open policy decision
 
-|PA-02 — *P1 design blocker*
-|`OPEN-ADAPTER-AUTHORIZATION` remains open. WebDAV is unauthenticated HTTP on loopback only; local users share access. TCP bind and credential lifecycle policy also remain undecided. This is a deployment/security contract decision, not something code should guess.
-|Accept and record the WebDAV listener/auth/TLS/conditional-write policy (including local-user threat boundary) and TCP bind/token policy. Then decide whether loopback-only HTTP is acceptable for the intended single-user WSL Phase A deployment.
-|Block formal sign-off until decided
+|PA-02 — *resolved for Phase A*
+|User-approved policy is recorded in the canonical Design IR: one local OS user; daemon UDS parent mode 0700/socket mode 0600; WebDAV loopback-only plain HTTP without client authentication/TLS; no external exposure or multi-user authorization. Conditional PUT uses Begin-time CAS, supports If-Match/If-None-Match, and rejects unsupported conditions. TCP TLS+bearer support remains but TCP bind/certificate/token operations are outside standard Phase A.
+|Maintain tests for private UDS permissions, loopback-only bind, conditional PUT CAS, and explicit rejection of unsupported conditional headers. Future expansion requires a separate decision.
+|*PA-02 closed; no Phase A blocker*
 
 |PA-03 — *P1 formal status blocker*
 |`DES-PHASE-A-DAEMON.attributes.phase_status` remains `planned`. A completion claim would contradict the canonical roadmap status.
-|After remaining PA-01 policy, PA-02, and accepted verification limits are resolved, have the Design IR owner update the phase status and its exit criteria in a separate design decision/change.
+|After remaining PA-01 policy and accepted verification limits are resolved, have the Design IR owner update the phase status and its exit criteria in a separate design decision/change.
 |Block formal sign-off
 
 |PA-04 — *P2 protocol correctness*
@@ -313,8 +315,8 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |Partial/unspecified behavior; not a core Phase A blocker
 
 |WebDAV auth/TLS
-|`OPEN-ADAPTER-AUTHORIZATION` specifically requires a human policy. Loopback-only is a code restriction, not closure of that open item.
-|Block formal sign-off until accepted
+|The approved Phase A boundary excludes external exposure, WebDAV client authentication, TLS termination, and multi-user authorization. `OPEN-ADAPTER-AUTHORIZATION` tracks future expansion only. TCP TLS+bearer remains available but its operating lifecycle is not standard Phase A acceptance.
+|PA-02 resolved for Phase A; future expansion deferred
 
 |NFS export
 |No NFS requirement, component, or acceptance scenario exists; Phase A names FUSE and WebDAV adapters.
@@ -328,7 +330,6 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 == Next actions
 
 . Complete PA-01 acceptance by resolving `OPEN-GCS-SCHEDULER-DEFAULTS`; implementation and no-manual-RPC G2 evidence are now present.
-. Decide and record PA-02's WebDAV/TCP security and conditional-write policy.
 . Remove the false `supportedlock` capability response (PA-04) before extending interoperability claims.
 . Confirm systemd packaging ownership and provide PA-05 lifecycle evidence if required for the WSL default.
 . Publish the operator backup/restore procedure (PA-06) and choose the GCS deployment evidence threshold (PA-07).

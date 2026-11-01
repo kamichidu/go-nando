@@ -42,3 +42,19 @@ func TestPreconditionsUseBeginSnapshot(t *testing.T) {
 		}
 	}
 }
+
+func TestUnsupportedPUTConditionalHeadersAreRejected(t *testing.T) {
+	for _, header := range []string{"If", "If-Modified-Since", "If-Range"} {
+		r := httptest.NewRequest("PUT", "/x", nil)
+		r.Header.Set(header, "unsupported")
+		if got := unsupportedPutPrecondition(r); got != header {
+			t.Errorf("unsupported header %s returned %q", header, got)
+		}
+	}
+	r := httptest.NewRequest("PUT", "/x", nil)
+	r.Header.Set("If-Match", `"entry-3"`)
+	r.Header.Set("If-None-Match", "*")
+	if got := unsupportedPutPrecondition(r); got != "" {
+		t.Fatalf("supported ETag conditions were rejected as %q", got)
+	}
+}

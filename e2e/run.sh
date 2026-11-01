@@ -13,6 +13,7 @@ DESIGN_IR_COMMIT=455ed318b7bc409d3e1da320620ef92d457042b9
 COMPOSE=(docker compose --project-directory "$ROOT" -f "$ROOT/e2e/compose.yaml" -p "$PROJECT")
 GATES="$ARTIFACTS/gates.tsv"
 mkdir -p "$ARTIFACTS/bin" "$ARTIFACTS/state/local" "$ARTIFACTS/state/gcs" "$ARTIFACTS/run"
+chmod 700 "$ARTIFACTS/run"
 touch "$GATES"
 export E2E_ARTIFACTS_DIR="$ARTIFACTS"
 export E2E_NANDO_BIN="$ARTIFACTS/bin/nando"

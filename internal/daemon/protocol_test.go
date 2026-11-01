@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,12 +37,15 @@ func (echoAPI) Call(_ context.Context, method string, params json.RawMessage) (a
 }
 
 func TestUnixJSONRPCClientRequiresBearerTokenWhenConfigured(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "nando.sock")
+	parent := filepath.Join(t.TempDir(), "socket")
+	socketPath := filepath.Join(parent, "nando.sock")
 	endpoint := "unix://" + socketPath
 	listener, err := listen(ListenConfig{Endpoint: endpoint})
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertPermissionMode(t, parent, 0700)
+	assertPermissionMode(t, socketPath, 0600)
 	server := &http.Server{Handler: newHandler(echoAPI{}, "secret")}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
@@ -74,8 +78,32 @@ func TestUnixJSONRPCClientRequiresBearerTokenWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestUnixListenerRejectsSharedParentDirectory(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "shared")
+	if err := os.Mkdir(parent, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := listen(ListenConfig{Endpoint: "unix://" + filepath.Join(parent, "nando.sock")}); err == nil || !strings.Contains(err.Error(), "must be private") {
+		t.Fatalf("listener accepted a non-private parent directory: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(parent, "nando.sock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("socket was created under a shared parent: %v", err)
+	}
+}
+
 func TestDefaultEndpointRoundTripsThroughListenerAndClient(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	runtimeDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	appDir := filepath.Join(runtimeDir, "nando")
+	if err := os.Mkdir(appDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(appDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	endpoint, err := controlrpc.DefaultEndpoint(filepath.Join(t.TempDir(), "repo with spaces"))
 	if err != nil {
 		t.Fatal(err)
@@ -83,10 +111,20 @@ func TestDefaultEndpointRoundTripsThroughListenerAndClient(t *testing.T) {
 	if !strings.HasPrefix(endpoint, "unix:") {
 		t.Fatalf("default endpoint is not a Unix URI: %q", endpoint)
 	}
+	assertPermissionMode(t, appDir, 0700)
 	listener, err := listen(ListenConfig{Endpoint: endpoint})
 	if err != nil {
 		t.Fatalf("listen on DefaultEndpoint result %q: %v", endpoint, err)
 	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	socketPath := parsed.Opaque
+	if socketPath == "" {
+		socketPath = parsed.Path
+	}
+	assertPermissionMode(t, socketPath, 0600)
 	server := &http.Server{Handler: newHandler(echoAPI{}, "")}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
@@ -103,6 +141,17 @@ func TestDefaultEndpointRoundTripsThroughListenerAndClient(t *testing.T) {
 	}
 	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		t.Errorf("serve: %v", err)
+	}
+}
+
+func assertPermissionMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s mode=%04o, want %04o", path, got, want)
 	}
 }
 

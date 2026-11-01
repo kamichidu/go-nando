@@ -325,7 +325,7 @@ nodes:
   - id: DES-DAEMON-RUNTIME
     level: system_design
     kind: process-model
-    statement: Normal operation has one nando daemon as the execution owner of a Repository. The daemon constructs Metadata Store, Object Store, coordination, and Repository once, and serves peer CLI, FUSE, and WebDAV client processes. JSON-RPC 2.0 control messages use HTTP POST /rpc over configurable UDS or TCP; UDS is the local default. TCP is rejected unless TLS and bearer authentication are configured. The daemon owns Resource sessions, finite expiry, explicit renewal/revocation, and durable staging recovery. Expiry stops read-session repository-lease heartbeat; daemon shutdown releases read leases and promotes unfinished writes to recovery without deleting them. On the WSL Linux host, a systemd user service is the default lifecycle manager; a system service is also supported as an installation choice. GCS credentials use standard Application Default Credentials and are not persisted in repository configuration.
+    statement: Normal operation has one nando daemon as the execution owner of a Repository for the Phase A single-user, local-host deployment. The daemon constructs Metadata Store, Object Store, coordination, and Repository once, and serves peer CLI, FUSE, and WebDAV client processes. JSON-RPC 2.0 control messages use HTTP POST /rpc over configurable UDS or TCP; Phase A standard operation uses the per-user Unix-domain socket protected by a private parent directory (0700) and socket mode 0600. TCP support is retained and is rejected unless TLS and bearer authentication are configured, but TCP bind and credential lifecycle operations are outside standard Phase A acceptance. Phase A makes no guarantee of external exposure or multiple-OS-user authorization. The daemon owns Resource sessions, finite expiry, explicit renewal/revocation, and durable staging recovery. Expiry stops read-session repository-lease heartbeat; daemon shutdown releases read leases and promotes unfinished writes to recovery without deleting them. On the WSL Linux host, a systemd user service is the default lifecycle manager; a system service is also supported as an installation choice. GCS credentials use standard Application Default Credentials and are not persisted in repository configuration.
     attributes:
       default_host: WSL-Linux
       default_service_scope: systemd-user
@@ -334,7 +334,12 @@ nodes:
       control_framing: HTTP-POST-/rpc
       control_transports: [Unix-domain-socket, TCP]
       default_transport: Unix-domain-socket
+      phase_a_standard_transport: Unix-domain-socket
+      phase_a_security_boundary: [single-OS-user, local-host, parent-directory-0700, socket-0600]
       tcp_requires: [TLS, bearer-authentication]
+      tcp_security_operations_in_phase_a: false
+      multi-user-authorization: deferred
+      external-client-exposure: deferred
       cli_protocol: JSON-RPC-2.0
       client_processes: [CLI, FUSE, WebDAV]
       daemon_owned: [Repository, Resource-sessions, Commit, Abort, Release, Renew, Revoke, Recovery]
@@ -358,7 +363,9 @@ nodes:
       webdav_put_commit_boundary: daemon-Commit-before-success-response
       webdav_etag: stable-Entry-ID-and-committed-revision
       webdav_conditional_put: If-Match-and-If-None-Match-against-Begin-CAS-snapshot
-      webdav_phase_a_listener: loopback-only-HTTP; authentication-and-TLS-policy-unresolved
+      webdav_phase_a_listener: loopback-only-HTTP; no-client-authentication; no-TLS; external-exposure-deferred
+      webdav_phase_a_clients: same-local-user-only
+      webdav_conditional_write_policy: If-Match-and-If-None-Match-against-Begin-CAS-snapshot; reject-unsupported-conditions
       webdav_unsupported_until-contract-defined: [LOCK, UNLOCK, PROPPATCH, dead-properties, directory-COPY, COPY-overwrite, MOVE-overwrite]
       fuse_fsync: durable-Local-Object-and-atomic-Metadata-plus-delivery-obligation
       fuse_release_is_commit_boundary: true
@@ -826,14 +833,20 @@ nodes:
   - id: DES-PHASE-A-DAEMON
     level: system_design
     kind: roadmap-phase
-    statement: Phase A delivers one WSL Linux daemon with SQLite Metadata, Local durable commits, immediate single-daemon visibility, configurable UDS/TCP JSON-RPC 2.0 control transport (UDS default; TCP requires TLS and authentication), daemon-owned Resource sessions, and local file:// Resource URIs. CLI, FUSE, and WebDAV are client processes; FUSE and WebDAV are separate Go modules and executables. The phase includes read-write FUSE/WebDAV clients and idle-scheduled GCS replication using ADC, but their complete implementations may be delivered incrementally. It does not implement Firestore, multiple daemons, globally published heads, remote Resource transfer, cross-platform runtime support, or Cloud Run deployment.
+    statement: Phase A delivers one WSL Linux daemon for single-user local-host operation with SQLite Metadata, Local durable commits, immediate single-daemon visibility, standard per-user Unix-domain-socket JSON-RPC 2.0 (private parent directory mode 0700 and socket mode 0600), daemon-owned Resource sessions, and local file:// Resource URIs. TCP support remains available only with TLS and bearer authentication but its bind/certificate/token operations are outside standard Phase A operation. CLI, FUSE, and WebDAV are client processes; FUSE and WebDAV are separate Go modules and executables. The phase includes read-write FUSE/WebDAV clients and idle-scheduled GCS replication using ADC, but their complete implementations may be delivered incrementally. WebDAV is plain HTTP restricted to loopback and serves the same local OS user; external publication, client authentication, TLS termination, and multi-user authorization are deferred. WebDAV PUT supports If-Match and If-None-Match against the Begin-time Repository CAS snapshot; unsupported conditional headers are explicitly rejected. It does not implement Firestore, multiple daemons, globally published heads, remote Resource transfer, cross-platform runtime support, or Cloud Run deployment.
     attributes:
       roadmap_phase: A
       phase_status: planned
-      includes: [single-daemon, SQLite, Local-immediate-visibility, JSON-RPC-UDS-or-TCP, daemon-owned-resource-sessions, file-Resource-URIs, separate-FUSE-module-and-process, separate-WebDAV-module-and-process, idle-GCS-sync, ADC]
-      excludes: [Firestore, multiple-daemons, Published-Head, remote-Resource-transfer, cross-platform, Cloud-Run]
+      includes: [single-daemon, single-user-local-host, SQLite, Local-immediate-visibility, standard-JSON-RPC-UDS, daemon-owned-resource-sessions, file-Resource-URIs, separate-FUSE-module-and-process, separate-WebDAV-module-and-process, loopback-HTTP-WebDAV, Begin-CAS-conditional-PUT, idle-GCS-sync, ADC]
+      excludes: [external-client-exposure, multi-user-authorization, WebDAV-client-authentication, WebDAV-TLS-termination, standard-TCP-operations, Firestore, multiple-daemons, Published-Head, remote-Resource-transfer, cross-platform, Cloud-Run]
       commit_boundary: [durable-Local-Object, atomic-Metadata-and-delivery-obligation]
       gcs_scheduler_settings: [idle-interval, periodic-check-interval, maximum-delivery-delay, parallelism]
+      exit_criteria:
+        - standard daemon clients use a per-user Unix socket under a private 0700 parent and the socket has mode 0600
+        - WebDAV rejects non-loopback bind addresses and exposes no client-authentication or TLS claim
+        - WebDAV If-Match and If-None-Match are evaluated against the Begin-time CAS snapshot and Commit conflict returns a precondition failure
+        - unsupported WebDAV conditional headers are explicitly rejected rather than silently ignored
+        - TCP listener remains unavailable unless TLS and bearer authentication are configured; TCP credential lifecycle is not a standard Phase A acceptance item
     provenance:
       origin: human-authored
   - id: DES-PHASE-B-PUBLISHED-HEAD
@@ -1425,7 +1438,7 @@ open_items:
     status: open
     related_refs: [REQ-METADATA-BACKUP-RESPONSIBILITY, DES-METADATA-BACKEND-PORTABILITY, DES-REPLICATION-STATE]
   - id: OPEN-ADAPTER-AUTHORIZATION
-    statement: Define Unix-domain-socket ownership, mode, and peer authorization for all clients, including systemd user versus system service deployment. For TCP define bind-address policy, TLS certificate trust/rotation, bearer-token provisioning/rotation, and whether per-method authorization is needed. Define WebDAV's own bind/authentication/TLS policy and conditional write requirements. TCP must remain unavailable without TLS and authentication. ADC supplies GCS credentials only and is not client authorization.
+    statement: "The user-approved Phase A decision is single-user local-host operation: daemon Unix sockets use OS permissions with a private 0700 parent and 0600 socket; WebDAV is unauthenticated plain HTTP bound only to loopback; external exposure, multiple-user authorization, WebDAV client authentication, and WebDAV TLS termination are deferred. WebDAV If-Match and If-None-Match use ETags from the Begin-time CAS snapshot, and unsupported conditional headers are rejected. Standard Phase A operation uses UDS; the existing optional TCP listener still requires TLS and bearer authentication, but TCP bind, certificate trust/rotation, token provisioning/rotation, and per-method authorization are not standard Phase A acceptance items. This open item tracks only decisions needed if a future phase expands beyond the approved boundary. ADC supplies GCS credentials only and is not client authorization."
     status: open
     related_refs: [DES-DAEMON-RUNTIME, DES-ADAPTERS-FILESYSTEM]
   - id: OPEN-PHASE-B-PUBLISH-ATOMICITY

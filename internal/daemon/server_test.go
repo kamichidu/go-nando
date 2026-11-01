@@ -41,7 +41,7 @@ func TestDaemonWriteResourceVerticalSlice(t *testing.T) {
 		}
 	}()
 
-	socketPath := filepath.Join(t.TempDir(), "nando.sock")
+	socketPath := filepath.Join(t.TempDir(), "socket", "nando.sock")
 	endpoint := (&url.URL{Scheme: "unix", Path: socketPath}).String()
 	serveCtx, cancel := context.WithCancel(ctx)
 	serveErr := make(chan error, 1)
@@ -479,7 +479,7 @@ func TestReadResourceLeaseProtectsObjectUntilRelease(t *testing.T) {
 		t.Fatalf("stat initial file: entry=%+v err=%v", oldEntry, err)
 	}
 
-	socketPath := filepath.Join(t.TempDir(), "nando.sock")
+	socketPath := filepath.Join(t.TempDir(), "socket", "nando.sock")
 	endpoint := (&url.URL{Scheme: "unix", Path: socketPath}).String()
 	serveCtx, cancel := context.WithCancel(ctx)
 	serveErr := make(chan error, 1)

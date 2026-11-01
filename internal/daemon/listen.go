@@ -33,6 +33,13 @@ func listen(config ListenConfig) (net.Listener, error) {
 		if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
 			return nil, fmt.Errorf("create socket directory: %w", err)
 		}
+		directoryInfo, err := os.Stat(filepath.Dir(socketPath))
+		if err != nil {
+			return nil, fmt.Errorf("inspect socket directory: %w", err)
+		}
+		if !directoryInfo.IsDir() || directoryInfo.Mode().Perm() != 0700 {
+			return nil, fmt.Errorf("unix socket parent directory %q must be private (mode 0700)", filepath.Dir(socketPath))
+		}
 		listener, err := net.Listen("unix", socketPath)
 		if err != nil {
 			return nil, fmt.Errorf("listen on Unix socket: %w", err)

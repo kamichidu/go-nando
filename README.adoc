@@ -28,7 +28,7 @@ Docker Compose starts only fake GCS; the daemon, real FUSE mount, WebDAV adapter
 
 == WebDAV Phase A
 
-WebDAV is a separate Go module and process. Build it with `cd webdav && go build ./cmd/nando-webdav`. It connects to the daemon using public controlrpc and daemon-issued `file://` Resource URIs only. The Phase A server binds to loopback HTTP only; remote exposure is rejected until authentication and TLS policy are decided. Supported operations, ETag conditions, and deliberate protocol gaps are documented in link:docs/webdav-phase-a.adoc[WebDAV Phase A].
+WebDAV is a separate Go module and process. Build it with `cd webdav && go build ./cmd/nando-webdav`. It connects to the daemon using public controlrpc and daemon-issued `file://` Resource URIs only. Approved Phase A operation is single-user and local-host only: the daemon uses a per-user Unix socket (private parent mode 0700, socket mode 0600), while WebDAV serves unauthenticated plain HTTP on loopback only. External exposure, multi-user authorization, WebDAV client authentication, and TLS termination are deferred. Supported conditional PUT headers and deliberate protocol gaps are documented in link:docs/webdav-phase-a.adoc[WebDAV Phase A].
 
 == Daemon maintenance scheduling
 

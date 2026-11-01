@@ -29,6 +29,9 @@ printf 'winner\n' >"$TMP/winner"
 request 412 -X PUT -H 'If-Match: "stale"' --data-binary @"$TMP/winner" "$E2E_WEBDAV_URL/file"
 request 200 "$E2E_WEBDAV_URL/file"; cmp "$TMP/payload" "$TMP/body"
 request 412 -X PUT -H 'If-None-Match: *' --data-binary @"$TMP/winner" "$E2E_WEBDAV_URL/file"
+request 501 -X PUT -H 'If: (<opaquelocktoken:unsupported>)' --data-binary @"$TMP/winner" "$E2E_WEBDAV_URL/file"
+request 200 "$E2E_WEBDAV_URL/file"; cmp "$TMP/payload" "$TMP/body"
+request 501 -X PUT -H 'If-Modified-Since: Thu, 02 Jan 2025 03:04:05 GMT' --data-binary @"$TMP/winner" "$E2E_WEBDAV_URL/file"
 request 204 -X PUT -H "If-Match: $ETAG" --data-binary @"$TMP/winner" "$E2E_WEBDAV_URL/file"
 request 200 "$E2E_WEBDAV_URL/file"; cmp "$TMP/winner" "$TMP/body"
 request 201 -X MKCOL "$E2E_WEBDAV_URL/collection"
@@ -51,7 +54,7 @@ RESULTS=${E2E_ARTIFACTS_DIR:-$TMP}/webdav-results.tsv
 record() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" | tee -a "$RESULTS"; }
 : >"$RESULTS"
 record curl-basic PASS 'GET/HEAD/PUT/DELETE/MKCOL and repository bytes verified'
-record curl-http PASS 'OPTIONS, ETag, If-Match and If-None-Match verified over HTTP'
+record curl-http PASS 'OPTIONS, ETag and supported ETag conditions verified; unsupported DAV/HTTP PUT conditions explicitly rejected'
 record curl-propfind PASS 'PROPFIND depth 1 returned a 207 multistatus including the created collection'
 record curl-file-copymove PASS 'file COPY to absent destination and MOVE verified; overwrite remains unsupported'
 record curl-locks SKIP 'LOCK/UNLOCK are deliberately unsupported; a separate assertion confirmed 501'

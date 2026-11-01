@@ -204,7 +204,10 @@ func TestPutUsesDaemonResourceSession(t *testing.T) {
 
 func TestTOMLConfigSelectsRepositoryAndSharedDaemonEndpoint(t *testing.T) {
 	repoDir := filepath.Join(t.TempDir(), "configured-repository")
-	socketDir := t.TempDir()
+	socketDir := filepath.Join(t.TempDir(), "socket")
+	if err := os.Mkdir(socketDir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	// Use a test-owned absolute socket path as the configured endpoint.
 	endpoint := "unix://" + filepath.Join(socketDir, "configured.sock")
 	configPath := filepath.Join(t.TempDir(), "config.toml")

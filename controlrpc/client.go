@@ -173,6 +173,9 @@ func DefaultEndpoint(repoDir string) (string, error) {
 	if err := os.MkdirAll(base, 0700); err != nil {
 		return "", fmt.Errorf("create daemon socket directory: %w", err)
 	}
+	if err := os.Chmod(base, 0700); err != nil {
+		return "", fmt.Errorf("restrict daemon socket directory permissions: %w", err)
+	}
 	digest := sha256.Sum256([]byte(filepath.Clean(absolute)))
 	socketPath := filepath.Join(base, fmt.Sprintf("%x.sock", digest[:10]))
 	return (&url.URL{Scheme: "unix", Opaque: socketPath}).String(), nil

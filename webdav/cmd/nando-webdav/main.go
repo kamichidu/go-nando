@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -36,10 +38,8 @@ func main() {
 	if address == "" {
 		log.Fatal("-listen is required")
 	}
-	host, _, splitErr := net.SplitHostPort(address)
-	ip := net.ParseIP(host)
-	if splitErr != nil || (host != "localhost" && (ip == nil || !ip.IsLoopback())) {
-		log.Fatal("Phase A WebDAV must bind to a loopback address")
+	if err := validateLoopbackAddress(address); err != nil {
+		log.Fatal(err)
 	}
 	config := controlrpc.ClientConfig{Endpoint: endpoint}
 	if tokenFile != "" {
@@ -75,4 +75,35 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+func validateLoopbackAddress(address string) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("invalid WebDAV listen address %q: %w", address, err)
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() {
+			return nil
+		}
+		return fmt.Errorf("phase A WebDAV must bind to a loopback address")
+	}
+	if !strings.EqualFold(host, "localhost") {
+		return fmt.Errorf("phase A WebDAV must bind to a loopback address")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return fmt.Errorf("resolve WebDAV loopback host %q: %w", host, err)
+	}
+	if len(addresses) == 0 {
+		return fmt.Errorf("WebDAV host %q has no addresses", host)
+	}
+	for _, address := range addresses {
+		if !address.IP.IsLoopback() {
+			return fmt.Errorf("phase A WebDAV host %q resolves outside loopback", host)
+		}
+	}
+	return nil
 }

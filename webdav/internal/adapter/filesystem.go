@@ -287,6 +287,10 @@ func translate(err error) error {
 }
 
 func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
+	if header := unsupportedPutPrecondition(r); header != "" {
+		http.Error(w, "conditional header is unsupported for Phase A PUT: "+header, http.StatusNotImplemented)
+		return
+	}
 	p, err := cleanName(r.URL.Path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -338,6 +342,15 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func unsupportedPutPrecondition(r *http.Request) string {
+	for _, header := range []string{"If", "If-Modified-Since", "If-Range"} {
+		if len(r.Header.Values(header)) != 0 {
+			return header
+		}
+	}
+	return ""
 }
 
 func (h *Handler) mkcol(w http.ResponseWriter, r *http.Request) {
