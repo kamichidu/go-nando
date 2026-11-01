@@ -353,6 +353,13 @@ nodes:
     attributes:
       fuse_access: read-write
       webdav_access: read-write
+      webdav_process_and_module: separate-peer-of-daemon
+      webdav_http_methods: [GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, file-COPY]
+      webdav_put_commit_boundary: daemon-Commit-before-success-response
+      webdav_etag: stable-Entry-ID-and-committed-revision
+      webdav_conditional_put: If-Match-and-If-None-Match-against-Begin-CAS-snapshot
+      webdav_phase_a_listener: loopback-only-HTTP; authentication-and-TLS-policy-unresolved
+      webdav_unsupported_until-contract-defined: [LOCK, UNLOCK, PROPPATCH, dead-properties, directory-COPY, COPY-overwrite, MOVE-overwrite]
       fuse_fsync: durable-Local-Object-and-atomic-Metadata-plus-delivery-obligation
       fuse_release_is_commit_boundary: true
       fuse_release_order: Commit-dirty-staging-before-Resource-Release

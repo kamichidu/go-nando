@@ -17,6 +17,7 @@ touch "$GATES"
 export E2E_ARTIFACTS_DIR="$ARTIFACTS"
 export E2E_NANDO_BIN="$ARTIFACTS/bin/nando"
 export E2E_FUSE_BIN="$ARTIFACTS/bin/nando-fuse"
+export E2E_WEBDAV_BIN="$ARTIFACTS/bin/nando-webdav"
 export E2E_SOCKET="$ARTIFACTS/run/nando.sock"
 export E2E_REPOSITORY="$ARTIFACTS/state/local/repository"
 export E2E_PROJECT="$PROJECT"
@@ -57,7 +58,7 @@ cleanup() {
     timeout -k 5s 35s "${COMPOSE[@]}" down --volumes --remove-orphans --timeout 8 >"$ARTIFACTS/compose-down.log" 2>&1
     if (($? != 0)); then mark CLEANUP FAIL "compose down failed; see compose-down.log"; overall=1; fi
   fi
-  for gate in G0 G1 G2 G3; do
+  for gate in G0 G1 G2 G3 G5; do
     if ! cut -f1 "$GATES" | rg -qx "$gate"; then mark "$gate" SKIP "stopped before this gate ran"; fi
   done
   if ((STRESS)) && ! cut -f1 "$GATES" | rg -qx G4; then mark G4 SKIP "stress requested but prerequisites did not complete"; fi
@@ -74,6 +75,7 @@ if ! command -v fusermount3 >/dev/null || [[ ! -c /dev/fuse || ! -r /dev/fuse ||
   mark G1 SKIP "host /dev/fuse or fusermount3 unavailable"
   mark G2 SKIP "native real FUSE runner unavailable"
   mark G3 SKIP "native real FUSE runner unavailable"
+  mark G5 SKIP "native Linux/WSL E2E prerequisites unavailable"
   exit 2
 fi
 if [[ ! -d "$DESIGN_IR_REPO/.git" || "$(git -C "$DESIGN_IR_REPO" rev-parse HEAD 2>/dev/null || true)" != "$DESIGN_IR_COMMIT" ]]; then
@@ -178,3 +180,27 @@ if ((STRESS)); then
     python3 "$5/e2e/runner.py" g4
   ' _ "$E2E_NANDO_BIN" "$E2E_REPOSITORY" "$E2E_SOCKET" "$ARTIFACTS" "$ROOT"; then exit 1; fi
 fi
+
+if ! run_gate G5 "host-native WebDAV HTTP methods, validators, and contract-boundary responses" 180 bash -c '
+  set -Eeuo pipefail
+  socket="$4/run/webdav.sock"
+  port=$(python3 -c "import socket; s=socket.socket(); s.bind((\"127.0.0.1\",0)); print(s.getsockname()[1]); s.close()")
+  address="127.0.0.1:$port"
+  setsid "$1" --repository "$2" daemon --listen "unix://$socket" >"$4/daemon-webdav.log" 2>&1 & daemon=$!
+  webdav=""
+  cleanup_webdav() {
+    if [[ -n "$webdav" ]]; then kill -TERM "$webdav" 2>/dev/null || true; wait "$webdav" 2>/dev/null || true; fi
+    kill -TERM "$daemon" 2>/dev/null || true; wait "$daemon" 2>/dev/null || true
+  }
+  trap cleanup_webdav EXIT
+  export E2E_SOCKET="$socket"
+  python3 "$5/e2e/runner.py" wait-daemon
+  setsid "$6" --endpoint "unix://$socket" --listen "$address" >"$4/webdav.log" 2>&1 & webdav=$!
+  export E2E_WEBDAV_URL="http://$address"
+  deadline=$((SECONDS+15))
+  until curl --silent --show-error --max-time 1 -X OPTIONS "$E2E_WEBDAV_URL/" >/dev/null 2>&1; do
+    if ((SECONDS >= deadline)); then cat "$4/webdav.log" >&2; exit 1; fi
+    sleep 0.1
+  done
+  "$5/e2e/webdav-http.sh"
+' _ "$E2E_NANDO_BIN" "$E2E_REPOSITORY" "$E2E_SOCKET" "$ARTIFACTS" "$ROOT" "$E2E_WEBDAV_BIN"; then exit 1; fi

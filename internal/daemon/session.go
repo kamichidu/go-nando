@@ -238,7 +238,12 @@ func (m *sessionManager) createWriteSession(normalized string, expectation repos
 	m.sessions[id] = session
 	m.mu.Unlock()
 	resourceURL := (&url.URL{Scheme: "file", Path: resourcePath}).String()
-	return controlrpc.BeginWriteResult{SessionID: id, ResourceURI: resourceURL}, nil
+	return controlrpc.BeginWriteResult{
+		SessionID: id, ResourceURI: resourceURL,
+		ExpectedEntryID: string(expectation.EntryID), ExpectedRevision: expectation.Revision,
+		ExpectedMtime: int64(observedEntry.Mtime),
+		MustBeAbsent:  expectation.EntryID == "",
+	}, nil
 }
 
 func (m *sessionManager) renew(id string) (time.Time, error) {

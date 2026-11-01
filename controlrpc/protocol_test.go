@@ -3,6 +3,7 @@ package controlrpc
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -10,6 +11,19 @@ func TestClientRejectsEmptyMethod(t *testing.T) {
 	client := &Client{}
 	if err := client.Call(context.Background(), "", struct{}{}, nil); err == nil {
 		t.Fatal("empty JSON-RPC method succeeded")
+	}
+}
+
+func TestBeginWriteResultCarriesBeginTimePreconditionSnapshot(t *testing.T) {
+	got, err := json.Marshal(BeginWriteResult{SessionID: "s", ResourceURI: "file:///tmp/staging", ExpectedEntryID: "entry", ExpectedRevision: 7, ExpectedMtime: 123, MustBeAbsent: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFields := []string{`"expected_entry_id":"entry"`, `"expected_revision":7`, `"expected_mtime":123`, `"must_be_absent":false`}
+	for _, field := range wantFields {
+		if !strings.Contains(string(got), field) {
+			t.Fatalf("BeginWriteResult missing %s in %s", field, got)
+		}
 	}
 }
 

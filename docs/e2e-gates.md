@@ -1,6 +1,6 @@
 = Reproducible E2E gates
 
-`e2e/run.sh` is the host one-command entry point for G0-G3. Docker Compose owns only the pinned `fake-gcs-server` external dependency. Go checks, `nando`, `nando-fuse`, and the Python scenario runner execute directly on the Linux/WSL host. The gate never mounts FUSE inside a container, requests `privileged`, or grants a container mount capabilities.
+`e2e/run.sh` is the host one-command entry point for G0-G3 plus WebDAV G5. Docker Compose owns only the pinned `fake-gcs-server` external dependency. Go checks, `nando`, `nando-fuse`, `nando-webdav`, and the scenario runner execute directly on the Linux/WSL host. The gate never mounts FUSE inside a container, requests `privileged`, or grants a container mount capabilities.
 
 Run the required gates:
 
@@ -13,7 +13,7 @@ Run the optional bounded writer stress profile with `e2e/run.sh --stress`.
 
 == Requirements and lifecycle
 
-The host needs Go 1.25.1, Python 3, Docker Compose v2, `golangci-lint`, `fusermount3`, and a readable/writable `/dev/fuse` that permits a real host mount. The validator checkout must be at commit `455ed318b7bc409d3e1da320620ef92d457042b9`; set `DESIGN_IR_REPO` to its path if it is not `../design-ir`.
+The host needs Go 1.25.1, Python 3, curl, Docker Compose v2, `golangci-lint`, `fusermount3`, and a readable/writable `/dev/fuse` that permits a real host mount. The validator checkout must be at commit `455ed318b7bc409d3e1da320620ef92d457042b9`; set `DESIGN_IR_REPO` to its path if it is not `../design-ir`.
 
 Every run creates an isolated temporary evidence and repository directory and a unique Compose project. The command starts fake GCS, then G0 runs root and FUSE-module unit and race tests, the repository lint configuration and lint checks for both modules, native binary builds, and the pinned Design IR validator. G1 uses only a Local-mode repository and makes no GCS requests. G2 uses a project-scoped named volume and loopback-only host port to test fake GCS delivery, outage, restart, and retry. A host-only HTTP fault proxy holds the successful upload response after fake GCS has durably accepted one object; the gate kills the daemon before the response can acknowledge transfer completion, restarts it, and verifies an actual replay keeps the same generation and single object name. The proxy is test infrastructure only; it adds no production hook. Native binaries use the isolated repositories and Unix sockets. Exit cleanup discovers only processes whose executable arguments refer to that run's artifact directory, terminates their process groups or recorded proxy PID with deadlines, unmounts only mounts under that directory, reports D-state processes, captures Compose status and logs, and runs `docker compose down --volumes --remove-orphans`. Any remaining process, mount, or cleanup failure makes the command fail. Evidence remains under the printed `/tmp/go-nando-e2e.*` path. No existing repository state or volume is reused.
 
@@ -26,7 +26,7 @@ Missing FUSE prerequisites produce G1-G3 `SKIP` and a nonzero overall result. A 
 
 |G0 `G0-static`
 |Native static and module checks
-|Root and FUSE `go test ./...`, `go test -race ./...`, `golangci-lint config verify`, `golangci-lint run ./...`, native binary builds, and pinned Design IR validation all succeed.
+|Root, FUSE, and WebDAV module tests and race tests, lint configuration and checks, native binary builds, and pinned Design IR validation all succeed.
 
 |G1 `G1-01`
 |CRUD and namespace
@@ -95,6 +95,9 @@ Missing FUSE prerequisites produce G1-G3 `SKIP` and a nonzero overall result. A 
 |G4 `G4-01` (optional)
 |Bounded stress
 |A 2 MiB binary file is fsynced, truncated, then modified through eight simultaneous handles at seeded random offsets; final length and SHA-256 must match an independent byte-array oracle.
+|G5 `G5-01`
+|WebDAV HTTP interoperability smoke check
+|Host curl verifies OPTIONS, GET/HEAD and ETag, PUT with If-Match/If-None-Match, MKCOL/PROPFIND, MOVE, file COPY to an absent path, DELETE, and explicit 501 responses for LOCK/PROPPATCH.
 |===
 
 == Emulator scope
@@ -104,3 +107,7 @@ The daemon uses the normal production Cloud Storage client with `STORAGE_EMULATO
 == Design reference note
 
 The supplied repository workflow names `docs/index.adoc`, but it was absent when this gate was added. `docs/design.ir.yaml` remains the semantic authority already named by `README.adoc`; no architecture was inferred from the implementation. The scenario contract has been added there as `REQ-REPRODUCIBLE-E2E-GATES`.
+
+== WebDAV G5
+
+`e2e/run.sh` also builds and lint-checks the separate `webdav/` module at G0 and runs G5 on the Linux/WSL host. G5 starts the daemon and WebDAV executable natively and uses curl to check OPTIONS, GET/HEAD, PUT conditional validators, MKCOL/PROPFIND, MOVE, file COPY to an absent destination, DELETE, and explicit 501 responses for LOCK and PROPPATCH. It does not claim full DAV compliance; unsupported LOCK/dead-property/replacement semantics are documented in `webdav-phase-a.adoc`.

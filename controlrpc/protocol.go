@@ -52,8 +52,12 @@ const (
 )
 
 type BeginWriteResult struct {
-	SessionID   string `json:"session_id"`
-	ResourceURI string `json:"resource_uri"`
+	SessionID        string `json:"session_id"`
+	ResourceURI      string `json:"resource_uri"`
+	ExpectedEntryID  string `json:"expected_entry_id,omitempty"`
+	ExpectedRevision uint64 `json:"expected_revision"`
+	ExpectedMtime    int64  `json:"expected_mtime"`
+	MustBeAbsent     bool   `json:"must_be_absent"`
 }
 
 type BeginWriteParams struct {

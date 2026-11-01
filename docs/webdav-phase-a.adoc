@@ -1,0 +1,52 @@
+= WebDAV Phase A
+
+The adapter in `webdav/` is a separate Go module and executable process, parallel to FUSE. It depends on the public `controlrpc` contract only. File bytes move through daemon-issued local `file://` Resources; all namespace mutations and commits remain daemon-owned.
+
+== Runtime boundary
+
+The executable defaults to `127.0.0.1:8080` and rejects non-loopback listen addresses. It serves HTTP without client authentication. The Design IR still records the WebDAV authentication/TLS policy as an unresolved deployment decision; until that decision is made, the adapter cannot be exposed beyond the local host. The daemon endpoint may be its default Unix socket or a configured authenticated TLS endpoint.
+
+`PUT` obtains a Begin write session, evaluates `If-Match`, `If-None-Match`, and `If-Unmodified-Since` against the Begin-time expectation, writes and syncs the staging Resource, and returns success only after daemon Commit succeeds. A conditional mismatch aborts the uncommitted session. A Commit conflict is returned as HTTP 412 and is never retried against a newer Entry revision. ETags are strong validators composed from stable Entry ID and committed revision. GET/HEAD and PROPFIND use daemon Entry metadata and read Resource sessions; active reads are released when the HTTP file closes.
+
+== Phase A method surface
+
+[cols="1,2"]
+|===
+|Method |Behavior
+
+|GET, HEAD
+|Read file bytes; x/net/webdav handles HTTP range and date validators.
+
+|OPTIONS
+|Advertises DAV class 1 and the supported method list.
+
+|PROPFIND
+|Lists the repository hierarchy and live properties using x/net/webdav XML support.
+
+|PUT
+|Full-file replacement/create with Commit-before-success and HTTP entity-tag/date preconditions.
+
+|DELETE, MKCOL
+|Daemon-owned namespace remove/create operations.
+
+|MOVE
+|Daemon-owned path move; occupied destinations fail. Replacement is not implied.
+
+|COPY
+|File-to-absent-path copy using read and write Resource sessions, followed by Commit. Directory copy is unsupported.
+
+|LOCK, UNLOCK
+|501 Not Implemented. The design does not select lock persistence, scope, or interaction with repository CAS.
+
+|PROPPATCH / dead properties
+|501 Not Implemented. The repository has no authoritative dead-property store or persistence contract.
+
+|COPY overwrite / MOVE overwrite
+|Existing destinations are rejected or reported unsupported. Repository replacement semantics for these WebDAV operations are not specified.
+|===
+
+The adapter evaluates WebDAV entity-tag conditions against the same Begin-time CAS snapshot used by Commit, avoiding a Stat/Begin race. A concurrent update after Begin therefore fails repository CAS rather than overwriting newer content. Entry conflicts map to HTTP 412; absent resources map to 404; namespace collisions map to 412 or 405 according to the operation surface.
+
+== Validation
+
+`e2e/run.sh` adds host-native G5 curl coverage for OPTIONS, GET/HEAD, PUT, ETags and conditional PUT, MKCOL/PROPFIND, MOVE, file COPY, DELETE, and explicit unsupported-method responses. G0 includes tests, race, lint, and build for the independent module. cadaver and Litmus are not declared passing by the curl gate; full WebDAV compliance remains unverified because Phase A intentionally lacks locks, dead properties, and replacement COPY semantics.
