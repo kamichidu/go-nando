@@ -107,6 +107,19 @@ func (r *Repository) DeriveCanonicalPath(ctx context.Context, entry metadata.Ent
 	return "/" + strings.Join(parts, "/"), nil
 }
 
+// ResolveEntry returns an Entry and its current logical path by stable ID.
+func (r *Repository) ResolveEntry(ctx context.Context, id metadata.EntryID) (metadata.Entry, string, error) {
+	entry, err := r.metaStore.GetByID(ctx, id)
+	if err != nil {
+		return metadata.Entry{}, "", err
+	}
+	currentPath, err := r.DeriveCanonicalPath(ctx, entry)
+	if err != nil {
+		return metadata.Entry{}, "", err
+	}
+	return entry, currentPath, nil
+}
+
 // resolveOrCreateParentDirectories takes a normalized logical path,
 // traverses the ancestry from root, and implicitly creates any missing parent directories.
 // It returns the ID of the parent directory of the final component, or an error.
@@ -202,6 +215,19 @@ func (r *Repository) BeginReadResource(ctx context.Context, repoPath string) (me
 	if err != nil {
 		return metadata.Entry{}, "", nil, err
 	}
+	return r.beginReadEntryResource(ctx, repoPath, entry)
+}
+
+// BeginReadEntryResource opens an immutable Resource by stable Entry ID.
+func (r *Repository) BeginReadEntryResource(ctx context.Context, id metadata.EntryID) (metadata.Entry, string, func() error, error) {
+	entry, currentPath, err := r.ResolveEntry(ctx, id)
+	if err != nil {
+		return metadata.Entry{}, "", nil, err
+	}
+	return r.beginReadEntryResource(ctx, currentPath, entry)
+}
+
+func (r *Repository) beginReadEntryResource(ctx context.Context, repoPath string, entry metadata.Entry) (metadata.Entry, string, func() error, error) {
 	if entry.Kind != metadata.EntryKindFile || entry.ObjectID == nil {
 		return metadata.Entry{}, "", nil, fmt.Errorf("repository path %q is not a readable file: %w", repoPath, metadata.ErrEntryConflict)
 	}

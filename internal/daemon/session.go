@@ -35,10 +35,13 @@ type recoveryRecord struct {
 	Version        int                       `json:"version"`
 	Committed      bool                      `json:"committed"`
 	Discarding     bool                      `json:"discarding,omitempty"`
+	FollowEntryID  bool                      `json:"follow_entry_id,omitempty"`
+	UnlinkEntryID  metadata.EntryID          `json:"unlink_entry_id,omitempty"`
 	SessionID      string                    `json:"session_id"`
 	StagingPath    string                    `json:"staging_path"`
 	RepositoryPath string                    `json:"repository_path"`
 	Expectation    repository.PutExpectation `json:"expectation"`
+	ObservedEntry  metadata.Entry            `json:"observed_entry,omitempty"`
 	FailureReason  string                    `json:"failure_reason"`
 	CreatedAt      time.Time                 `json:"created_at"`
 	UpdatedAt      time.Time                 `json:"updated_at"`
@@ -141,8 +144,16 @@ func newSessionManagerWithTTL(application repositoryUseCases, repoDir string, tt
 	return manager, nil
 }
 
-func (m *sessionManager) beginRead(ctx context.Context, repositoryPath string) (controlrpc.BeginReadResult, error) {
-	entry, resourcePath, release, err := m.app.BeginReadResource(ctx, repositoryPath)
+func (m *sessionManager) beginRead(ctx context.Context, repositoryPath string, entryIDs ...metadata.EntryID) (controlrpc.BeginReadResult, error) {
+	var entry metadata.Entry
+	var resourcePath string
+	var release func() error
+	var err error
+	if len(entryIDs) > 0 && entryIDs[0] != "" {
+		entry, resourcePath, release, err = m.app.BeginReadEntryResource(ctx, entryIDs[0])
+	} else {
+		entry, resourcePath, release, err = m.app.BeginReadResource(ctx, repositoryPath)
+	}
 	if err != nil {
 		return controlrpc.BeginReadResult{}, err
 	}
@@ -160,22 +171,39 @@ func (m *sessionManager) beginRead(ctx context.Context, repositoryPath string) (
 	return controlrpc.BeginReadResult{SessionID: id, ResourceURI: resourceURI, Entry: protocolEntry(entry)}, nil
 }
 
-func (m *sessionManager) beginWrite(ctx context.Context, repositoryPath string) (controlrpc.BeginWriteResult, error) {
+func (m *sessionManager) beginWrite(ctx context.Context, repositoryPath string, followEntryID ...bool) (controlrpc.BeginWriteResult, error) {
+	followID := len(followEntryID) > 0 && followEntryID[0]
 	normalized, err := paths.NormalizeLogicalPath(repositoryPath)
 	if err != nil || normalized == "/" {
 		return controlrpc.BeginWriteResult{}, fmt.Errorf("invalid write path %q", repositoryPath)
 	}
 	expectation := repository.PutExpectation{MustBeAbsent: true}
+	var observedEntry metadata.Entry
 	entry, err := m.app.Stat(ctx, normalized)
 	if err == nil {
 		if entry.Kind != metadata.EntryKindFile {
 			return controlrpc.BeginWriteResult{}, fmt.Errorf("write target is not a file: %w", metadata.ErrEntryConflict)
 		}
 		expectation = repository.PutExpectation{EntryID: entry.ID, Revision: entry.Revision}
+		observedEntry = entry
 	} else if !errors.Is(err, metadata.ErrEntryNotFound) {
 		return controlrpc.BeginWriteResult{}, fmt.Errorf("inspect write target: %w", err)
 	}
+	return m.createWriteSession(normalized, expectation, observedEntry, followID)
+}
 
+func (m *sessionManager) beginWriteEntry(ctx context.Context, entryID metadata.EntryID) (controlrpc.BeginWriteResult, error) {
+	entry, repositoryPath, err := m.app.ResolveEntry(ctx, entryID)
+	if err != nil {
+		return controlrpc.BeginWriteResult{}, err
+	}
+	if entry.Kind != metadata.EntryKindFile {
+		return controlrpc.BeginWriteResult{}, fmt.Errorf("write target is not a file: %w", metadata.ErrEntryConflict)
+	}
+	return m.createWriteSession(repositoryPath, repository.PutExpectation{EntryID: entry.ID, Revision: entry.Revision}, entry, true)
+}
+
+func (m *sessionManager) createWriteSession(normalized string, expectation repository.PutExpectation, observedEntry metadata.Entry, followID bool) (controlrpc.BeginWriteResult, error) {
 	id := uuid.NewString()
 	resourcePath := filepath.Join(m.directory, id+".stage")
 	file, err := os.OpenFile(resourcePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
@@ -187,7 +215,7 @@ func (m *sessionManager) beginWrite(ctx context.Context, repositoryPath string) 
 	}
 	now := time.Now().UTC()
 	session := &writeSession{recoveryRecord: recoveryRecord{
-		Version: 1, SessionID: id, StagingPath: resourcePath, RepositoryPath: normalized, Expectation: expectation,
+		Version: 1, SessionID: id, StagingPath: resourcePath, RepositoryPath: normalized, Expectation: expectation, FollowEntryID: followID && expectation.EntryID != "", ObservedEntry: observedEntry,
 		CreatedAt: now, UpdatedAt: now,
 	}, expiresAt: time.Now().Add(m.ttl)}
 	if err := m.persistRecord(&session.recoveryRecord); err != nil {
@@ -219,10 +247,6 @@ func (m *sessionManager) renew(id string) (time.Time, error) {
 			return time.Time{}, errSessionBusy
 		}
 		if session.committed {
-			m.mu.Unlock()
-			return time.Time{}, errSessionClosed
-		}
-		if session.Discarding {
 			m.mu.Unlock()
 			return time.Time{}, errSessionClosed
 		}
@@ -296,7 +320,12 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 
 	commitErr := m.files.SyncFile(session.StagingPath)
 	if commitErr == nil {
-		commitErr = m.app.PutExpected(ctx, app.PutInput{LocalPath: session.StagingPath, RepositoryPath: session.RepositoryPath}, session.Expectation)
+		input := app.PutInput{LocalPath: session.StagingPath, RepositoryPath: session.RepositoryPath}
+		if session.FollowEntryID {
+			commitErr = m.app.PutExpectedEntryID(ctx, input, session.ObservedEntry)
+		} else {
+			commitErr = m.app.PutExpected(ctx, input, session.Expectation)
+		}
 	}
 	if commitErr != nil {
 		preserveErr := m.preserve(&session.recoveryRecord, commitErr.Error())
@@ -367,7 +396,7 @@ func (m *sessionManager) abort(id string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("persist Abort intent: %w", err)
 	}
-	if err := m.cleanupDiscardedRecord(&session.recoveryRecord); err != nil {
+	if err := m.finishDiscardedRecord(&session.recoveryRecord); err != nil {
 		m.mu.Lock()
 		session.inFlight = false
 		m.mu.Unlock()
@@ -385,22 +414,32 @@ func (m *sessionManager) abort(id string) error {
 func (m *sessionManager) release(id string) error {
 	m.mu.Lock()
 	if session, ok := m.sessions[id]; ok {
-		if session.expired {
-			m.mu.Unlock()
-			return errSessionExpired
-		}
 		if session.inFlight {
 			m.mu.Unlock()
 			return errSessionBusy
+		}
+		if session.Discarding {
+			session.inFlight = true
+			m.mu.Unlock()
+			if err := m.finishDiscardedRecord(&session.recoveryRecord); err != nil {
+				m.mu.Lock()
+				session.inFlight = false
+				m.mu.Unlock()
+				return err
+			}
+			m.mu.Lock()
+			delete(m.sessions, id)
+			m.mu.Unlock()
+			return nil
+		}
+		if session.expired {
+			m.mu.Unlock()
+			return errSessionExpired
 		}
 		if session.committed {
 			delete(m.sessions, id)
 			m.mu.Unlock()
 			return nil
-		}
-		if session.Discarding {
-			m.mu.Unlock()
-			return errSessionClosed
 		}
 		session.inFlight = true
 		m.mu.Unlock()
@@ -415,6 +454,24 @@ func (m *sessionManager) release(id string) error {
 		}
 		m.mu.Unlock()
 		return err
+	}
+	if record, ok := m.recoveries[id]; ok && record.Discarding {
+		if record.inFlight {
+			m.mu.Unlock()
+			return errSessionBusy
+		}
+		record.inFlight = true
+		m.mu.Unlock()
+		if err := m.finishDiscardedRecord(record); err != nil {
+			m.mu.Lock()
+			record.inFlight = false
+			m.mu.Unlock()
+			return err
+		}
+		m.mu.Lock()
+		delete(m.recoveries, id)
+		m.mu.Unlock()
+		return nil
 	}
 	if session, ok := m.reads[id]; ok {
 		if session.inFlight {
@@ -434,6 +491,53 @@ func (m *sessionManager) release(id string) error {
 	}
 	m.mu.Unlock()
 	return nil
+}
+
+// markUnlinked durably records FUSE unlink's explicit discard intent while
+// leaving the staging path available to already-open file descriptors.
+func (m *sessionManager) markUnlinked(id string) error {
+	m.mu.Lock()
+	session, active := m.sessions[id]
+	var record *recoveryRecord
+	if active {
+		record = &session.recoveryRecord
+	} else {
+		record = m.recoveries[id]
+	}
+	if record == nil {
+		m.mu.Unlock()
+		return errSessionNotFound
+	}
+	if record.Committed {
+		m.mu.Unlock()
+		return nil
+	}
+	if record.inFlight {
+		m.mu.Unlock()
+		return errSessionBusy
+	}
+	if record.Discarding {
+		m.mu.Unlock()
+		return nil
+	}
+	record.inFlight = true
+	updated := *record
+	updated.Discarding = true
+	updated.UnlinkEntryID = record.Expectation.EntryID
+	updated.FailureReason = "FUSE Entry unlinked; discard after final handle close"
+	updated.UpdatedAt = time.Now().UTC()
+	m.mu.Unlock()
+	err := m.persistRecord(&updated)
+	m.mu.Lock()
+	if err == nil {
+		record.Discarding = true
+		record.UnlinkEntryID = updated.UnlinkEntryID
+		record.FailureReason = updated.FailureReason
+		record.UpdatedAt = updated.UpdatedAt
+	}
+	record.inFlight = false
+	m.mu.Unlock()
+	return err
 }
 
 func (m *sessionManager) revoke(id string) error {
@@ -512,7 +616,13 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 		m.recoveries[id] = record
 	}
 	m.mu.Unlock()
-	err := m.app.PutExpected(ctx, app.PutInput{LocalPath: record.StagingPath, RepositoryPath: record.RepositoryPath}, record.Expectation)
+	input := app.PutInput{LocalPath: record.StagingPath, RepositoryPath: record.RepositoryPath}
+	var err error
+	if record.FollowEntryID {
+		err = m.app.PutExpectedEntryID(ctx, input, record.ObservedEntry)
+	} else {
+		err = m.app.PutExpected(ctx, input, record.Expectation)
+	}
 	if err == nil {
 		if err := m.markCommitted(record); err == nil {
 			m.mu.Lock()
@@ -556,7 +666,7 @@ func (m *sessionManager) discardRecovery(id string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("persist recovery discard intent: %w", err)
 	}
-	if err := m.cleanupDiscardedRecord(record); err != nil {
+	if err := m.finishDiscardedRecord(record); err != nil {
 		m.mu.Lock()
 		record.inFlight = false
 		m.mu.Unlock()
@@ -639,6 +749,16 @@ func (m *sessionManager) finishExpiredWrite(id string, session *writeSession) er
 		}
 		return nil
 	}
+	if session.Discarding {
+		err := m.finishDiscardedRecord(&session.recoveryRecord)
+		m.mu.Lock()
+		session.inFlight = false
+		if err == nil {
+			delete(m.sessions, id)
+		}
+		m.mu.Unlock()
+		return err
+	}
 	err := m.preserve(&session.recoveryRecord, "Resource session expired before successful commit")
 	m.mu.Lock()
 	session.inFlight = false
@@ -694,7 +814,9 @@ func (m *sessionManager) persistRecord(record *recoveryRecord) error {
 }
 
 func (m *sessionManager) markDiscarding(record *recoveryRecord, reason string) error {
+	m.mu.Lock()
 	updated := *record
+	m.mu.Unlock()
 	updated.Discarding = true
 	updated.FailureReason = reason
 	updated.UpdatedAt = time.Now().UTC()
@@ -720,6 +842,20 @@ func (m *sessionManager) cleanupDiscardedRecord(record *recoveryRecord) error {
 		return err
 	}
 	return m.files.SyncDirectory(m.directory)
+}
+
+func (m *sessionManager) finishDiscardedRecord(record *recoveryRecord) error {
+	if record.UnlinkEntryID != "" {
+		_, _, err := m.app.ResolveEntry(context.Background(), record.UnlinkEntryID)
+		if err == nil {
+			if err := m.app.RemoveEntry(context.Background(), record.UnlinkEntryID); err != nil && !errors.Is(err, metadata.ErrEntryNotFound) {
+				return fmt.Errorf("finish unlink for Entry %s: %w", record.UnlinkEntryID, err)
+			}
+		} else if !errors.Is(err, metadata.ErrEntryNotFound) {
+			return fmt.Errorf("resolve unlink Entry %s: %w", record.UnlinkEntryID, err)
+		}
+	}
+	return m.cleanupDiscardedRecord(record)
 }
 
 func (m *sessionManager) markCommitted(record *recoveryRecord) error {
@@ -774,8 +910,8 @@ func (m *sessionManager) loadRecoveries() error {
 			continue
 		}
 		if record.Discarding {
-			if err := m.cleanupDiscardedRecord(&record); err != nil {
-				log.Printf("finish discarded Resource cleanup %s: %v", record.SessionID, err)
+			if err := m.finishDiscardedRecord(&record); err != nil {
+				return fmt.Errorf("finish discarded Resource cleanup %s: %w", record.SessionID, err)
 			}
 			continue
 		}
@@ -829,7 +965,7 @@ func (m *sessionManager) close() error {
 			continue
 		}
 		if session.Discarding {
-			if err := m.cleanupDiscardedRecord(&session.recoveryRecord); err != nil {
+			if err := m.finishDiscardedRecord(&session.recoveryRecord); err != nil {
 				failures = append(failures, err)
 				continue
 			}

@@ -26,6 +26,7 @@ type fakeRepositoryUseCases struct {
 	putStarted       chan struct{}
 	putContinue      chan struct{}
 	putErr           error
+	removeEntryErr   error
 }
 
 type failingSessionFiles struct {
@@ -90,6 +91,15 @@ func (f *fakeRepositoryUseCases) Stat(_ context.Context, path string) (metadata.
 	return *f.entry, nil
 }
 
+func (f *fakeRepositoryUseCases) ResolveEntry(_ context.Context, id metadata.EntryID) (metadata.Entry, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.entry == nil || f.entry.ID != id {
+		return metadata.Entry{}, "", metadata.ErrEntryNotFound
+	}
+	return *f.entry, "/file", nil
+}
+
 func (f *fakeRepositoryUseCases) List(_ context.Context, _ string) ([]metadata.Entry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -99,12 +109,29 @@ func (f *fakeRepositoryUseCases) List(_ context.Context, _ string) ([]metadata.E
 	return []metadata.Entry{*f.entry}, nil
 }
 
+func (f *fakeRepositoryUseCases) Mkdir(context.Context, string, uint32) error { return nil }
+
 func (f *fakeRepositoryUseCases) Move(context.Context, app.MoveInput) error { return nil }
-func (f *fakeRepositoryUseCases) Remove(context.Context, string) error      { return nil }
-func (f *fakeRepositoryUseCases) GC(context.Context) (int, error)           { return 0, nil }
-func (f *fakeRepositoryUseCases) MaintenanceOnce(context.Context) error     { return nil }
-func (f *fakeRepositoryUseCases) Doctor(context.Context) error              { return nil }
-func (f *fakeRepositoryUseCases) Sync(context.Context) error                { return nil }
+func (f *fakeRepositoryUseCases) MoveEntry(context.Context, metadata.EntryID, string) error {
+	return nil
+}
+func (f *fakeRepositoryUseCases) Remove(context.Context, string) error { return nil }
+func (f *fakeRepositoryUseCases) RemoveEntry(_ context.Context, id metadata.EntryID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.removeEntryErr != nil {
+		return f.removeEntryErr
+	}
+	if f.entry != nil && f.entry.ID == id {
+		f.entry = nil
+		f.content = nil
+	}
+	return nil
+}
+func (f *fakeRepositoryUseCases) GC(context.Context) (int, error)       { return 0, nil }
+func (f *fakeRepositoryUseCases) MaintenanceOnce(context.Context) error { return nil }
+func (f *fakeRepositoryUseCases) Doctor(context.Context) error          { return nil }
+func (f *fakeRepositoryUseCases) Sync(context.Context) error            { return nil }
 
 func (f *fakeRepositoryUseCases) BeginReadResource(_ context.Context, _ string) (metadata.Entry, string, func() error, error) {
 	file, err := os.CreateTemp("", "nando-test-read-resource-")
@@ -124,6 +151,10 @@ func (f *fakeRepositoryUseCases) BeginReadResource(_ context.Context, _ string) 
 		f.mu.Unlock()
 		return os.Remove(path)
 	}, nil
+}
+
+func (f *fakeRepositoryUseCases) BeginReadEntryResource(ctx context.Context, _ metadata.EntryID) (metadata.Entry, string, func() error, error) {
+	return f.BeginReadResource(ctx, "/file")
 }
 
 func TestReadResourceSessionReleaseRunsRepositoryCleanup(t *testing.T) {
@@ -199,6 +230,10 @@ func (f *fakeRepositoryUseCases) PutExpected(_ context.Context, input app.PutInp
 	f.entry.Size = int64(len(data))
 	f.content = append([]byte(nil), data...)
 	return nil
+}
+
+func (f *fakeRepositoryUseCases) PutExpectedEntryID(ctx context.Context, input app.PutInput, observed metadata.Entry) error {
+	return f.PutExpected(ctx, input, repository.PutExpectation{EntryID: observed.ID, Revision: observed.Revision})
 }
 
 func TestResourceSessionsExpireRenewAndPersistRecovery(t *testing.T) {
@@ -625,8 +660,8 @@ func TestDiscardTombstonePrecedesCleanupAndRestartFinishesPartialRemoval(t *test
 		directory: filepath.Dir(manifest), files: failingSessionFiles{removePath: manifest, removeErr: errors.New("injected restart cleanup failure")},
 		sessions: make(map[string]*writeSession), reads: make(map[string]*readSession), recoveries: make(map[string]*recoveryRecord),
 	}
-	if err := cleanup.loadRecoveries(); err != nil {
-		t.Fatalf("first restart cleanup attempt: %v", err)
+	if err := cleanup.loadRecoveries(); err == nil {
+		t.Fatal("startup accepted failed tombstone cleanup instead of retaining a retryable intent")
 	}
 	if _, err := os.Stat(manifest); err != nil {
 		t.Fatalf("failed cleanup attempt lost tombstone: %v", err)
@@ -767,6 +802,139 @@ func TestUncommittedReleasePreservesInsteadOfCommitting(t *testing.T) {
 	}
 	if records := sessions.listRecoveries(); len(records) != 1 || records[0].SessionID != result.SessionID {
 		t.Fatalf("Release did not preserve abandoned staging: %+v", records)
+	}
+}
+
+func TestUnlinkedWriteResourceIsDiscardedInsteadOfRecovered(t *testing.T) {
+	fake := &fakeRepositoryUseCases{}
+	sessions, err := newSessionManagerWithTTL(fake, t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sessions.close(); err != nil {
+			t.Errorf("close sessions: %v", err)
+		}
+	}()
+	service := newService(fake, sessions)
+	result, err := service.Call(context.Background(), controlrpc.MethodBeginWrite, marshalTestJSON(t, map[string]any{"path": "/file", "resource_schemes": []string{"file"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var begin controlrpc.BeginWriteResult
+	if err := decodeTestResult(t, result, &begin); err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, begin.ResourceURI)
+	if err := os.WriteFile(stage, []byte("private dirty bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	params := marshalTestJSON(t, map[string]string{"session_id": begin.SessionID})
+	if _, err := service.Call(context.Background(), controlrpc.MethodMarkUnlinked, params); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sessions.renew(begin.SessionID); err != nil {
+		t.Fatalf("open unlinked handle could not renew its session: %v", err)
+	}
+	if err := sessions.commit(context.Background(), begin.SessionID); !errors.Is(err, errSessionClosed) {
+		t.Fatalf("unlinked write was commit eligible: %v", err)
+	}
+	if err := os.WriteFile(stage, []byte("post-unlink write remains private"), 0600); err != nil {
+		t.Fatalf("open unlinked handle could not continue private I/O: %v", err)
+	}
+	if records := sessions.listRecoveries(); len(records) != 0 {
+		t.Fatalf("explicit unlink intent was exposed as ordinary recovery: %+v", records)
+	}
+	if _, err := service.Call(context.Background(), controlrpc.MethodRelease, params); err != nil {
+		t.Fatalf("final release cleanup: %v", err)
+	}
+	if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("final release retained explicitly discarded staging: %v", err)
+	}
+	if records := sessions.listRecoveries(); len(records) != 0 || fake.entry != nil {
+		t.Fatalf("unlinked write reappeared: recovery=%+v entry=%+v", records, fake.entry)
+	}
+}
+
+func TestUnlinkedIntentSurvivesDaemonRestartWithoutRecovery(t *testing.T) {
+	root := t.TempDir()
+	fake := &fakeRepositoryUseCases{}
+	sessions, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin, err := sessions.beginWrite(context.Background(), "/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, begin.ResourceURI)
+	if err := os.WriteFile(stage, []byte("unlinked private data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.markUnlinked(begin.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	stopSessionManagerForCrash(sessions)
+	restarted, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := restarted.close(); err != nil {
+			t.Errorf("close restarted manager: %v", err)
+		}
+	}()
+	if records := restarted.listRecoveries(); len(records) != 0 {
+		t.Fatalf("unlinked tombstone was exposed as ordinary Recovery: %+v", records)
+	}
+	if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restart did not finish unlinked staging cleanup: %v", err)
+	}
+}
+
+func TestUnlinkRemovalFailureRetainsTombstoneForRetry(t *testing.T) {
+	fake := &fakeRepositoryUseCases{entry: &metadata.Entry{ID: "entry-1", Kind: metadata.EntryKindFile, Revision: 1}}
+	root := t.TempDir()
+	sessions, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin, err := sessions.beginWrite(context.Background(), "/file", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, begin.ResourceURI)
+	if err := os.WriteFile(stage, []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.markUnlinked(begin.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	fake.removeEntryErr = errors.New("injected metadata delete failure")
+	if err := sessions.release(begin.SessionID); err == nil {
+		t.Fatal("Release reported success although tombstone namespace removal failed")
+	}
+	if _, err := os.Stat(stage); err != nil {
+		t.Fatalf("failed unlink discarded staging: %v", err)
+	}
+	if _, err := os.Stat(sessions.recordPath(begin.SessionID)); err != nil {
+		t.Fatalf("failed unlink lost durable tombstone: %v", err)
+	}
+	if records := sessions.listRecoveries(); len(records) != 0 {
+		t.Fatalf("unlink tombstone was exposed as ordinary Recovery: %+v", records)
+	}
+	fake.removeEntryErr = nil
+	if err := sessions.release(begin.SessionID); err != nil {
+		t.Fatalf("retry tombstone cleanup: %v", err)
+	}
+	if fake.entry != nil {
+		t.Fatalf("retry did not remove stable Entry: %+v", fake.entry)
+	}
+	if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retry retained discarded staging: %v", err)
+	}
+	if err := sessions.close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

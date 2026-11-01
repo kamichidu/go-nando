@@ -101,6 +101,9 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 	}
 	defer func() { retErr = errors.Join(retErr, resp.Body.Close()) }()
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return &RemoteError{Code: CodePermissionDenied, Message: "daemon authorization denied"}
+		}
 		return fmt.Errorf("daemon returned HTTP %s", resp.Status)
 	}
 	var decoded struct {

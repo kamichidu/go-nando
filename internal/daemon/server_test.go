@@ -151,6 +151,239 @@ func TestDaemonWriteResourceVerticalSlice(t *testing.T) {
 	serverStopped = true
 }
 
+func TestStableEntryWriteSessionFollowsRenameWithOriginalCAS(t *testing.T) {
+	ctx := context.Background()
+	repoDir := t.TempDir()
+	if err := app.InitRepository(ctx, repoDir); err != nil {
+		t.Fatal(err)
+	}
+	application, closeRepository := openTestApplication(t, repoDir)
+	defer func() {
+		if err := closeRepository(); err != nil {
+			t.Errorf("close Repository: %v", err)
+		}
+	}()
+	initial := filepath.Join(t.TempDir(), "initial")
+	if err := os.WriteFile(initial, []byte("before"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.Put(ctx, app.PutInput{LocalPath: initial, RepositoryPath: "/old-name"}); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := newSessionManager(application, repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sessions.close(); err != nil {
+			t.Errorf("close sessions: %v", err)
+		}
+	}()
+	service := newService(application, sessions)
+	result, err := service.Call(ctx, controlrpc.MethodBeginWrite, marshalTestJSON(t, map[string]any{"path": "/old-name", "resource_schemes": []string{"file"}, "follow_entry_id": true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var begin controlrpc.BeginWriteResult
+	if err := decodeTestResult(t, result, &begin); err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, begin.ResourceURI)
+	if err := os.WriteFile(stage, []byte("renamed handle bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	entryID := beginEntryIDForTest(t, application, ctx, "/old-name")
+	if _, err := service.Call(ctx, controlrpc.MethodMoveEntry, marshalTestJSON(t, controlrpc.MoveEntryParams{EntryID: entryID, Destination: "/new-name"})); err != nil {
+		t.Fatalf("move stable Entry through public RPC contract: %v", err)
+	}
+	resolved, err := service.Call(ctx, controlrpc.MethodResolveEntry, marshalTestJSON(t, map[string]string{"entry_id": beginEntryIDForTest(t, application, ctx, "/new-name")}))
+	if err != nil {
+		t.Fatalf("resolve stable Entry after rename: %v", err)
+	}
+	var resolution controlrpc.ResolveEntryResult
+	if err := decodeTestResult(t, resolved, &resolution); err != nil || resolution.Path != "/new-name" {
+		t.Fatalf("stable Entry resolution=%+v err=%v", resolution, err)
+	}
+	readResult, err := service.Call(ctx, controlrpc.MethodBeginRead, marshalTestJSON(t, controlrpc.BeginReadParams{EntryID: entryID, ResourceSchemes: []string{"file"}}))
+	if err != nil {
+		t.Fatalf("BeginRead by Entry ID after rename: %v", err)
+	}
+	var read controlrpc.BeginReadResult
+	if err := decodeTestResult(t, readResult, &read); err != nil || read.Entry.ID != entryID {
+		t.Fatalf("read Resource did not follow renamed Entry: result=%+v err=%v", read, err)
+	}
+	if _, err := service.Call(ctx, controlrpc.MethodRelease, marshalTestJSON(t, map[string]string{"session_id": read.SessionID})); err != nil {
+		t.Fatalf("release read after rename: %v", err)
+	}
+	writeResult, err := service.Call(ctx, controlrpc.MethodBeginWrite, marshalTestJSON(t, controlrpc.BeginWriteParams{EntryID: entryID, FollowEntryID: true, ResourceSchemes: []string{"file"}}))
+	if err != nil {
+		t.Fatalf("BeginWrite by Entry ID after rename: %v", err)
+	}
+	var byID controlrpc.BeginWriteResult
+	if err := decodeTestResult(t, writeResult, &byID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Call(ctx, controlrpc.MethodAbort, marshalTestJSON(t, map[string]string{"session_id": byID.SessionID})); err != nil {
+		t.Fatalf("abort extra stable-ID session: %v", err)
+	}
+	params := marshalTestJSON(t, map[string]string{"session_id": begin.SessionID})
+	if _, err := service.Call(ctx, controlrpc.MethodCommit, params); err != nil {
+		t.Fatalf("commit after rename: %v", err)
+	}
+	entry, err := application.Stat(ctx, "/new-name")
+	if err != nil || entry.Revision != 3 || entry.Size != int64(len("renamed handle bytes")) {
+		t.Fatalf("renamed Entry commit result: entry=%+v err=%v", entry, err)
+	}
+	if _, err := application.Stat(ctx, "/old-name"); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("old path unexpectedly exists after rename: %v", err)
+	}
+}
+
+func beginEntryIDForTest(t *testing.T, application *app.App, ctx context.Context, repositoryPath string) string {
+	t.Helper()
+	entry, err := application.Stat(ctx, repositoryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(entry.ID)
+}
+
+func TestStableEntryWriteSessionRejectsInterveningContentUpdate(t *testing.T) {
+	ctx := context.Background()
+	repoDir := t.TempDir()
+	if err := app.InitRepository(ctx, repoDir); err != nil {
+		t.Fatal(err)
+	}
+	application, closeRepository := openTestApplication(t, repoDir)
+	defer func() {
+		if err := closeRepository(); err != nil {
+			t.Errorf("close Repository: %v", err)
+		}
+	}()
+	initial := filepath.Join(t.TempDir(), "initial")
+	if err := os.WriteFile(initial, []byte("initial"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.Put(ctx, app.PutInput{LocalPath: initial, RepositoryPath: "/file"}); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := newSessionManager(application, repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sessions.close(); err != nil {
+			t.Errorf("close sessions: %v", err)
+		}
+	}()
+	service := newService(application, sessions)
+	result, err := service.Call(ctx, controlrpc.MethodBeginWrite, marshalTestJSON(t, map[string]any{"path": "/file", "resource_schemes": []string{"file"}, "follow_entry_id": true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var begin controlrpc.BeginWriteResult
+	if err := decodeTestResult(t, result, &begin); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resourcePathFromURI(t, begin.ResourceURI), []byte("stale bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	winner := filepath.Join(t.TempDir(), "winner")
+	if err := os.WriteFile(winner, []byte("winner bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.Put(ctx, app.PutInput{LocalPath: winner, RepositoryPath: "/file"}); err != nil {
+		t.Fatal(err)
+	}
+	err = sessions.commit(ctx, begin.SessionID)
+	if !errors.Is(err, metadata.ErrEntryConflict) {
+		t.Fatalf("stale stable-ID commit error=%v, want CAS conflict", err)
+	}
+	entry, err := application.Stat(ctx, "/file")
+	if err != nil || entry.Revision != 2 || entry.ObjectID == nil {
+		t.Fatalf("winner Entry state: entry=%+v err=%v", entry, err)
+	}
+	_, readPath, release, err := application.BeginReadResource(ctx, "/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, readErr := os.ReadFile(readPath)
+	if releaseErr := release(); releaseErr != nil {
+		t.Errorf("release winner read: %v", releaseErr)
+	}
+	if readErr != nil || string(data) != "winner bytes" {
+		t.Fatalf("CAS conflict changed winner content=%q err=%v", data, readErr)
+	}
+}
+
+func TestUnlinkTombstoneRestartDeletesOnlyStableEntryID(t *testing.T) {
+	ctx := context.Background()
+	repoDir := t.TempDir()
+	if err := app.InitRepository(ctx, repoDir); err != nil {
+		t.Fatal(err)
+	}
+	application, closeRepository := openTestApplication(t, repoDir)
+	defer func() {
+		if err := closeRepository(); err != nil {
+			t.Errorf("close Repository: %v", err)
+		}
+	}()
+	put := func(repoPath, content string) {
+		t.Helper()
+		localPath := filepath.Join(t.TempDir(), "source")
+		if err := os.WriteFile(localPath, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := application.Put(ctx, app.PutInput{LocalPath: localPath, RepositoryPath: repoPath}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("/target", "original")
+	original, err := application.Stat(ctx, "/target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := newSessionManager(application, repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin, err := sessions.beginWrite(ctx, "/target", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.markUnlinked(begin.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.Move(ctx, app.MoveInput{SourcePath: "/target", DestinationPath: "/moved"}); err != nil {
+		t.Fatal(err)
+	}
+	put("/target", "replacement")
+	stopSessionManagerForCrash(sessions)
+
+	restarted, err := newSessionManager(application, repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := restarted.close(); err != nil {
+			t.Errorf("close restarted session manager: %v", err)
+		}
+	}()
+	if _, err := application.Stat(ctx, "/moved"); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("restart did not finish unlink of original Entry %s: %v", original.ID, err)
+	}
+	replacement, err := application.Stat(ctx, "/target")
+	if err != nil || replacement.ID == original.ID {
+		t.Fatalf("restart removed/replaced the wrong Entry: replacement=%+v err=%v", replacement, err)
+	}
+	if records := restarted.listRecoveries(); len(records) != 0 {
+		t.Fatalf("unlink tombstone was exposed as ordinary Recovery: %+v", records)
+	}
+	if _, err := os.Stat(resourcePathFromURI(t, begin.ResourceURI)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restart did not remove tombstoned staging: %v", err)
+	}
+}
+
 func TestDaemonUsesDefaultEndpoint(t *testing.T) {
 	ctx := context.Background()
 	repoDir := t.TempDir()

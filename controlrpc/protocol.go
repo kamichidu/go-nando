@@ -19,14 +19,21 @@ const (
 	CodeEntryNotFound          = -32004
 	CodeEntryConflict          = -32009
 	CodeResourceSessionExpired = -32011
+	CodeEntryExists            = -32012
+	CodeDirectoryNotEmpty      = -32013
+	CodePermissionDenied       = -32014
 )
 
 const (
 	MethodPing            = "daemon.ping"
 	MethodStat            = "repository.stat"
+	MethodResolveEntry    = "repository.resolveEntry"
 	MethodList            = "repository.list"
+	MethodMkdir           = "repository.mkdir"
 	MethodMove            = "repository.move"
+	MethodMoveEntry       = "repository.moveEntry"
 	MethodRemove          = "repository.remove"
+	MethodRemoveEntry     = "repository.removeEntry"
 	MethodGC              = "repository.gc"
 	MethodMaintenance     = "repository.maintenanceOnce"
 	MethodDoctor          = "repository.doctor"
@@ -35,6 +42,7 @@ const (
 	MethodBeginWrite      = "resource.beginWrite"
 	MethodCommit          = "resource.commit"
 	MethodAbort           = "resource.abort"
+	MethodMarkUnlinked    = "resource.markUnlinked"
 	MethodRelease         = "resource.release"
 	MethodRenew           = "resource.renew"
 	MethodRevoke          = "resource.revoke"
@@ -48,10 +56,42 @@ type BeginWriteResult struct {
 	ResourceURI string `json:"resource_uri"`
 }
 
+type BeginWriteParams struct {
+	Path            string   `json:"path"`
+	EntryID         string   `json:"entry_id,omitempty"`
+	ResourceSchemes []string `json:"resource_schemes"`
+	FollowEntryID   bool     `json:"follow_entry_id,omitempty"`
+}
+
+type BeginReadParams struct {
+	Path            string   `json:"path"`
+	EntryID         string   `json:"entry_id,omitempty"`
+	ResourceSchemes []string `json:"resource_schemes"`
+}
+
+type ResolveEntryParams struct {
+	EntryID string `json:"entry_id"`
+}
+
+type MoveEntryParams struct {
+	EntryID     string `json:"entry_id"`
+	Destination string `json:"destination"`
+}
+
+type RemoveEntryParams struct {
+	EntryID string `json:"entry_id"`
+}
+
 type BeginReadResult struct {
 	SessionID   string `json:"session_id"`
 	ResourceURI string `json:"resource_uri"`
 	Entry       Entry  `json:"entry"`
+}
+
+// ResolveEntryResult identifies an Entry independently of its current name.
+type ResolveEntryResult struct {
+	Entry Entry  `json:"entry"`
+	Path  string `json:"path"`
 }
 
 type RenewResult struct {

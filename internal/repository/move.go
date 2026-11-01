@@ -68,3 +68,39 @@ func (r *Repository) Move(ctx context.Context, srcPath, dstPath string) error {
 
 	return nil
 }
+
+// MoveEntry moves exactly the Entry identified by its stable ID to dstPath.
+func (r *Repository) MoveEntry(ctx context.Context, id metadata.EntryID, dstPath string) error {
+	srcEntry, err := r.metaStore.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if srcEntry.ID == "root" {
+		return fmt.Errorf("cannot move the root directory")
+	}
+	dstNormalized, err := paths.NormalizeLogicalPath(dstPath)
+	if err != nil {
+		return fmt.Errorf("invalid destination path: %w", err)
+	}
+	if dstNormalized == "/" {
+		return fmt.Errorf("cannot move over the root directory: %w", metadata.ErrEntryConflict)
+	}
+	dstParentPath, dstBaseName := path.Dir(dstNormalized), path.Base(dstNormalized)
+	dstParent, err := r.ResolvePath(ctx, dstParentPath)
+	if err != nil {
+		return fmt.Errorf("resolve destination parent %q: %w", dstParentPath, err)
+	}
+	if dstParent.Kind != metadata.EntryKindDirectory {
+		return fmt.Errorf("destination parent %q is not a directory: %w", dstParentPath, metadata.ErrEntryConflict)
+	}
+	if _, err := r.metaStore.GetChild(ctx, dstParent.ID, dstBaseName); err == nil {
+		return fmt.Errorf("destination component %q already exists: %w", dstBaseName, metadata.ErrEntryConflict)
+	} else if !errors.Is(err, metadata.ErrEntryNotFound) {
+		return err
+	}
+	_, err = r.metaStore.Move(ctx, metadata.Entry{ID: srcEntry.ID, ParentID: &dstParent.ID, Name: dstBaseName, Revision: srcEntry.Revision})
+	if err != nil {
+		return fmt.Errorf("failed to move stable Entry %s: %w", id, err)
+	}
+	return nil
+}

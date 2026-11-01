@@ -22,15 +22,21 @@ const (
 
 type repositoryUseCases interface {
 	Stat(context.Context, string) (metadata.Entry, error)
+	ResolveEntry(context.Context, metadata.EntryID) (metadata.Entry, string, error)
 	List(context.Context, string) ([]metadata.Entry, error)
+	Mkdir(context.Context, string, uint32) error
 	PutExpected(context.Context, app.PutInput, repository.PutExpectation) error
+	PutExpectedEntryID(context.Context, app.PutInput, metadata.Entry) error
 	Move(context.Context, app.MoveInput) error
+	MoveEntry(context.Context, metadata.EntryID, string) error
 	Remove(context.Context, string) error
+	RemoveEntry(context.Context, metadata.EntryID) error
 	GC(context.Context) (int, error)
 	MaintenanceOnce(context.Context) error
 	Doctor(context.Context) error
 	Sync(context.Context) error
 	BeginReadResource(context.Context, string) (metadata.Entry, string, func() error, error)
+	BeginReadEntryResource(context.Context, metadata.EntryID) (metadata.Entry, string, func() error, error)
 }
 
 type service struct {
@@ -42,14 +48,14 @@ type pathParams struct {
 	Path string `json:"path"`
 }
 
-type beginWriteParams struct {
-	Path            string   `json:"path"`
-	ResourceSchemes []string `json:"resource_schemes"`
-}
-
 type moveParams struct {
 	Source      string `json:"source"`
 	Destination string `json:"destination"`
+}
+
+type mkdirParams struct {
+	Path string `json:"path"`
+	Mode uint32 `json:"mode"`
 }
 
 type sessionParams struct {
@@ -76,6 +82,16 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, mapMethodError(err)
 		}
 		return protocolEntry(entry), nil
+	case controlrpc.MethodResolveEntry:
+		var params controlrpc.ResolveEntryParams
+		if err := decodeParams(raw, &params); err != nil || params.EntryID == "" {
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: errors.New("entry_id is required")}
+		}
+		entry, currentPath, err := s.app.ResolveEntry(ctx, metadata.EntryID(params.EntryID))
+		if err != nil {
+			return nil, mapMethodError(err)
+		}
+		return controlrpc.ResolveEntryResult{Entry: protocolEntry(entry), Path: currentPath}, nil
 	case controlrpc.MethodList:
 		var params pathParams
 		if err := decodeParams(raw, &params); err != nil {
@@ -90,12 +106,60 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 			result = append(result, protocolEntry(entry))
 		}
 		return result, nil
+	case controlrpc.MethodMkdir:
+		var params mkdirParams
+		if err := decodeParams(raw, &params); err != nil {
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
+		}
+		if _, err := s.app.Stat(ctx, params.Path); err == nil {
+			return nil, &methodError{Code: controlrpc.CodeEntryExists, Err: metadata.ErrEntryConflict}
+		} else if !errors.Is(err, metadata.ErrEntryNotFound) {
+			return nil, mapMethodError(err)
+		}
+		if err := s.app.Mkdir(ctx, params.Path, params.Mode); err != nil {
+			if errors.Is(err, metadata.ErrEntryConflict) {
+				if _, statErr := s.app.Stat(ctx, params.Path); statErr == nil {
+					return nil, &methodError{Code: controlrpc.CodeEntryExists, Err: err}
+				}
+			}
+			return nil, mapMethodError(err)
+		}
+		return struct{}{}, nil
 	case controlrpc.MethodMove:
 		var params moveParams
 		if err := decodeParams(raw, &params); err != nil || params.Source == "" || params.Destination == "" {
 			return nil, &methodError{Code: jsonRPCInvalidParams, Err: errors.New("source and destination are required")}
 		}
+		if _, err := s.app.Stat(ctx, params.Destination); err == nil {
+			return nil, &methodError{Code: controlrpc.CodeEntryExists, Err: metadata.ErrEntryConflict}
+		} else if !errors.Is(err, metadata.ErrEntryNotFound) {
+			return nil, mapMethodError(err)
+		}
 		if err := s.app.Move(ctx, app.MoveInput{SourcePath: params.Source, DestinationPath: params.Destination}); err != nil {
+			if errors.Is(err, metadata.ErrEntryConflict) {
+				if _, statErr := s.app.Stat(ctx, params.Destination); statErr == nil {
+					return nil, &methodError{Code: controlrpc.CodeEntryExists, Err: err}
+				}
+			}
+			return nil, mapMethodError(err)
+		}
+		return struct{}{}, nil
+	case controlrpc.MethodMoveEntry:
+		var params controlrpc.MoveEntryParams
+		if err := decodeParams(raw, &params); err != nil || params.EntryID == "" || params.Destination == "" {
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: errors.New("entry_id and destination are required")}
+		}
+		if _, err := s.app.Stat(ctx, params.Destination); err == nil {
+			return nil, &methodError{Code: controlrpc.CodeEntryExists, Err: metadata.ErrEntryConflict}
+		} else if !errors.Is(err, metadata.ErrEntryNotFound) {
+			return nil, mapMethodError(err)
+		}
+		if err := s.app.MoveEntry(ctx, metadata.EntryID(params.EntryID), params.Destination); err != nil {
+			if errors.Is(err, metadata.ErrEntryConflict) {
+				if _, statErr := s.app.Stat(ctx, params.Destination); statErr == nil {
+					return nil, &methodError{Code: controlrpc.CodeEntryExists, Err: err}
+				}
+			}
 			return nil, mapMethodError(err)
 		}
 		return struct{}{}, nil
@@ -104,7 +168,25 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 		if err := decodeParams(raw, &params); err != nil {
 			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
 		}
+		entry, statErr := s.app.Stat(ctx, params.Path)
+		if statErr != nil {
+			return nil, mapMethodError(statErr)
+		}
 		if err := s.app.Remove(ctx, params.Path); err != nil {
+			if entry.Kind == metadata.EntryKindDirectory && errors.Is(err, metadata.ErrEntryConflict) {
+				if children, listErr := s.app.List(ctx, params.Path); listErr == nil && len(children) > 0 {
+					return nil, &methodError{Code: controlrpc.CodeDirectoryNotEmpty, Err: err}
+				}
+			}
+			return nil, mapMethodError(err)
+		}
+		return struct{}{}, nil
+	case controlrpc.MethodRemoveEntry:
+		var params controlrpc.RemoveEntryParams
+		if err := decodeParams(raw, &params); err != nil || params.EntryID == "" {
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: errors.New("entry_id is required")}
+		}
+		if err := s.app.RemoveEntry(ctx, metadata.EntryID(params.EntryID)); err != nil {
 			return nil, mapMethodError(err)
 		}
 		return struct{}{}, nil
@@ -132,27 +214,39 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 		}
 		return struct{}{}, nil
 	case controlrpc.MethodBeginRead:
-		var params beginWriteParams
+		var params controlrpc.BeginReadParams
 		if err := decodeParams(raw, &params); err != nil {
 			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
+		}
+		if params.EntryID == "" && params.Path == "" {
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: errors.New("path or entry_id is required")}
 		}
 		if !containsScheme(params.ResourceSchemes, "file") {
 			return nil, &methodError{Code: -32010, Err: errors.New("client did not declare support for daemon's file Resource URI")}
 		}
-		result, err := s.sessions.beginRead(ctx, params.Path)
+		result, err := s.sessions.beginRead(ctx, params.Path, metadata.EntryID(params.EntryID))
 		if err != nil {
 			return nil, mapMethodError(err)
 		}
 		return result, nil
 	case controlrpc.MethodBeginWrite:
-		var params beginWriteParams
+		var params controlrpc.BeginWriteParams
 		if err := decodeParams(raw, &params); err != nil {
 			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
+		}
+		if params.EntryID == "" && params.Path == "" {
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: errors.New("path or entry_id is required")}
 		}
 		if !containsScheme(params.ResourceSchemes, "file") {
 			return nil, &methodError{Code: -32010, Err: errors.New("client did not declare support for daemon's file Resource URI")}
 		}
-		result, err := s.sessions.beginWrite(ctx, params.Path)
+		var result controlrpc.BeginWriteResult
+		var err error
+		if params.EntryID != "" {
+			result, err = s.sessions.beginWriteEntry(ctx, metadata.EntryID(params.EntryID))
+		} else {
+			result, err = s.sessions.beginWrite(ctx, params.Path, params.FollowEntryID)
+		}
 		if err != nil {
 			return nil, mapMethodError(err)
 		}
@@ -172,6 +266,15 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
 		}
 		if err := s.sessions.abort(params.SessionID); err != nil {
+			return nil, mapMethodError(err)
+		}
+		return struct{}{}, nil
+	case controlrpc.MethodMarkUnlinked:
+		params, err := decodeSession(raw)
+		if err != nil {
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: err}
+		}
+		if err := s.sessions.markUnlinked(params.SessionID); err != nil {
 			return nil, mapMethodError(err)
 		}
 		return struct{}{}, nil

@@ -58,6 +58,29 @@ func (r *Repository) PutExpected(ctx context.Context, localPath, repoPath string
 	return r.put(ctx, localPath, repoPath, &expected)
 }
 
+// PutExpectedEntryID updates the current path of an existing Entry only if its
+// original identity and revision are still current. This lets open handles
+// follow a rename without weakening revision CAS.
+func (r *Repository) PutExpectedEntryID(ctx context.Context, localPath string, observed metadata.Entry) error {
+	if observed.ID == "" || observed.Revision == 0 {
+		return fmt.Errorf("stable Entry commit requires observed ID and revision: %w", metadata.ErrEntryConflict)
+	}
+	entry, err := r.metaStore.GetByID(ctx, observed.ID)
+	if err != nil {
+		return fmt.Errorf("resolve stable Entry for Put: %w", err)
+	}
+	if entry.Kind != observed.Kind || entry.ObjectID == nil || observed.ObjectID == nil || *entry.ObjectID != *observed.ObjectID ||
+		entry.Size != observed.Size || entry.Mtime != observed.Mtime || entry.Mode != observed.Mode ||
+		entry.ContentType != observed.ContentType || entry.CreatedAt != observed.CreatedAt {
+		return fmt.Errorf("stable Entry content changed since Resource session began: %w", metadata.ErrEntryConflict)
+	}
+	repoPath, err := r.DeriveCanonicalPath(ctx, entry)
+	if err != nil {
+		return fmt.Errorf("resolve current path for stable Entry: %w", err)
+	}
+	return r.PutExpected(ctx, localPath, repoPath, PutExpectation{EntryID: observed.ID, Revision: entry.Revision})
+}
+
 func (r *Repository) put(ctx context.Context, localPath string, repoPath string, expected *PutExpectation) (retErr error) {
 	if err := r.settings.Validate(); err != nil {
 		return fmt.Errorf("invalid Repository settings: %w", err)
