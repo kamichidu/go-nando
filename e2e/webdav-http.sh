@@ -18,7 +18,7 @@ request() {
 }
 
 request 200 -X OPTIONS "$E2E_WEBDAV_URL/"
-grep -qi '^DAV: 1' "$TMP/headers"
+tr -d '\r' <"$TMP/headers" | grep -Eqi '^DAV:[[:space:]]*1$'
 request 201 -X PUT --data-binary @"$TMP/payload" "$E2E_WEBDAV_URL/file"
 request 200 "$E2E_WEBDAV_URL/file"
 cmp "$TMP/payload" "$TMP/body"
@@ -37,7 +37,41 @@ request 200 "$E2E_WEBDAV_URL/file"; cmp "$TMP/winner" "$TMP/body"
 request 201 -X MKCOL "$E2E_WEBDAV_URL/collection"
 printf '<propfind xmlns="DAV:"><allprop/></propfind>' >"$TMP/propfind"
 request 207 -X PROPFIND -H 'Depth: 1' -H 'Content-Type: application/xml' --data-binary @"$TMP/propfind" "$E2E_WEBDAV_URL/"
-grep -q 'collection' "$TMP/body"
+python3 - "$TMP/body" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+root = ET.parse(sys.argv[1]).getroot()
+ns = {"d": "DAV:"}
+assert not root.findall(".//d:supportedlock", ns), "allprop advertised unsupported locks"
+assert any(item.find("d:resourcetype/d:collection", ns) is not None for item in root.findall(".//d:prop", ns))
+PY
+printf '<propfind xmlns="DAV:"><propname/></propfind>' >"$TMP/propfind-propname"
+for depth in 0 1; do
+  request 207 -X PROPFIND -H "Depth: $depth" -H 'Content-Type: application/xml' --data-binary @"$TMP/propfind-propname" "$E2E_WEBDAV_URL/"
+  python3 - "$TMP/body" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+root = ET.parse(sys.argv[1]).getroot()
+assert not root.findall(".//{DAV:}supportedlock"), "propname advertised unsupported locks"
+PY
+done
+printf '<propfind xmlns="DAV:"><prop><supportedlock/></prop></propfind>' >"$TMP/propfind-supportedlock"
+for depth in 0 1; do
+  request 207 -X PROPFIND -H "Depth: $depth" -H 'Content-Type: application/xml' --data-binary @"$TMP/propfind-supportedlock" "$E2E_WEBDAV_URL/"
+  python3 - "$TMP/body" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+root = ET.parse(sys.argv[1]).getroot()
+ns = {"d": "DAV:"}
+found = 0
+for propstat in root.findall(".//d:propstat", ns):
+    if propstat.find("d:prop/d:supportedlock", ns) is not None:
+        found += 1
+        assert propstat.findtext("d:status", namespaces=ns).endswith("404 Not Found")
+assert found > 0, "explicit supportedlock was omitted instead of returned as 404"
+assert not root.findall(".//d:lockentry", ns), "unsupported lockentry was advertised"
+PY
+done
 request 201 -X MOVE -H "Destination: $E2E_WEBDAV_URL/moved" "$E2E_WEBDAV_URL/file"
 request 404 "$E2E_WEBDAV_URL/file"
 request 200 "$E2E_WEBDAV_URL/moved"; cmp "$TMP/winner" "$TMP/body"
@@ -45,6 +79,7 @@ request 201 -X COPY -H "Destination: $E2E_WEBDAV_URL/copied" "$E2E_WEBDAV_URL/mo
 request 200 "$E2E_WEBDAV_URL/copied"; cmp "$TMP/winner" "$TMP/body"
 request 412 -X COPY -H "Destination: $E2E_WEBDAV_URL/copied" "$E2E_WEBDAV_URL/moved"
 request 501 -X LOCK "$E2E_WEBDAV_URL/moved"
+request 501 -X UNLOCK -H 'Lock-Token: <opaquelocktoken:unsupported>' "$E2E_WEBDAV_URL/moved"
 request 501 -X PROPPATCH "$E2E_WEBDAV_URL/moved"
 request 204 -X DELETE "$E2E_WEBDAV_URL/copied"
 request 404 "$E2E_WEBDAV_URL/copied"
@@ -55,7 +90,7 @@ record() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" | tee -a "$RESULTS"; }
 : >"$RESULTS"
 record curl-basic PASS 'GET/HEAD/PUT/DELETE/MKCOL and repository bytes verified'
 record curl-http PASS 'OPTIONS, ETag and supported ETag conditions verified; unsupported DAV/HTTP PUT conditions explicitly rejected'
-record curl-propfind PASS 'PROPFIND depth 1 returned a 207 multistatus including the created collection'
+record curl-propfind PASS 'allprop/propname omit supportedlock; explicit supportedlock is 404 at Depth 0/1; Depth 1 retains collections'
 record curl-file-copymove PASS 'file COPY to absent destination and MOVE verified; overwrite remains unsupported'
 record curl-locks SKIP 'LOCK/UNLOCK are deliberately unsupported; a separate assertion confirmed 501'
 record curl-dead-properties SKIP 'PROPPATCH/dead properties are deliberately unsupported; a separate assertion confirmed 501'

@@ -35,6 +35,8 @@ func New(client rpcClient) http.Handler {
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
+	case "PROPFIND":
+		h.propfind(w, r)
 	case http.MethodOptions:
 		w.Header().Set("DAV", "1")
 		w.Header().Set("Allow", "GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY")

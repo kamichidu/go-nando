@@ -21,7 +21,7 @@ The executable defaults to `127.0.0.1:8080` and rejects addresses that resolve o
 |Advertises DAV class 1 and the supported method list.
 
 |PROPFIND
-|Lists the repository hierarchy and live properties using x/net/webdav XML support.
+|Lists the repository hierarchy and live properties using x/net/webdav XML support. `DAV:supportedlock` is omitted from allprop/propname because Phase A does not support locks; an explicit request for it is returned in a 404 propstat, without a lockentry.
 
 |PUT
 |Full-file replacement/create with Commit-before-success and HTTP entity-tag/date preconditions.
@@ -45,8 +45,10 @@ The executable defaults to `127.0.0.1:8080` and rejects addresses that resolve o
 |Existing destinations are rejected or reported unsupported. Repository replacement semantics for these WebDAV operations are not specified.
 |===
 
-The adapter evaluates WebDAV entity-tag conditions against the same Begin-time CAS snapshot used by Commit, avoiding a Stat/Begin race. A concurrent update after Begin therefore fails repository CAS rather than overwriting newer content. Entry conflicts map to HTTP 412; absent resources map to 404; namespace collisions map to 412 or 405 according to the operation surface.
+The adapter evaluates WebDAV entity-tag conditions against the same Begin-time CAS snapshot used by Commit, avoiding a Stat/Begin race. A concurrent update after Begin therefore fails repository CAS rather than overwriting newer content. Entry conflicts map to HTTP 412; absent resources map to 404; namespace collisions map to 412 or 405 according to the operation surface. `OPTIONS` advertises `DAV: 1`; it does not advertise class 2 locking, consistent with LOCK/UNLOCK returning 501.
+
+link:https://www.rfc-editor.org/rfc/rfc4918.html#section-6.3[Section 6.3] makes locking optional, and link:https://www.rfc-editor.org/rfc/rfc4918.html#section-6.7[Section 6.7] requires `DAV:supportedlock` for resources that do support LOCK. This adapter supports no lock types, so it does not publish that property as if an exclusive write lock existed. link:https://www.rfc-editor.org/rfc/rfc4918.html#section-9.1[Section 9.1] requires a 404 result when an explicitly requested property does not exist; explicit retrieval is therefore reported as a missing property (404 propstat), not as an empty lock capability declaration.
 
 == Validation
 
-`e2e/run.sh` adds host-native G5 curl coverage for OPTIONS, GET/HEAD, PUT, ETags and conditional PUT, MKCOL/PROPFIND, MOVE, file COPY, DELETE, and explicit unsupported-method responses. G0 includes tests, race, lint, and build for the independent module. cadaver and Litmus are not declared passing by the curl gate; full WebDAV compliance remains unverified because Phase A intentionally lacks locks, dead properties, and replacement COPY semantics.
+`e2e/run.sh` adds host-native G5 curl coverage for OPTIONS, GET/HEAD, PUT, ETags and conditional PUT, MKCOL/PROPFIND (allprop, propname, explicit supportedlock, Depth 0/1), MOVE, file COPY, DELETE, and explicit unsupported-method responses. G0 includes tests, race, lint, and build for the independent module. cadaver and Litmus are not declared passing by the curl gate; full WebDAV compliance remains unverified because Phase A intentionally lacks locks, dead properties, and replacement COPY semantics.

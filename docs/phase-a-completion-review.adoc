@@ -5,6 +5,7 @@
 :pa-01-implementation-review: 2026-11-01
 :pa-01-evidence: /tmp/go-nando-e2e.Ldezz3
 :pa-02-evidence: /tmp/go-nando-e2e.xPIZJw
+:pa-04-evidence: /tmp/go-nando-e2e.pJTPRT
 
 [cols="1,3"]
 |===
@@ -12,6 +13,7 @@
 |Reviewed main |`{review-commit}` (`feat(webdav): add phase A daemon adapter`)
 |Authority |`docs/design.ir.yaml` at the reviewed commit; PA-01 follow-up checks the same canonical requirements
 |PA-02 follow-up evidence |`{pa-02-evidence}`: G0–G5 and optional G4 stress PASS; host cleanup PASS
+|PA-04 follow-up evidence |`{pa-04-evidence}`: G0–G5 and optional G4 stress PASS; focused WebDAV property assertions PASS
 |Result |*CONDITIONAL — Phase A completion is not yet established*
 |===
 
@@ -157,12 +159,12 @@ G1 exercised a real host kernel FUSE mount for CRUD, commit durability, multiple
 
 Phase A's IR says read-write WebDAV and requires a separate peer process using the public daemon/Resource contract. It does not enumerate RFC methods, require WebDAV class 2 locks, define dead-property storage, specify COPY replacement behavior, or require Litmus. Therefore:
 
-* `LOCK`/`UNLOCK`, `PROPPATCH`/dead properties, directory COPY, and overwrite semantics are *not independently mandated Phase A features* by the current IR. Their absence is an explicit partial protocol surface, not by itself a Phase A blocker. `DAV:1` is advertised; the adapter refuses LOCK/UNLOCK/PROPPATCH with 501. COPY supports only files to absent destinations; MOVE supports non-replacing namespace moves. Full Litmus `copymove`, `props`, and `locks` compliance cannot be claimed.
+* `LOCK`/`UNLOCK`, `PROPPATCH`/dead properties, directory COPY, and overwrite semantics are *not independently mandated Phase A features* by the current IR. Their absence is an explicit partial protocol surface, not by itself a Phase A blocker. `DAV:1` is advertised; the adapter refuses LOCK/UNLOCK/PROPPATCH with 501 and omits the unsupported `DAV:supportedlock` capability from allprop/propname; an explicit request returns a 404 propstat. COPY supports only files to absent destinations; MOVE supports non-replacing namespace moves. Full Litmus `copymove`, `props`, and `locks` compliance cannot be claimed.
 * `nando-webdav` is a separate module/process using controlrpc and daemon file resources. PUT commits before 201/204 and uses Begin-time Entry/revision/absence as its CAS snapshot for conditional PUT. GET/HEAD/PROPFIND and tested namespace methods use daemon state. G5 curl covered the tested operations.
 * The approved Phase A boundary is loopback-only unauthenticated HTTP and same-user local operation. WebDAV PUT enforces `If-Match`/`If-None-Match` against the Begin-time CAS snapshot and rejects unsupported conditions. External exposure, client auth, TLS termination, multi-user authorization, and TCP operations are deferred; these are not Phase A acceptance requirements.
 * Litmus and cadaver are unavailable; their suite/client status is SKIP, not PASS. This is not a Phase A scope blocker because neither tool nor full RFC compliance is a Design IR acceptance item. It leaves broader interoperability unverified.
 
-A concrete WebDAV defect was observed in addition to the intentional method limits: x/net/webdav's default PROPFIND allprop reports `<DAV:supportedlock>` as an exclusive write lock while this adapter intercepts LOCK and returns 501. This is contradictory capability metadata. It is a *P2 protocol correctness issue*, even though a full lock implementation is not required. Fix by preventing the adapter from advertising a capability it rejects, without inventing lock semantics; add a focused HTTP assertion before claiming the WebDAV surface internally consistent.
+PA-04 is resolved: x/net/webdav's default PROPFIND property generator publishes an exclusive write `<DAV:supportedlock>` even when this adapter intercepts LOCK/UNLOCK and returns 501. The adapter now omits that unsupported property from allprop/propname and responds to an explicit property request with a 404 propstat, without a `lockentry`. RFC 4918 allows resources not to support locking; §6.7 requires `supportedlock` when a resource does support LOCK, and §9.1 requires a 404 result for an explicitly requested property that does not exist. G5 asserts allprop, propname, explicit request, Depth 0/1, `OPTIONS DAV: 1`, and LOCK/UNLOCK 501.
 
 Other unverified WebDAV behavior includes conditions on methods beyond PUT, concurrent HTTP updates, non-empty collection DELETE behavior, MOVE/COPY precondition handling, persisted content-type presentation, and errors at every Resource cleanup boundary. The approved contract covers PUT's Begin-time ETag conditions; this review does not extend that contract to other methods.
 
@@ -262,9 +264,9 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |Block formal sign-off
 
 |PA-04 — *P2 protocol correctness*
-|PROPFIND allprop advertises exclusive write locking while LOCK/UNLOCK return 501. DAV clients can infer a capability the adapter rejects.
-|Filter/omit `supportedlock` from responses while lock semantics remain unsupported; add one assertion to G5. Do not add a lock store as part of this review.
-|Non-blocker to the IR's narrow read-write contract; fix before broader WebDAV acceptance
+|Resolved: PROPFIND allprop/propname omit `supportedlock`; explicit retrieval returns 404 without lock entries. `OPTIONS` advertises class 1 only, and LOCK/UNLOCK remain 501.
+|Focused HTTP tests and G5 curl assertions cover property modes, Depth 0/1, and method/header consistency. No lock semantics were added.
+|*PA-04 closed; no Phase A blocker*
 
 |PA-05 — *P2 deployment evidence*
 |IR names a WSL systemd user service as the default lifecycle manager and permits system scope; no service unit/install manifest or lifecycle test was found here.
@@ -282,8 +284,8 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |Conditional production readiness; not a fake-GCS test failure
 
 |PA-08 — *P3 verification gap*
-|G5 is targeted curl smoke, not a WebDAV compliance suite. Litmus/cadaver are unavailable; supported subset and the allprop inconsistency are not fully covered.
-|Install/run Litmus when available after PA-04; retain category-level PASS/FAIL/SKIP. Keep unsupported operations SKIP/FAIL, never count them as PASS.
+|G5 is targeted curl smoke, not a WebDAV compliance suite. Litmus/cadaver are unavailable; the supported subset's broader client interoperability remains unverified.
+|Install/run Litmus when available; retain category-level PASS/FAIL/SKIP. Keep unsupported operations SKIP/FAIL, never count them as PASS.
 |Non-blocker for current IR scope
 
 |PA-09 — *P3 unresolved semantics*
@@ -303,8 +305,8 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |Non-blocker; no full interoperability claim
 
 |LOCK/UNLOCK
-|No lock contract, durability, scope, or Repository interaction is defined. Do not invent one. Returning 501 is an honest unsupported boundary, but do not advertise `supportedlock` meanwhile.
-|Intentional partial surface; PA-04 remains a defect
+|No lock contract, durability, scope, or Repository interaction is defined. Do not invent one. Returning 501 is an honest unsupported boundary; `supportedlock` is omitted except for explicit requests, which return 404.
+|Intentional partial surface; PA-04 resolved
 
 |PROPPATCH/dead properties
 |No authoritative dead-property store/persistence contract exists in Metadata or Repository design.
@@ -330,7 +332,6 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 == Next actions
 
 . Complete PA-01 acceptance by resolving `OPEN-GCS-SCHEDULER-DEFAULTS`; implementation and no-manual-RPC G2 evidence are now present.
-. Remove the false `supportedlock` capability response (PA-04) before extending interoperability claims.
 . Confirm systemd packaging ownership and provide PA-05 lifecycle evidence if required for the WSL default.
 . Publish the operator backup/restore procedure (PA-06) and choose the GCS deployment evidence threshold (PA-07).
 . Re-run G0–G5 after any fixes; run Litmus/cadaver only when available and retain strict per-group results. Then update `DES-PHASE-A-DAEMON` from `planned` only through an accepted Design IR change.
