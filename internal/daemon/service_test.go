@@ -483,10 +483,19 @@ func TestRecoveryPreservationFailuresKeepBeginManifestAndStaging(t *testing.T) {
 			}
 			sessions.mu.Lock()
 			_, active := sessions.sessions[result.SessionID]
-			_, listed := sessions.recoveries[result.SessionID]
+			_, duplicated := sessions.recoveries[result.SessionID]
 			sessions.mu.Unlock()
-			if !active || !listed {
-				t.Fatalf("failed preservation must stay retryable in memory: active=%v recovery=%v", active, listed)
+			if !active || duplicated {
+				t.Fatalf("failed preservation must remain in exactly one retryable map: active=%v recovery=%v", active, duplicated)
+			}
+			if records := sessions.listRecoveries(); len(records) != 1 || records[0].SessionID != result.SessionID {
+				t.Fatalf("pending Recovery reconciliation not exposed: %+v", records)
+			}
+			if _, err := sessions.renew(result.SessionID); !errors.Is(err, errSessionExpired) {
+				t.Fatalf("failed Recovery persistence made expired session renewable: %v", err)
+			}
+			if err := sessions.commit(context.Background(), result.SessionID); !errors.Is(err, errSessionExpired) {
+				t.Fatalf("failed Recovery persistence allowed Commit: %v", err)
 			}
 			if data, err := os.ReadFile(stage); err != nil || string(data) != "recoverable payload" {
 				t.Fatalf("staging lost on preservation failure: %q, %v", data, err)
@@ -509,6 +518,68 @@ func TestRecoveryPreservationFailuresKeepBeginManifestAndStaging(t *testing.T) {
 				t.Fatalf("Begin manifest did not reconstruct recovery: %+v", records)
 			}
 		})
+	}
+}
+
+func TestExpiredSessionRetryReconcilesBeforeRepositoryPut(t *testing.T) {
+	fake := &fakeRepositoryUseCases{putErr: metadata.ErrEntryConflict}
+	sessions, err := newSessionManagerWithTTL(fake, t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sessions.close(); err != nil {
+			t.Errorf("close sessions: %v", err)
+		}
+	}()
+	result, err := sessions.beginWrite(context.Background(), "/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, result.ResourceURI)
+	if err := os.WriteFile(stage, []byte("reconcile before retry"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sessions.files = failingSessionFiles{writeErr: errors.New("injected recovery rename failure"), writePhase: "rename"}
+	if err := sessions.commit(context.Background(), result.SessionID); !errors.Is(err, metadata.ErrEntryConflict) {
+		t.Fatalf("Commit error=%v, want initial CAS failure", err)
+	}
+	if records := sessions.listRecoveries(); len(records) != 1 || records[0].SessionID != result.SessionID {
+		t.Fatalf("failed recovery metadata was not exposed for reconciliation: %+v", records)
+	}
+	fake.putErr = nil
+	sessions.files = failingSessionFiles{syncErr: errors.New("injected staging sync failure")}
+	if err := sessions.retryRecovery(context.Background(), result.SessionID); err == nil {
+		t.Fatal("recovery retry proceeded despite staging sync failure")
+	}
+	if fake.entry != nil {
+		t.Fatalf("Repository Put ran before staging sync: %+v", fake.entry)
+	}
+	sessions.files = failingSessionFiles{writeErr: errors.New("injected recovery write failure"), writePhase: "write"}
+	if err := sessions.retryRecovery(context.Background(), result.SessionID); err == nil {
+		t.Fatal("recovery retry proceeded despite metadata persistence failure")
+	}
+	if fake.entry != nil {
+		t.Fatalf("Repository Put ran before Recovery metadata was durable: %+v", fake.entry)
+	}
+	sessions.files = osSessionFiles{}
+	if err := sessions.retryRecovery(context.Background(), result.SessionID); err != nil {
+		t.Fatalf("retry after reconciliation storage recovered: %v", err)
+	}
+	fake.mu.Lock()
+	if fake.entry == nil || fake.entry.Revision != 1 || string(fake.content) != "reconcile before retry" {
+		t.Fatalf("reconciled retry did not commit expected bytes: entry=%+v content=%q", fake.entry, fake.content)
+	}
+	fake.mu.Unlock()
+	sessions.mu.Lock()
+	_, active := sessions.sessions[result.SessionID]
+	_, recovery := sessions.recoveries[result.SessionID]
+	sessions.mu.Unlock()
+	if active || recovery {
+		t.Fatalf("successful retry left duplicate/stale session state: active=%v recovery=%v", active, recovery)
+	}
+	if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("successful retry did not clean staging: %v", err)
 	}
 }
 
@@ -546,7 +617,27 @@ func TestDiscardTombstonePrecedesCleanupAndRestartFinishesPartialRemoval(t *test
 	if err := json.Unmarshal(data, &record); err != nil || !record.Discarding {
 		t.Fatalf("manifest is not a durable discard tombstone: %+v err=%v", record, err)
 	}
+	if records := sessions.listRecoveries(); len(records) != 0 {
+		t.Fatalf("discarding record was exposed as recoverable data: %+v", records)
+	}
 	stopSessionManagerForCrash(sessions)
+	cleanup := &sessionManager{
+		directory: filepath.Dir(manifest), files: failingSessionFiles{removePath: manifest, removeErr: errors.New("injected restart cleanup failure")},
+		sessions: make(map[string]*writeSession), reads: make(map[string]*readSession), recoveries: make(map[string]*recoveryRecord),
+	}
+	if err := cleanup.loadRecoveries(); err != nil {
+		t.Fatalf("first restart cleanup attempt: %v", err)
+	}
+	if _, err := os.Stat(manifest); err != nil {
+		t.Fatalf("failed cleanup attempt lost tombstone: %v", err)
+	}
+	cleanup.files = osSessionFiles{}
+	if err := cleanup.loadRecoveries(); err != nil {
+		t.Fatalf("repeated restart cleanup attempt: %v", err)
+	}
+	if _, err := os.Stat(manifest); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repeated cleanup did not remove tombstone: %v", err)
+	}
 	restarted, err := newSessionManagerWithTTL(fake, root, time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -564,7 +655,7 @@ func TestDiscardTombstonePrecedesCleanupAndRestartFinishesPartialRemoval(t *test
 	}
 }
 
-func TestAbortPersistenceFailureRetainsStageAndBlocksCommitUntilAbortRetry(t *testing.T) {
+func TestAbortPersistenceFailureLeavesOriginalStateForRetry(t *testing.T) {
 	fake := &fakeRepositoryUseCases{}
 	sessions, err := newSessionManagerWithTTL(fake, t.TempDir(), time.Hour)
 	if err != nil {
@@ -590,8 +681,8 @@ func TestAbortPersistenceFailureRetainsStageAndBlocksCommitUntilAbortRetry(t *te
 	if data, err := os.ReadFile(stage); err != nil || string(data) != "keep until abort intent is durable" {
 		t.Fatalf("stage removed before durable intent: %q, %v", data, err)
 	}
-	if err := sessions.commit(context.Background(), result.SessionID); !errors.Is(err, errSessionClosed) {
-		t.Fatalf("Commit after failed Abort intent=%v, want closed session", err)
+	if _, err := sessions.renew(result.SessionID); err != nil {
+		t.Fatalf("failed Abort changed original session state: %v", err)
 	}
 	sessions.files = osSessionFiles{}
 	if err := sessions.abort(result.SessionID); err != nil {
@@ -599,6 +690,53 @@ func TestAbortPersistenceFailureRetainsStageAndBlocksCommitUntilAbortRetry(t *te
 	}
 	if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("successful explicit Abort retained staging: %v", err)
+	}
+}
+
+func TestCloseRetriesDiscardCleanupWithoutAdvertisingRecovery(t *testing.T) {
+	root := t.TempDir()
+	sessions, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := sessions.beginWrite(context.Background(), "/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, result.ResourceURI)
+	if err := os.WriteFile(stage, []byte("explicitly discarded"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sessions.mu.Lock()
+	session := sessions.sessions[result.SessionID]
+	sessions.mu.Unlock()
+	if err := sessions.markDiscarding(&session.recoveryRecord, "explicit resource abort"); err != nil {
+		t.Fatal(err)
+	}
+	sessions.files = failingSessionFiles{removePath: stage, removeErr: errors.New("injected cleanup failure")}
+	if err := sessions.close(); err == nil {
+		t.Fatal("shutdown cleanup failure was not reported")
+	}
+	if records := sessions.listRecoveries(); len(records) != 0 {
+		t.Fatalf("Discarding session was inserted into Recovery list: %+v", records)
+	}
+	if _, err := os.Stat(stage); err != nil {
+		t.Fatalf("failed shutdown cleanup should leave tombstoned staging for restart: %v", err)
+	}
+	restarted, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := restarted.close(); err != nil {
+			t.Errorf("close restarted manager: %v", err)
+		}
+	}()
+	if records := restarted.listRecoveries(); len(records) != 0 {
+		t.Fatalf("restart exposed tombstoned staging as Recovery: %+v", records)
+	}
+	if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restart did not finish discard cleanup: %v", err)
 	}
 }
 

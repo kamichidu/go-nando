@@ -302,9 +302,9 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 		preserveErr := m.preserve(&session.recoveryRecord, commitErr.Error())
 		m.mu.Lock()
 		session.inFlight = false
-		m.recoveries[id] = &session.recoveryRecord
 		if preserveErr == nil {
 			delete(m.sessions, id)
+			m.recoveries[id] = &session.recoveryRecord
 		} else {
 			session.expired = true
 		}
@@ -315,9 +315,9 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 		preserveErr := m.preserve(&session.recoveryRecord, "repository commit succeeded but durable completion record failed: "+err.Error())
 		m.mu.Lock()
 		session.inFlight = false
-		m.recoveries[id] = &session.recoveryRecord
 		if preserveErr == nil {
 			delete(m.sessions, id)
+			m.recoveries[id] = &session.recoveryRecord
 		} else {
 			session.expired = true
 		}
@@ -407,9 +407,9 @@ func (m *sessionManager) release(id string) error {
 		err := m.preserve(&session.recoveryRecord, "session released before successful commit")
 		m.mu.Lock()
 		session.inFlight = false
-		m.recoveries[id] = &session.recoveryRecord
 		if err == nil {
 			delete(m.sessions, id)
+			m.recoveries[id] = &session.recoveryRecord
 		} else {
 			session.expired = true
 		}
@@ -444,8 +444,22 @@ func (m *sessionManager) listRecoveries() []controlrpc.RecoveryRecord {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	result := make([]controlrpc.RecoveryRecord, 0, len(m.recoveries))
+	seen := make(map[string]struct{}, len(m.recoveries))
 	for _, record := range m.recoveries {
+		if record.Discarding {
+			continue
+		}
 		result = append(result, protocolRecovery(*record))
+		seen[record.SessionID] = struct{}{}
+	}
+	for id, session := range m.sessions {
+		if !session.expired || session.inFlight || session.Discarding {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		result = append(result, protocolRecovery(session.recoveryRecord))
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
 	return result
@@ -454,6 +468,15 @@ func (m *sessionManager) listRecoveries() []controlrpc.RecoveryRecord {
 func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 	m.mu.Lock()
 	record, ok := m.recoveries[id]
+	session := m.sessions[id]
+	if ok && session != nil {
+		m.mu.Unlock()
+		return errors.New("resource session exists in both active and recovery maps")
+	}
+	if !ok && session != nil && session.expired {
+		record = &session.recoveryRecord
+		ok = true
+	}
 	if !ok {
 		m.mu.Unlock()
 		return errSessionNotFound
@@ -469,8 +492,26 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 	record.inFlight = true
 	m.mu.Unlock()
 	if err := m.files.SyncFile(record.StagingPath); err != nil {
-		return m.updateRecoveryFailure(record, err)
+		m.mu.Lock()
+		record.inFlight = false
+		m.mu.Unlock()
+		return fmt.Errorf("sync recovery staging before retry: %w", err)
 	}
+	updated := *record
+	updated.UpdatedAt = time.Now().UTC()
+	if err := m.persistRecord(&updated); err != nil {
+		m.mu.Lock()
+		record.inFlight = false
+		m.mu.Unlock()
+		return fmt.Errorf("persist recovery metadata before retry: %w", err)
+	}
+	m.mu.Lock()
+	record.UpdatedAt = updated.UpdatedAt
+	if session != nil {
+		delete(m.sessions, id)
+		m.recoveries[id] = record
+	}
+	m.mu.Unlock()
 	err := m.app.PutExpected(ctx, app.PutInput{LocalPath: record.StagingPath, RepositoryPath: record.RepositoryPath}, record.Expectation)
 	if err == nil {
 		if err := m.markCommitted(record); err == nil {
@@ -601,9 +642,9 @@ func (m *sessionManager) finishExpiredWrite(id string, session *writeSession) er
 	err := m.preserve(&session.recoveryRecord, "Resource session expired before successful commit")
 	m.mu.Lock()
 	session.inFlight = false
-	m.recoveries[id] = &session.recoveryRecord
 	if err == nil {
 		delete(m.sessions, id)
+		m.recoveries[id] = &session.recoveryRecord
 	}
 	m.mu.Unlock()
 	return err
@@ -621,10 +662,14 @@ func (m *sessionManager) preserve(record *recoveryRecord, reason string) error {
 	if record.Discarding {
 		return errors.New("resource session has a pending explicit discard")
 	}
-	var syncErr error
 	if err := m.files.SyncFile(record.StagingPath); err != nil {
-		syncErr = fmt.Errorf("sync recovery staging: %w", err)
 		reason += "; staging sync failed: " + err.Error()
+		now := time.Now().UTC()
+		m.mu.Lock()
+		record.FailureReason = reason
+		record.UpdatedAt = now
+		m.mu.Unlock()
+		return fmt.Errorf("sync recovery staging: %w", err)
 	}
 	now := time.Now().UTC()
 	updated := *record
@@ -635,9 +680,9 @@ func (m *sessionManager) preserve(record *recoveryRecord, reason string) error {
 	record.UpdatedAt = updated.UpdatedAt
 	m.mu.Unlock()
 	if err := m.persistRecord(&updated); err != nil {
-		return errors.Join(syncErr, fmt.Errorf("persist recovery record: %w", err))
+		return fmt.Errorf("persist recovery record: %w", err)
 	}
-	return syncErr
+	return nil
 }
 
 func (m *sessionManager) persistRecord(record *recoveryRecord) error {
@@ -653,12 +698,15 @@ func (m *sessionManager) markDiscarding(record *recoveryRecord, reason string) e
 	updated.Discarding = true
 	updated.FailureReason = reason
 	updated.UpdatedAt = time.Now().UTC()
+	if err := m.persistRecord(&updated); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	record.Discarding = true
 	record.FailureReason = updated.FailureReason
 	record.UpdatedAt = updated.UpdatedAt
 	m.mu.Unlock()
-	return m.persistRecord(&updated)
+	return nil
 }
 
 func (m *sessionManager) cleanupDiscardedRecord(record *recoveryRecord) error {
@@ -781,18 +829,18 @@ func (m *sessionManager) close() error {
 			continue
 		}
 		if session.Discarding {
-			if err := m.persistRecord(&session.recoveryRecord); err != nil {
-				failures = append(failures, err)
-				continue
-			}
 			if err := m.cleanupDiscardedRecord(&session.recoveryRecord); err != nil {
 				failures = append(failures, err)
 				continue
 			}
+			m.mu.Lock()
+			delete(m.sessions, id)
+			m.mu.Unlock()
+			continue
 		} else if err := m.preserve(&session.recoveryRecord, "daemon stopped before session completed"); err != nil {
 			failures = append(failures, err)
 			m.mu.Lock()
-			m.recoveries[id] = &session.recoveryRecord
+			session.expired = true
 			m.mu.Unlock()
 			continue
 		}
