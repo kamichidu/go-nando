@@ -90,7 +90,7 @@ Missing FUSE prerequisites produce G1-G3 `SKIP` and a nonzero overall result. A 
 
 |G3 `G3-05`
 |Recovery
-|After daemon restart, Recovery reports the expected path and size; the durable session manifest's scoped staging path is read and byte-compared to the original payload, including SHA-256.
+|After daemon/FUSE crash, the manifest's original Entry revision and canonical observed Object ID are compared with SQLite; explicit retry commits exact bytes and removes that Recovery record. A second session captures an existing Entry revision, then a competing commit wins; retry must report conflict, retain the original staging and revision expectation, and preserve the winner's bytes.
 
 |G4 `G4-01` (optional)
 |Bounded stress

@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/app"
+	"github.com/kamichidu/go-nando/internal/content"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/paths"
 	"github.com/kamichidu/go-nando/internal/repository"
@@ -32,20 +33,21 @@ var (
 )
 
 type recoveryRecord struct {
-	Version        int                       `json:"version"`
-	Committed      bool                      `json:"committed"`
-	Discarding     bool                      `json:"discarding,omitempty"`
-	FollowEntryID  bool                      `json:"follow_entry_id,omitempty"`
-	UnlinkEntryID  metadata.EntryID          `json:"unlink_entry_id,omitempty"`
-	SessionID      string                    `json:"session_id"`
-	StagingPath    string                    `json:"staging_path"`
-	RepositoryPath string                    `json:"repository_path"`
-	Expectation    repository.PutExpectation `json:"expectation"`
-	ObservedEntry  metadata.Entry            `json:"observed_entry,omitempty"`
-	FailureReason  string                    `json:"failure_reason"`
-	CreatedAt      time.Time                 `json:"created_at"`
-	UpdatedAt      time.Time                 `json:"updated_at"`
-	inFlight       bool                      `json:"-"`
+	Version          int                       `json:"version"`
+	Committed        bool                      `json:"committed"`
+	Discarding       bool                      `json:"discarding,omitempty"`
+	FollowEntryID    bool                      `json:"follow_entry_id,omitempty"`
+	UnlinkEntryID    metadata.EntryID          `json:"unlink_entry_id,omitempty"`
+	SessionID        string                    `json:"session_id"`
+	StagingPath      string                    `json:"staging_path"`
+	RepositoryPath   string                    `json:"repository_path"`
+	Expectation      repository.PutExpectation `json:"expectation"`
+	ObservedEntry    metadata.Entry            `json:"observed_entry,omitempty"`
+	ObservedObjectID string                    `json:"observed_object_id,omitempty"`
+	FailureReason    string                    `json:"failure_reason"`
+	CreatedAt        time.Time                 `json:"created_at"`
+	UpdatedAt        time.Time                 `json:"updated_at"`
+	inFlight         bool                      `json:"-"`
 }
 
 type writeSession struct {
@@ -214,9 +216,14 @@ func (m *sessionManager) createWriteSession(normalized string, expectation repos
 		return controlrpc.BeginWriteResult{}, errors.Join(fmt.Errorf("durably create mutable Resource: %w", err), os.Remove(resourcePath))
 	}
 	now := time.Now().UTC()
+	observedObjectID := ""
+	if observedEntry.ObjectID != nil {
+		observedObjectID = observedEntry.ObjectID.String()
+	}
 	session := &writeSession{recoveryRecord: recoveryRecord{
 		Version: 1, SessionID: id, StagingPath: resourcePath, RepositoryPath: normalized, Expectation: expectation, FollowEntryID: followID && expectation.EntryID != "", ObservedEntry: observedEntry,
-		CreatedAt: now, UpdatedAt: now,
+		ObservedObjectID: observedObjectID,
+		CreatedAt:        now, UpdatedAt: now,
 	}, expiresAt: time.Now().Add(m.ttl)}
 	if err := m.persistRecord(&session.recoveryRecord); err != nil {
 		return controlrpc.BeginWriteResult{}, errors.Join(fmt.Errorf("persist Resource session recovery record: %w", err), os.Remove(resourcePath))
@@ -903,6 +910,13 @@ func (m *sessionManager) loadRecoveries() error {
 		if record.Version != 1 || record.SessionID == "" || (record.Committed && record.Discarding) || filepath.Base(m.recordPath(record.SessionID)) != entry.Name() || !m.ownsStagePath(record.StagingPath) {
 			return fmt.Errorf("invalid Resource recovery record %q", path)
 		}
+		if record.ObservedObjectID != "" {
+			objectID, err := content.ParseID(record.ObservedObjectID)
+			if err != nil {
+				return fmt.Errorf("invalid observed Object ID in Resource recovery record %q: %w", path, err)
+			}
+			record.ObservedEntry.ObjectID = &objectID
+		}
 		if record.Committed {
 			if err := m.cleanupCommittedRecord(&record); err != nil {
 				log.Printf("clean committed Resource record %s: %v", record.SessionID, err)
@@ -915,6 +929,11 @@ func (m *sessionManager) loadRecoveries() error {
 			}
 			continue
 		}
+		if record.FollowEntryID && record.ObservedObjectID == "" {
+			if err := m.restoreLegacyObservedObjectID(&record); err != nil {
+				log.Printf("retain legacy Resource recovery %s without weakening its CAS: %v", record.SessionID, err)
+			}
+		}
 		if record.FailureReason == "" {
 			if err := m.preserve(&record, "daemon stopped before session completed"); err != nil {
 				log.Printf("record interrupted Resource session %s for recovery: %v", record.SessionID, err)
@@ -922,6 +941,35 @@ func (m *sessionManager) loadRecoveries() error {
 		}
 		m.recoveries[record.SessionID] = &record
 	}
+	return nil
+}
+
+// restoreLegacyObservedObjectID upgrades manifests written before Object IDs
+// were represented as canonical strings. It only repairs records whose exact
+// observed revision and every serialized field still match current metadata.
+func (m *sessionManager) restoreLegacyObservedObjectID(record *recoveryRecord) error {
+	observed := record.ObservedEntry
+	if observed.ID == "" || observed.Revision == 0 || record.Expectation.EntryID != observed.ID || record.Expectation.Revision != observed.Revision {
+		return errors.New("legacy recovery record lacks a matching original Entry revision")
+	}
+	current, _, err := m.app.ResolveEntry(context.Background(), observed.ID)
+	if err != nil {
+		return fmt.Errorf("resolve observed Entry: %w", err)
+	}
+	if current.Revision != observed.Revision || current.ParentID == nil || observed.ParentID == nil || *current.ParentID != *observed.ParentID ||
+		current.Name != observed.Name || current.Kind != observed.Kind || current.Size != observed.Size || current.Mtime != observed.Mtime ||
+		current.Mode != observed.Mode || current.ContentType != observed.ContentType || current.CreatedAt != observed.CreatedAt || current.ObjectID == nil {
+		return errors.New("current Entry no longer matches the exact legacy recovery snapshot")
+	}
+	updated := *record
+	updated.ObservedEntry = observed
+	updated.ObservedEntry.ObjectID = current.ObjectID
+	updated.ObservedObjectID = current.ObjectID.String()
+	updated.UpdatedAt = time.Now().UTC()
+	if err := m.persistRecord(&updated); err != nil {
+		return fmt.Errorf("persist canonical observed Object ID: %w", err)
+	}
+	*record = updated
 	return nil
 }
 

@@ -102,6 +102,27 @@ def rpc_call(method: str, params: dict | None = None, timeout: float = 20.0):
     return payload.get("result")
 
 
+def rpc_cli(args: list[str], *, timeout: float = 30.0, check: bool = True) -> subprocess.CompletedProcess:
+    process = subprocess.Popen(
+        [NANDO_BIN, "--repository", REPOSITORY, "--daemon-endpoint", ENDPOINT, *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    register_process(process, f"nando {' '.join(args)}")
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        terminate_process_group(process, f"nando {' '.join(args)}")
+        raise GateFailure(f"nando {' '.join(args)} exceeded {timeout}s")
+    finally:
+        ACTIVE_PROCESSES.pop(process.pid, None)
+    result = subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+    if check and result.returncode != 0:
+        raise GateFailure(f"nando {' '.join(args)} exited {result.returncode}: {stderr.decode(errors='replace')}")
+    return result
+
+
 def nando(*args: str, timeout: float = 20.0, check: bool = True) -> subprocess.CompletedProcess:
     argv = [NANDO_BIN, "--repository", REPOSITORY, "--daemon-endpoint", ENDPOINT, *args]
     process = subprocess.Popen(
@@ -125,6 +146,43 @@ def nando(*args: str, timeout: float = 20.0, check: bool = True) -> subprocess.C
             f"{result.stderr.decode(errors='replace')}"
         )
     return result
+
+
+def metadata_child(name: str):
+    """Read authoritative SQLite metadata through the production metadata adapter."""
+    source = r'''package main
+import (
+    "context"
+    "fmt"
+    "os"
+    "github.com/kamichidu/go-nando/internal/metadata"
+    metadatasqlite "github.com/kamichidu/go-nando/internal/metadata/sqlite"
+)
+func main() {
+    store, err := metadatasqlite.NewStore(os.Args[1] + "/metadata.sqlite")
+    if err != nil { panic(err) }
+    defer store.Close()
+    entry, err := store.GetChild(context.Background(), metadata.EntryID("root"), os.Args[2])
+    if err != nil { if err == metadata.ErrEntryNotFound { fmt.Print("ABSENT"); return }; panic(err) }
+    object := ""
+    if entry.ObjectID != nil { object = entry.ObjectID.String() }
+    fmt.Printf("%s\t%d\t%d\t%s", entry.ID, entry.Revision, entry.Size, object)
+}
+'''
+    program = Path(__file__).resolve().parent / ".tmp" / f"metadata-observe-{os.getpid()}.go"
+    program.parent.mkdir(parents=True, exist_ok=True)
+    program.write_text(source, encoding="utf-8")
+    result = subprocess.run(
+        ["go", "run", str(program), REPOSITORY, name],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    program.unlink(missing_ok=True)
+    if result.returncode != 0:
+        raise GateFailure(f"metadata adapter observation failed for {name}: {result.stderr.strip()}")
+    return None if result.stdout == "ABSENT" else result.stdout.split("\t")
 
 
 def daemon_ready(deadline: float = 20.0) -> None:
@@ -1003,7 +1061,84 @@ def g3_verify_recovery() -> None:
                 f"durable Recovery stage content mismatch: sha256={hashlib.sha256(recovered).hexdigest()}, "
                 f"expected={hashlib.sha256(expected).hexdigest()}, length={len(recovered)}"
             )
-        return f"Recovery session {session_id} manifest and staged bytes verified exactly; SHA-256={hashlib.sha256(recovered).hexdigest()}"
+        before = metadata_child("crash-uncommitted")
+        if before is None or int(before[1]) != 1 or int(before[2]) != 0 or not before[3]:
+            raise GateFailure(f"initially created empty Entry state before retry is inconsistent: {before}")
+        expectation = manifest["expectation"]
+        observed = manifest["observed_entry"]
+        if expectation["MustBeAbsent"] or expectation["EntryID"] != before[0] or expectation["Revision"] != 1:
+            raise GateFailure(f"Recovery manifest lost the initial Entry CAS expectation: {expectation}, Entry={before}")
+        if manifest.get("observed_object_id") != before[3] or observed.get("ObjectID") != {}:
+            raise GateFailure(
+                f"Recovery manifest did not durably encode canonical observed Object ID: "
+                f"observed_object_id={manifest.get('observed_object_id')!r}, database={before[3]!r}, "
+                f"legacy-object-field={observed.get('ObjectID')!r}"
+            )
+        # Retry is the product operation under test; exercise it through the CLI/daemon boundary.
+        rpc_cli(["recovery", "retry", session_id])
+        actual = cat_bytes("/crash-uncommitted")
+        if actual != expected:
+            raise GateFailure(
+                f"recovered committed bytes mismatch: sha256={hashlib.sha256(actual).hexdigest()}, "
+                f"expected={hashlib.sha256(expected).hexdigest()}"
+            )
+        remaining = nando("recovery", "list").stdout.decode()
+        if session_id in remaining:
+            raise GateFailure(f"successful recovery retry left Recovery record: {remaining}")
+        after = metadata_child("crash-uncommitted")
+        if after is None or int(after[2]) != len(expected) or not after[3]:
+            raise GateFailure(f"persistent Entry after retry is missing or wrong: {after}")
+        winner = b"concurrent-winner-must-survive"
+        conflict_path = ARTIFACTS / "recovery-winner.bin"
+        conflict_path.write_bytes(winner)
+        put_winner = subprocess.run(
+            [NANDO_BIN, "--repository", REPOSITORY, "--daemon-endpoint", ENDPOINT, "put", str(conflict_path), "/recovery-conflict"],
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        if put_winner.returncode != 0:
+            raise GateFailure(f"could not establish true recovery CAS conflict: {put_winner.stderr.strip()}")
+        conflict = rpc_call(
+            "resource.beginWrite",
+            {"path": "/recovery-conflict", "resource_schemes": ["file"]},
+        )
+        if not conflict.get("session_id") or not conflict.get("resource_uri"):
+            raise GateFailure(f"BeginWrite did not return a concrete stale-CAS session: {conflict}")
+        conflict_manifest_path = Path(REPOSITORY) / "temp" / "rpc-sessions" / f"{conflict['session_id']}.json"
+        conflict_manifest = json.loads(conflict_manifest_path.read_text(encoding="utf-8"))
+        if conflict_manifest["expectation"] != {"MustBeAbsent": False, "EntryID": conflict_manifest["expectation"]["EntryID"], "Revision": 1}:
+            raise GateFailure(f"true-conflict test manifest lacks the winner's original revision CAS: {conflict_manifest['expectation']}")
+        conflict_stage = Path(urllib.parse.urlparse(conflict["resource_uri"]).path)
+        conflict_payload = b"stale-recovery-must-not-overwrite"
+        conflict_stage.write_bytes(conflict_payload)
+        rpc_call("resource.release", {"session_id": conflict["session_id"]})
+        records_before_retry = nando("recovery", "list").stdout.decode()
+        if conflict["session_id"] not in records_before_retry:
+            raise GateFailure(f"Release did not create durable Recovery before retry: {records_before_retry}")
+        winner = b"newer-concurrent-winner-must-survive"
+        conflict_path.write_bytes(winner)
+        advance_winner = nando("put", str(conflict_path), "/recovery-conflict", check=False)
+        if advance_winner.returncode != 0:
+            raise GateFailure(f"could not advance competing Entry revision: {advance_winner.stderr.decode(errors='replace')}")
+        conflict_retry = rpc_cli(["recovery", "retry", conflict["session_id"]], check=False)
+        conflict_output = (conflict_retry.stdout + conflict_retry.stderr).decode(errors="replace")
+        if conflict_retry.returncode == 0:
+            raise GateFailure(f"true stale Recovery CAS unexpectedly succeeded: {conflict_output}")
+        if "conflict" not in conflict_output.lower() and "entry changed" not in conflict_output.lower():
+            raise GateFailure(f"true stale Recovery CAS did not return an explicit conflict: {conflict_output}")
+        records_after_conflict = nando("recovery", "list").stdout.decode()
+        if conflict["session_id"] not in records_after_conflict or "revision=1" not in records_after_conflict or "conflict" not in records_after_conflict.lower():
+            raise GateFailure(f"true conflict did not retain original expectation and conflict state: {records_after_conflict}")
+        if conflict_stage.read_bytes() != conflict_payload:
+            raise GateFailure("true conflict retry changed or removed the original Recovery staging bytes")
+        if cat_bytes("/recovery-conflict") != winner:
+            raise GateFailure("true Recovery conflict overwrote the winning Entry bytes")
+        return (
+            f"manifest CAS and canonical observed Object ID matched SQLite; retry committed exact bytes and removed {session_id}; "
+            f"true stale revision conflict retained original Recovery bytes/expectation and preserved winner; "
+            f"SHA-256={hashlib.sha256(actual).hexdigest()}"
+        )
 
     scenario("G3-05", "daemon crash recovery preserves dirty session and successful fsync commit", verify_recovery_and_committed_bytes)
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/app"
+	"github.com/kamichidu/go-nando/internal/content"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/repository"
 )
@@ -234,6 +235,70 @@ func (f *fakeRepositoryUseCases) PutExpected(_ context.Context, input app.PutInp
 
 func (f *fakeRepositoryUseCases) PutExpectedEntryID(ctx context.Context, input app.PutInput, observed metadata.Entry) error {
 	return f.PutExpected(ctx, input, repository.PutExpectation{EntryID: observed.ID, Revision: observed.Revision})
+}
+
+func TestLegacyStableEntryRecoveryRestoresObjectIDOnlyAtOriginalRevision(t *testing.T) {
+	objectID, err := content.ParseID("sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootID := metadata.EntryID("root")
+	entry := metadata.Entry{
+		ID: "entry-1", ParentID: &rootID, Name: "file", Kind: metadata.EntryKindFile, ObjectID: &objectID,
+		Size: 0, Revision: 4, CreatedAt: 10, UpdatedAt: 20,
+	}
+	for _, tc := range []struct {
+		name            string
+		currentRevision uint64
+		wantRepair      bool
+	}{
+		{name: "unchanged snapshot", currentRevision: 4, wantRepair: true},
+		{name: "changed revision", currentRevision: 5, wantRepair: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := entry
+			current.Revision = tc.currentRevision
+			fake := &fakeRepositoryUseCases{entry: &current}
+			directory := t.TempDir()
+			stage := filepath.Join(directory, "session.stage")
+			if err := os.WriteFile(stage, []byte("recoverable"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			zeroObjectID := content.ID{}
+			legacy := recoveryRecord{
+				Version: 1, SessionID: "session", StagingPath: stage, RepositoryPath: "/file",
+				Expectation:   repository.PutExpectation{EntryID: entry.ID, Revision: entry.Revision},
+				FollowEntryID: true, ObservedEntry: entry, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(2, 0),
+			}
+			legacy.ObservedEntry.ObjectID = &zeroObjectID
+			manager := &sessionManager{app: fake, directory: directory, files: osSessionFiles{}}
+			if err := manager.persistRecord(&legacy); err != nil {
+				t.Fatal(err)
+			}
+			err := manager.restoreLegacyObservedObjectID(&legacy)
+			if tc.wantRepair {
+				if err != nil {
+					t.Fatalf("restore unchanged legacy snapshot: %v", err)
+				}
+				if legacy.ObservedObjectID != objectID.String() || legacy.ObservedEntry.ObjectID == nil || legacy.ObservedEntry.ObjectID.String() != objectID.String() {
+					t.Fatalf("legacy snapshot Object ID not reconstructed: %+v", legacy)
+				}
+				data, err := os.ReadFile(manager.recordPath(legacy.SessionID))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var persisted recoveryRecord
+				if err := json.Unmarshal(data, &persisted); err != nil {
+					t.Fatal(err)
+				}
+				if persisted.ObservedObjectID != objectID.String() {
+					t.Fatalf("canonical Object ID was not persisted: %+v", persisted)
+				}
+			} else if err == nil || legacy.ObservedObjectID != "" {
+				t.Fatalf("changed legacy snapshot was silently repaired: err=%v record=%+v", err, legacy)
+			}
+		})
+	}
 }
 
 func TestResourceSessionsExpireRenewAndPersistRecovery(t *testing.T) {
