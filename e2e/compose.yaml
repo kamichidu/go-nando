@@ -1,0 +1,27 @@
+name: ${E2E_PROJECT:-go-nando-e2e}
+
+# Compose owns external dependencies only. nando, nando-fuse, and the scenario
+# runner always execute as native Linux/WSL host processes.
+services:
+  fake-gcs:
+    image: fsouza/fake-gcs-server:1.52.3
+    command:
+      - -scheme
+      - http
+      - -host
+      - 0.0.0.0
+      - -port
+      - "4443"
+      - -backend
+      - filesystem
+      - -filesystem-root
+      - /data
+      - -external-url
+      - http://127.0.0.1:4443
+    ports:
+      - "127.0.0.1:4443:4443"
+    volumes:
+      - fake-gcs-data:/data
+
+volumes:
+  fake-gcs-data:

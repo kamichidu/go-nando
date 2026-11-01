@@ -14,3 +14,14 @@ DESIGN_IR_REPO=../design-ir tools/validate-design-ir.sh
 ----
 
 The script verifies the pinned schema digest, then validates structure and semantics with the official v1alpha1 validator. Unresolved representation gaps are reported as warnings; validation errors fail the command.
+
+== Reproducible E2E gates
+
+Run the host-native G0-G3 checks with:
+
+[source,bash]
+----
+e2e/run.sh
+----
+
+Docker Compose starts only fake GCS; the daemon, real FUSE mount, and scenario runner stay on the Linux/WSL host. The optional bounded FUSE stress profile is `e2e/run.sh --stress`. Scenarios, host requirements, fake-GCS limitations, and retained evidence are documented in link:docs/e2e-gates.md[docs/e2e-gates.md].
