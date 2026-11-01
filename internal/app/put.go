@@ -15,17 +15,29 @@ type PutInput struct {
 
 // Put imports a local file into the nando repository.
 func (a *App) Put(ctx context.Context, input PutInput) error {
-	return a.repo.Put(ctx, input.LocalPath, input.RepositoryPath)
+	err := a.repo.Put(ctx, input.LocalPath, input.RepositoryPath)
+	if err == nil {
+		a.noteRepositoryWrite()
+	}
+	return err
 }
 
 // PutExpected commits the write only while its observed target Entry state is
 // still current. A zero-value revision is valid only for an observed absence.
 func (a *App) PutExpected(ctx context.Context, input PutInput, expected repository.PutExpectation) error {
-	return a.repo.PutExpected(ctx, input.LocalPath, input.RepositoryPath, expected)
+	err := a.repo.PutExpected(ctx, input.LocalPath, input.RepositoryPath, expected)
+	if err == nil {
+		a.noteRepositoryWrite()
+	}
+	return err
 }
 
 // PutExpectedEntryID commits to the current path of an Entry using its original
 // identity and revision as the compare-and-swap expectation.
 func (a *App) PutExpectedEntryID(ctx context.Context, input PutInput, observed metadata.Entry) error {
-	return a.repo.PutExpectedEntryID(ctx, input.LocalPath, observed)
+	err := a.repo.PutExpectedEntryID(ctx, input.LocalPath, observed)
+	if err == nil {
+		a.noteRepositoryWrite()
+	}
+	return err
 }

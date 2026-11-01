@@ -263,6 +263,10 @@ func TestGCSModePutAtomicallyEnqueuesContentID(t *testing.T) {
 	if err != nil || len(ids) != 1 || ids[0] != *entry.ObjectID {
 		t.Fatalf("transfer queue does not contain committed content ID: ids=%v err=%v", ids, err)
 	}
+	oldest, found, err := store.OldestPendingTransfer(ctx)
+	if err != nil || !found || time.Since(oldest) > time.Minute {
+		t.Fatalf("durable transfer enqueue time unavailable: oldest=%s found=%t err=%v", oldest, found, err)
+	}
 	if err := objects.Verify(ctx, *entry.ObjectID); err != nil {
 		t.Fatalf("Local authoritative copy missing after Put: %v", err)
 	}

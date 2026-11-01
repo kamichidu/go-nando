@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"time"
 
 	"github.com/kamichidu/go-nando/internal/content"
 )
@@ -30,6 +31,7 @@ type MetadataStore interface {
 	// Local-only Put passes false. Backends must not expose transaction types.
 	CommitPut(ctx context.Context, entry Entry, enqueueTransfer bool) (Entry, error)
 	PendingTransfers(ctx context.Context) ([]content.ID, error)
+	OldestPendingTransfer(ctx context.Context) (time.Time, bool, error)
 	CompleteTransfer(ctx context.Context, id content.ID) error
 	ReferencedObjectIDs(ctx context.Context) ([]content.ID, error)
 	ListAll(ctx context.Context) ([]Entry, error)

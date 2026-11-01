@@ -109,11 +109,18 @@ if ! run_gate G2 "host-native real FUSE with fake GCS outage/retry/idempotency" 
   export E2E_REPOSITORY="$3" E2E_SOCKET="$4" E2E_FAKE_GCS=http://127.0.0.1:4443
   export E2E_GCS_PROXY=http://127.0.0.1:4444 GOOGLE_CLOUD_PROJECT=nando-e2e
   "$5" --repository "$3" init --delivery-mode gcs --gcs-bucket nando-e2e
+  scheduler_config="$7/gcs-scheduler.toml"
+  cat >"$scheduler_config" <<EOF
+gcs_sync_idle_interval = "250ms"
+gcs_sync_periodic_interval = "1s"
+gcs_max_delivery_delay = "2s"
+gcs_sync_parallelism = 2
+EOF
   python3 "$6/e2e/runner.py" g2-init
   daemon="" proxy=""
   export STORAGE_EMULATOR_HOST=http://127.0.0.1:4443
   trap "if [[ -n \$daemon ]]; then kill -TERM \$daemon 2>/dev/null || true; wait \$daemon 2>/dev/null || true; fi; if [[ -n \$proxy ]]; then kill -TERM \$proxy 2>/dev/null || true; wait \$proxy 2>/dev/null || true; fi" EXIT
-  setsid "$5" --repository "$3" daemon --listen "unix://$4" >"$7/daemon-gcs.log" 2>&1 & daemon=$!
+  setsid "$5" --repository "$3" --config "$scheduler_config" daemon --listen "unix://$4" >"$7/daemon-gcs.log" 2>&1 & daemon=$!
   export E2E_DAEMON_PID=$daemon
   python3 "$6/e2e/runner.py" wait-daemon
   python3 "$6/e2e/runner.py" g2-normal
@@ -132,13 +139,13 @@ if ! run_gate G2 "host-native real FUSE with fake GCS outage/retry/idempotency" 
   printf "%s\tgcs-proxy\n" "$proxy" >>"$7/host-pids.tsv"
   python3 "$6/e2e/runner.py" g2-proxy-ready
   export STORAGE_EMULATOR_HOST=http://127.0.0.1:4444
-  setsid "$5" --repository "$ack_repository" daemon --listen "unix://$ack_socket" >>"$7/daemon-gcs.log" 2>&1 & daemon=$!
+  setsid "$5" --repository "$ack_repository" --config "$scheduler_config" daemon --listen "unix://$ack_socket" >>"$7/daemon-gcs.log" 2>&1 & daemon=$!
   export E2E_DAEMON_PID=$daemon
   python3 "$6/e2e/runner.py" wait-daemon
   python3 "$6/e2e/runner.py" g2-ack-crash
   wait "$daemon" || true
   rm -f "$ack_socket"
-  setsid "$5" --repository "$ack_repository" daemon --listen "unix://$ack_socket" >>"$7/daemon-gcs.log" 2>&1 & daemon=$!
+  setsid "$5" --repository "$ack_repository" --config "$scheduler_config" daemon --listen "unix://$ack_socket" >>"$7/daemon-gcs.log" 2>&1 & daemon=$!
   export E2E_DAEMON_PID=$daemon
   python3 "$6/e2e/runner.py" wait-daemon
   python3 "$6/e2e/runner.py" g2-ack-replay

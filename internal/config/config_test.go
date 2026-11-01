@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestResolvePathsUsesCrossPlatformXDGStyleLayout(t *testing.T) {
@@ -83,6 +84,24 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	}
 	if cfg.Repository != "" || cfg.DaemonEndpoint != "" || resolved.DataDir == filepath.Dir(resolved.ConfigFile) {
 		t.Fatalf("sample does not select active default data/transport paths: cfg=%+v paths=%+v", cfg, resolved)
+	}
+}
+
+func TestGCSSchedulerPolicyRequiresExplicitCompletePositiveSettings(t *testing.T) {
+	if _, err := (Config{}).GCSSchedulerPolicy(); err == nil {
+		t.Fatal("missing scheduler policy was accepted")
+	}
+	cfg := Config{GCSSyncIdleInterval: "250ms", GCSSyncPeriodicInterval: "1s", GCSMaxDeliveryDelay: "5s", GCSSyncParallelism: 3}
+	got, err := cfg.GCSSchedulerPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.IdleInterval != 250*time.Millisecond || got.PeriodicInterval != time.Second || got.MaxDeliveryDelay != 5*time.Second || got.Parallelism != 3 {
+		t.Fatalf("scheduler policy=%+v", got)
+	}
+	cfg.GCSSyncParallelism = 0
+	if _, err := cfg.GCSSchedulerPolicy(); err == nil {
+		t.Fatal("zero parallelism was accepted")
 	}
 }
 

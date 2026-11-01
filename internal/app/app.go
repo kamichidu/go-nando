@@ -13,12 +13,20 @@ var ErrNotImplemented = errors.New("command not implemented yet")
 
 // App acts as the application layer orchestrating use-cases.
 type App struct {
-	repo *repository.Repository
+	repo     *repository.Repository
+	activity chan struct{}
 }
 
 // NewApp creates a new App instance.
 func NewApp(repo *repository.Repository) *App {
-	return &App{repo: repo}
+	return &App{repo: repo, activity: make(chan struct{}, 1)}
+}
+
+func (a *App) noteRepositoryWrite() {
+	select {
+	case a.activity <- struct{}{}:
+	default:
+	}
 }
 
 // DeriveCanonicalPath reconstructs the logical path of an entry by walking up its ancestry.

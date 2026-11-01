@@ -710,13 +710,10 @@ def g2_normal() -> None:
             content_id = stat_hash("/replicated-normal")
             if cat_bytes("/replicated-normal") != data:
                 raise GateFailure("local commit was not visible before replication")
-            if gcs_object(content_id) is not None:
-                raise GateFailure("GCS object appeared before the explicit asynchronous maintenance run")
-            rpc_call("repository.maintenanceOnce")
-            wait_until("normal GCS object upload", lambda: gcs_object(content_id) is not None, timeout=30)
+            wait_until("daemon-scheduled GCS object upload without maintenance RPC", lambda: gcs_object(content_id) is not None, timeout=30)
             evidence = assert_gcs_object(content_id, data)
             (ARTIFACTS / "g2-normal-content-id").write_text(content_id + "\n", encoding="ascii")
-            return f"local Fsync commit preceded maintenance; {evidence}"
+            return f"local Fsync commit preceded daemon scheduler delivery with no maintenance RPC; {evidence}"
 
         scenario("G2-01", "local commit is visible before async delivery and then appears in fake GCS", commit_without_delivery)
 
@@ -728,7 +725,7 @@ def g2_normal() -> None:
             normal_id = (ARTIFACTS / "g2-normal-content-id").read_text(encoding="ascii").strip()
             if duplicate_id != normal_id:
                 raise GateFailure(f"identical content yielded IDs {duplicate_id} and {normal_id}")
-            rpc_call("repository.maintenanceOnce")
+            wait_until("daemon reconciles re-enqueued content ID", lambda: gcs_object(duplicate_id) is not None, timeout=30)
             return assert_gcs_object(duplicate_id, duplicate_data)
 
         scenario("G2-04", "re-enqueued identical content reconciles an existing generation without duplicate objects", same_content_reenqueued)
@@ -756,28 +753,19 @@ def g2_outage_commit() -> None:
                     raise GateFailure(f"direct fake-GCS probe failed for an unexpected reason: {reason!r}") from exc
             else:
                 raise GateFailure("direct fake-GCS API remained reachable while outage was expected")
+            local_object = Path(REPOSITORY) / "objects" / content_id
+            outage_until = time.monotonic() + 2.5
+            wait_until("scheduler remains unable to deliver during sustained GCS outage", lambda: time.monotonic() >= outage_until, timeout=3)
+            if local_object.read_bytes() != data:
+                raise GateFailure("unreferenced pending Local source disappeared or changed during scheduler retries")
             try:
-                rpc_call("repository.maintenanceOnce", timeout=12)
-            except RPCFailure as exc:
-                expected_causes = (
-                    "fake-gcs upstream unavailable",
-                    "connection refused",
-                    "connection reset",
-                    "dial tcp",
-                    "i/o timeout",
-                    "deadline exceeded",
-                    "timed out",
-                )
-                if exc.code != -32000 or not any(term in exc.message.lower() for term in expected_causes):
-                    raise GateFailure(f"maintenance failed for a non-outage reason: {exc}") from exc
-                (ARTIFACTS / "g2-outage-content-id").write_text(content_id + "\n", encoding="ascii")
-                return f"direct GCS probe was connection-refused and maintenance returned transport outage RPC: {exc}"
-            except TimeoutError as exc:
-                (ARTIFACTS / "g2-outage-content-id").write_text(content_id + "\n", encoding="ascii")
-                return f"direct fake-GCS probe confirmed connection refusal; maintenance RPC hit its 12s deadline while delivery was unavailable ({exc})"
-            except OSError as exc:
-                raise GateFailure(f"maintenance RPC transport failed instead of returning the expected repository error: {exc}") from exc
-            raise GateFailure("maintenance unexpectedly succeeded while fake GCS was stopped")
+                gcs_object(content_id)
+            except urllib.error.URLError:
+                pass
+            else:
+                raise GateFailure("fake GCS unexpectedly responded while its container was stopped")
+            (ARTIFACTS / "g2-outage-content-id").write_text(content_id + "\n", encoding="ascii")
+            return "direct fake-GCS probe confirmed connection refusal; Local commit remained byte-identical and readable through scheduler retries, then delivered after recovery"
 
         scenario("G2-02", "Fsync remains local during GCS outage and failed delivery leaves durable work", commit_while_stopped)
 
@@ -794,18 +782,7 @@ def g2_ack_crash() -> None:
         if cat_bytes("/ack-boundary") != data:
             raise GateFailure("local content was not committed before remote delivery")
         if gcs_object(content_id) is not None:
-            raise GateFailure("fault-injection object unexpectedly exists before maintenance")
-
-        rpc_errors: list[BaseException] = []
-
-        def maintenance():
-            try:
-                rpc_call("repository.maintenanceOnce", timeout=50)
-            except BaseException as exc:
-                rpc_errors.append(exc)
-
-        worker = threading.Thread(target=maintenance, name="gcs-ack-maintenance", daemon=True)
-        worker.start()
+            raise GateFailure("fault-injection object unexpectedly exists before scheduler eligibility")
         wait_until("upstream object committed behind held upload response", lambda: gcs_object(content_id) is not None, timeout=30)
         proxy = wait_proxy_committed()
         if proxy["held_commits"] != 1:
@@ -813,6 +790,7 @@ def g2_ack_crash() -> None:
         object_metadata = gcs_object(content_id)
         generation = int(object_metadata["generation"])
         assert_gcs_object(content_id, data)
+        proxy_before_crash = proxy_control("status")
 
         daemon_pid = int(os.environ["E2E_DAEMON_PID"])
         try:
@@ -821,16 +799,11 @@ def g2_ack_crash() -> None:
             raise GateFailure(f"daemon exited before the held GCS response boundary: pid={daemon_pid}") from exc
         wait_until("daemon SIGKILL before delivery acknowledgement", lambda: process_state(daemon_pid) in (None, "Z"), timeout=5)
         proxy_control("release", method="POST")
-        worker.join(timeout=8)
-        if worker.is_alive():
-            raise GateFailure("maintenance RPC thread remained blocked after daemon crash")
-        if not rpc_errors:
-            raise GateFailure("maintenance RPC succeeded even though daemon was killed before the upload response")
         (ARTIFACTS / "g2-ack-boundary.json").write_text(
-            json.dumps({"content_id": content_id, "generation": generation, "sha256": hashlib.sha256(data).hexdigest()}, sort_keys=True) + "\n",
+            json.dumps({"content_id": content_id, "generation": generation, "sha256": hashlib.sha256(data).hexdigest(), "object_attribute_gets": proxy_before_crash["object_attribute_gets"], "upload_puts": proxy_before_crash["upload_puts"]}, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        return f"host-native put committed locally; fake GCS exposed generation={generation}; upload response was held; daemon SIGKILL preceded transfer acknowledgement ({rpc_errors[0]})"
+        return f"daemon scheduler committed fake GCS generation={generation}; upload response was held; daemon SIGKILL preceded transfer acknowledgement"
 
     scenario("G2-05", SCENARIO_EXPECTATIONS["G2-05"], commit_then_crash_before_ack)
 
@@ -853,11 +826,15 @@ def g2_ack_replay() -> None:
     data = random.Random(0xACCA11).randbytes(512 * 1024)
 
     def retry_ambiguous_delivery():
-        before = proxy_control("status")["upload_puts"]
-        rpc_call("repository.maintenanceOnce", timeout=50)
+        before = proxy_control("status")
+        wait_until(
+            "scheduler reconciles existing GCS object after daemon restart",
+            lambda: proxy_control("status")["object_attribute_gets"] > expected_state["object_attribute_gets"],
+            timeout=45,
+        )
         after = proxy_control("status")
-        if after["upload_puts"] <= before or after["replay_preconditions"] != 1:
-            raise GateFailure(f"restart did not replay the pending object with a generation-match-zero rejection: before={before}, after={after}")
+        if after["replay_preconditions"] != 1 or after["upload_puts"] <= expected_state["upload_puts"]:
+            raise GateFailure(f"scheduler did not observe the already-existing object's conditional-create conflict before payload upload: before={expected_state}, after={after}")
         metadata = gcs_object(content_id)
         if metadata is None or int(metadata["generation"]) != expected_state["generation"]:
             raise GateFailure(f"idempotent replay changed or lost the committed generation: {metadata}")
@@ -882,18 +859,7 @@ def g2_retry() -> None:
         wait_until("restarted fake-gcs-server", available, timeout=30)
         if gcs_object(content_id) is not None:
             raise GateFailure("outage commit was already delivered before the queued retry")
-        expires = time.monotonic() + 45
-        last_error = None
-        while time.monotonic() < expires:
-            try:
-                rpc_call("repository.maintenanceOnce", timeout=15)
-                if gcs_object(content_id) is not None:
-                    break
-            except Exception as exc:
-                last_error = exc
-            time.sleep(min(0.2, max(0.0, expires - time.monotonic())))
-        else:
-            raise GateFailure(f"queued GCS transfer did not recover: {last_error}")
+        wait_until("daemon-scheduled queued GCS delivery after emulator restart", lambda: gcs_object(content_id) is not None, timeout=45)
         evidence = assert_gcs_object(content_id, data)
         return f"retry after emulator restart delivered the previously queued object; {evidence}"
 

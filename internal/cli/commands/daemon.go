@@ -7,8 +7,10 @@ import (
 
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/controlrpc"
+	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/cli"
 	"github.com/kamichidu/go-nando/internal/daemon"
+	"github.com/kamichidu/go-nando/internal/repository"
 )
 
 // DaemonCommand runs the single Repository-owning daemon process.
@@ -81,12 +83,24 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 			return fmt.Errorf("read daemon bearer token: %w", err)
 		}
 	}
-	return daemon.Serve(ctx, application, repoDir, daemon.ListenConfig{
+	var scheduler *daemon.SchedulerConfig
+	repositorySettings, err := app.LoadRepositorySettings(repoDir)
+	if err != nil {
+		return err
+	}
+	if repositorySettings.DeliveryMode == repository.DeliveryModeGCS || cfg.HasGCSSchedulerSettings() {
+		policy, err := cfg.GCSSchedulerPolicy()
+		if err != nil {
+			return fmt.Errorf("configure daemon GCS scheduler: %w", err)
+		}
+		scheduler = &daemon.SchedulerConfig{IdleInterval: policy.IdleInterval, PeriodicInterval: policy.PeriodicInterval, MaxDeliveryDelay: policy.MaxDeliveryDelay, Parallelism: policy.Parallelism}
+	}
+	return daemon.ServeWithScheduler(ctx, application, repoDir, daemon.ListenConfig{
 		Endpoint: endpoint,
 		CertFile: firstNonEmpty(c.tlsCert, cfg.DaemonTLSCert),
 		KeyFile:  firstNonEmpty(c.tlsKey, cfg.DaemonTLSKey),
 		Token:    token,
-	})
+	}, scheduler)
 }
 
 func firstNonEmpty(values ...string) string {

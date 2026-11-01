@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -14,13 +15,61 @@ import (
 // Config represents per-user runtime configuration. Repository delivery
 // settings remain in the repository-owned repository.json file.
 type Config struct {
-	Repository      string `toml:"repository"`
-	Verbose         bool   `toml:"verbose"`
-	DaemonEndpoint  string `toml:"daemon_endpoint"`
-	DaemonTokenFile string `toml:"daemon_token_file"`
-	DaemonCACert    string `toml:"daemon_ca_cert"`
-	DaemonTLSCert   string `toml:"daemon_tls_cert"`
-	DaemonTLSKey    string `toml:"daemon_tls_key"`
+	Repository              string `toml:"repository"`
+	Verbose                 bool   `toml:"verbose"`
+	DaemonEndpoint          string `toml:"daemon_endpoint"`
+	DaemonTokenFile         string `toml:"daemon_token_file"`
+	DaemonCACert            string `toml:"daemon_ca_cert"`
+	DaemonTLSCert           string `toml:"daemon_tls_cert"`
+	DaemonTLSKey            string `toml:"daemon_tls_key"`
+	GCSSyncIdleInterval     string `toml:"gcs_sync_idle_interval"`
+	GCSSyncPeriodicInterval string `toml:"gcs_sync_periodic_interval"`
+	GCSMaxDeliveryDelay     string `toml:"gcs_max_delivery_delay"`
+	GCSSyncParallelism      int    `toml:"gcs_sync_parallelism"`
+}
+
+// GCSSchedulerSettings contains explicit daemon scheduler policy. Durations
+// remain strings in Config so missing values are distinguishable from zero.
+type GCSSchedulerSettings struct {
+	IdleInterval     time.Duration
+	PeriodicInterval time.Duration
+	MaxDeliveryDelay time.Duration
+	Parallelism      int
+}
+
+func (c Config) HasGCSSchedulerSettings() bool {
+	return c.GCSSyncIdleInterval != "" || c.GCSSyncPeriodicInterval != "" || c.GCSMaxDeliveryDelay != "" || c.GCSSyncParallelism != 0
+}
+
+// GCSSchedulerPolicy resolves and validates every required policy value. No
+// operational defaults are implied by this configuration API.
+func (c Config) GCSSchedulerPolicy() (GCSSchedulerSettings, error) {
+	parse := func(name, value string) (time.Duration, error) {
+		if value == "" {
+			return 0, fmt.Errorf("%s is required when configuring the GCS scheduler", name)
+		}
+		d, err := time.ParseDuration(value)
+		if err != nil || d <= 0 {
+			return 0, fmt.Errorf("%s must be a positive duration", name)
+		}
+		return d, nil
+	}
+	idle, err := parse("gcs_sync_idle_interval", c.GCSSyncIdleInterval)
+	if err != nil {
+		return GCSSchedulerSettings{}, err
+	}
+	periodic, err := parse("gcs_sync_periodic_interval", c.GCSSyncPeriodicInterval)
+	if err != nil {
+		return GCSSchedulerSettings{}, err
+	}
+	maximum, err := parse("gcs_max_delivery_delay", c.GCSMaxDeliveryDelay)
+	if err != nil {
+		return GCSSchedulerSettings{}, err
+	}
+	if c.GCSSyncParallelism <= 0 {
+		return GCSSchedulerSettings{}, fmt.Errorf("gcs_sync_parallelism must be positive")
+	}
+	return GCSSchedulerSettings{IdleInterval: idle, PeriodicInterval: periodic, MaxDeliveryDelay: maximum, Parallelism: c.GCSSyncParallelism}, nil
 }
 
 // LoadConfig reads and strictly decodes a TOML configuration file.

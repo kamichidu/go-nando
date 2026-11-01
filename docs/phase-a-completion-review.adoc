@@ -1,0 +1,336 @@
+= Phase A Completion Gap Review
+
+:review-date: 2026-11-01
+:review-commit: b49b705
+:pa-01-implementation-review: 2026-11-01
+:pa-01-evidence: /tmp/go-nando-e2e.Ldezz3
+
+[cols="1,3"]
+|===
+|Review date |{review-date}
+|Reviewed main |`{review-commit}` (`feat(webdav): add phase A daemon adapter`)
+|Authority |`docs/design.ir.yaml` at the reviewed commit; PA-01 follow-up checks the same canonical requirements
+|Result |*CONDITIONAL — Phase A completion is not yet established*
+|===
+
+== Decision
+
+The repository has a substantial, tested single-host Phase A implementation: Local and GCS repository modes, the SQLite Metadata and transfer queue, daemon-owned Resource sessions and Recovery, peer CLI/FUSE/WebDAV processes, and real host FUSE and HTTP checks are present. This review does not find a broad failure of the Repository or CAS core.
+
+Phase A cannot be signed off as complete from this checkout. The PA-01 implementation follow-up now adds a daemon-owned configured scheduler and its host E2E evidence, but the Design IR still leaves scheduler operational defaults and the exact meaning of idle open. This follow-up does not silently close that design decision. Other completion blockers remain:
+
+. Design IR `OPEN-GCS-SCHEDULER-DEFAULTS` still leaves timing defaults and whether idle means no repository writes or no dirty handles unresolved. GCS mode therefore requires all four scheduler settings explicitly; current code measures idle from the last successful content commit observed by the daemon. That mechanism is implemented and exercised, but this review does not treat the chosen operational interpretation as an accepted Design IR decision. Local-mode GC scheduling also starts only when these scheduler settings are explicitly configured.
+. Design IR `OPEN-ADAPTER-AUTHORIZATION` still leaves WebDAV bind, authentication, TLS, and conditional-write policy unresolved. The implementation chooses loopback-only unauthenticated HTTP as a temporary restriction, but that is an implementation limit, not an accepted resolution of the open policy.
+
+The Design IR also still labels `DES-PHASE-A-DAEMON.phase_status` as `planned`. That is a formal status mismatch: implementation evidence cannot by itself change the canonical roadmap state. It should be changed only after the owner accepts the remaining decisions and evidence.
+
+These are blockers to a *formal Phase A complete* decision. The findings below distinguish those blockers from intentionally deferred work, operational limitations, and evidence that is not part of the Phase A contract. The original gap review was documentation-only; the PA-01 follow-up changed scheduler implementation, configuration, and E2E verification only.
+
+== Scope and method
+
+The review read `GEMINI.md`, the repository's available documentation, and `docs/design.ir.yaml` before following the implementation. The supplied workflow names `docs/index.adoc`, but that file does not exist; `docs/design.ir.yaml` is the explicit semantic authority. Historical `IMP-*` observations in the IR refer to older commits and were not treated as current implementation facts.
+
+The trace below treats system requirements and designs as obligations where applicable, and distinguishes the current `phase_status` of roadmap nodes from actual repository evidence. Prior Phase 0–6 work is included where Phase A depends on it. Phase 7 user-directed multi-repository synchronization and Phase B multi-daemon/Published-Head behavior are excluded where the IR explicitly defers them.
+
+Evidence checked:
+
+* Source and tests under `internal/`, `controlrpc/`, `fuse/`, `webdav/`, `cmd/`, `e2e/`, and the repository documentation.
+* The original host gate was rerun as `e2e/run.sh --stress` on the reviewed main revision. PA-01 follow-up reran it on the implementation worktree. Follow-up evidence directory: `{pa-01-evidence}`.
+* A separate native HTTP PROPFIND request against a temporary Local repository confirmed a WebDAV live-property inconsistency described below. The response included `DAV:supportedlock` although the adapter returns 501 for LOCK/UNLOCK.
+* `litmus` and `cadaver` were not installed (`command -v` returned no executable). No full WebDAV compliance claim is made.
+
+== Requirement traceability
+
+Status meanings: *Implemented* means source and relevant existing tests support the IR contract; *Partial* means a visible subset exists or important behavior lacks coverage; *Unimplemented* means an applicable MUST or stated Phase A behavior is absent; *Deferred* means the IR explicitly leaves it for a later phase/open decision; *Verification gap* means code may implement the behavior but the evidence does not establish it.
+
+=== Repository, Metadata, and Local Object foundation
+
+[cols="1,2,2,1"]
+|===
+|Design IR references |Code evidence |Test/evidence |Status
+
+|`REQ-META-SSOT`, `REQ-META-COMMITTED-ONLY`, `REQ-ENTRY-ID`, `REQ-NAMESPACE-UNIQUENESS`, `REQ-ROOT-ENTRY`, `REQ-EXPLICIT-DIRECTORIES`, `REQ-DIRECTORY-NO-OBJECT`, `REQ-SUBTREE-MUTATIONS`; `DES-METADATA-MODEL`, `DES-EXPLICIT-DIRECTORY-MODEL`, `DES-METADATA-BACKEND-PORTABILITY`
+|`internal/metadata/sqlite/store.go`, `internal/metadata/validating_store.go`, `internal/repository/{mkdir,move,remove}.go`; SQLite owns state-dependent checks in mutation transactions. Root is a first-class directory; directories have no Object ID.
+|`internal/metadata/sqlite/store_test.go`, `internal/metadata/validating_store_test.go`, `internal/repository/repository_test.go`, phase-5 directory tests in the repository suite; G1 CRUD/namespace.
+|Implemented; regression suite PASS
+
+|`REQ-REVISION`, `REQ-REPLACEMENT`, `REQ-OBJECT-SSOT`, `REQ-OBJECT-COMMIT`, `REQ-METADATA-ORDER`, `REQ-NO-RESUME`, `DES-LOCAL-COMMIT-GLOBAL-PUBLISH`, `DES-FAILURE-BOUNDARIES`
+|`internal/repository/put.go`, `internal/objectstore/local/`, `internal/metadata/sqlite/store.go`; content-addressed objects publish no-replace and the Metadata mutation occurs after object publication. Replacement preserves the old committed Entry until the new commit succeeds.
+|`internal/repository/replace_test.go`, `internal/repository/phase4_test.go`, local-store publish/stage tests, Metadata transfer-queue tests.
+|Implemented; regression suite PASS
+
+|`REQ-GET-ATOMIC-DESTINATION`, `REQ-READ-THROUGH`, `REQ-READ-GC-EXCLUSION`, `DES-GCS-READ-THROUGH`, `DES-READ-SEMANTICS`
+|`internal/repository/get.go`, `internal/repository/repository.go`; Get stages in the destination directory and atomically publishes; Get/Cat/read-through use resource leases and validate downloaded content before Local publication.
+|`internal/repository/phase4_test.go`, `internal/repository/repository_test.go` read-through and lease tests; `internal/cli/commands/commands_test.go`.
+|Implemented; regression suite PASS
+
+|`REQ-PUT-GC-EXCLUSION`, `REQ-PUT-STAGE-RESOURCE-LEASE`, `DES-LEASE`, `DES-PUT-STAGE-COMMIT`, `DES-RESOURCE-LEASES`
+|`internal/coordinator/sqlite/coordinator.go`, `internal/repository/put.go`, `internal/repository/repository.go`; temporary-resource and content-ID leases are persisted in the coordination DB, renewed, and checked before publication/commit. Long input/network I/O is outside the Repository-wide critical section.
+|`internal/coordinator/sqlite/coordinator_test.go` cross-instance/process and expiry tests; repository stage/GC race tests.
+|Implemented; regression suite PASS
+
+|`REQ-METADATA-PORTABILITY`, `REQ-METADATA-BACKUP-RESPONSIBILITY`
+|Metadata semantic API and SQLite transaction boundaries are in `internal/metadata/` and `internal/metadata/sqlite/`. No alternate backend is claimed. Backup remains an operator responsibility; repository files include `metadata.sqlite`, `coordination.db`, objects, repository format/settings, and pending transfer rows.
+|SQLite migration and atomic queue tests pass. No backup/restore runbook or consistency procedure was found. `OPEN-METADATA-BACKUP-PROCEDURE` remains open.
+|SQLite contract implemented; operator procedure unresolved
+|===
+
+=== Resource sessions, Recovery, and durable failure outcomes
+
+`REQ-RESOURCE-SESSIONS` and `REQ-RESOURCE-RECOVERY` are substantially implemented in `internal/daemon/session.go`, `internal/daemon/service.go`, `internal/daemon/server.go`, and Repository CAS methods. The reviewed code persists a Begin recovery manifest before returning a mutable staging URI, records failure reason and original expectation, preserves staging on generic Release/expiry/shutdown, reconciles recovery before retry, retains CAS on conflict, and uses discard tombstones for explicit cancellation and FUSE unlink. The same-process and restart paths are exercised by `internal/daemon/service_test.go`, `internal/daemon/server_test.go`, FUSE unit tests, and E2E G1/G3 recovery scenarios. G3-05 verifies successful retry bytes and competing-writer retention, not just metadata size.
+
+*Status: Implemented for Phase A `file://` resources; unit/race and G3 evidence PASS.* Remote resource schemes are explicitly deferred by `REQ-RESOURCE-SESSIONS` and are not a gap.
+
+Remaining verification limits: no process-kill E2E is run at every individual manifest fsync/rename boundary; those persistence-failure branches have unit/fault-double coverage rather than exhaustive power-loss testing. This is not evidence of a known failed invariant, but should not be overstated as hardware-level durability proof.
+
+=== GCS asynchronous replication, GC, and Doctor
+
+[cols="1,2,2,1"]
+|===
+|Design IR references |Observed implementation |Evidence |Status
+
+|`REQ-DELIVERY-MODES`, `REQ-REPLICATION-OBLIGATION`, `REQ-GCS-PUBLICATION`, `REQ-LOCAL-GCS-IMMUTABILITY`, `DES-DELIVERY-MODES`, `DES-REPLICATION-STATE`
+|Local and GCS settings are repository-owned (`repository.json`). GCS writes enqueue content IDs atomically with Metadata. `internal/objectstore/gcs/store.go` uploads to the final content-ID name and reconciles ambiguous/existing object results from API attributes; generation metadata is retained. Local remains available until delivery confirmation.
+|Metadata queue tests; GCS object-store tests; E2E G2 outage/transport error, restart retry, duplicate-content object listing, and held-success-response crash/replay with unchanged generation.
+|Implemented; G2 PASS against pinned emulator
+
+|`REQ-REPLICATION-OBLIGATION` scheduler requirements; `DES-GCS-SYNC-SCHEDULING`; `DES-MAINTENANCE-JOB`; `DES-PHASE-A-DAEMON` idle-scheduled GCS replication
+|PA-01 follow-up adds `App.RunScheduler`, started and stopped with `daemon.ServeWithScheduler` context. It uses explicitly configured idle/periodic/max-delay and parallelism; SQLite exposes the durable oldest queue timestamp. Transfer, Capacity GC, and Orphan/Invalid GC have independent workers and errors. A failed transfer remains queued and is retried with bounded periodic backoff; parallel content IDs use a bounded worker pool. GCS daemon startup rejects missing/incomplete policy instead of choosing defaults. Local mode runs the scheduler only when policy is supplied.
+|Follow-up `e2e/run.sh --stress`: G2-01 and G2-03 delivery observed through fake-GCS REST without `maintenanceOnce`; G2-02 confirms Local bytes remain readable during outage and delivery follows recovery. Existing G0 `TestGCSModePutAtomicallyEnqueuesContentID` explicitly removes all Entry references, runs GC, and verifies the pending Local source survives. G2-05/06 observes lost-ack SIGKILL/restart attribute reconciliation with unchanged generation and no payload retransmit. Runner source has no `maintenanceOnce` call in G2. G0 test/race/lint/build/Design IR validator PASS.
+|*Implemented with explicit policy; open operational semantics remain*
+
+|`REQ-LOCAL-CAPACITY-GC`, `DES-GC-CLASSES`
+|`internal/repository/capacity_gc.go` distinguishes capacity eviction from orphan/invalid GC, protects Local authoritative and untransferred data, and checks leases/references. GC methods are daemon RPC operations.
+|Repository capacity/lease tests; G2 remote object API checks; G0–G5 PASS. Scheduler periodic ticks launch Capacity GC and Orphan/Invalid GC independently and report each task failure separately.
+|Algorithm and configured automatic maintenance implemented. Local-mode automatic GC remains disabled unless scheduler policy is explicitly configured.
+
+|`REQ-DOCTOR-NONDESTRUCTIVE`, `DES-DOCTOR`
+|`internal/repository/repository.go` Doctor validates root, Entry hierarchy/revisions, references and Local content without modifying repository state. `OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS` leaves GCS-mode cache/remote health interpretation unresolved.
+|`TestDoctorDoesNotMutateRepositoryAndIgnoresValidOrphanObjects`, `TestDoctorDoesNotLockMetadataDBOrBlockGC`; G0 PASS.
+|Implemented for defined Local checks; GCS health policy open
+|===
+
+G2's PASS establishes behavior against `fake-gcs-server:1.52.3`, including daemon-scheduled delivery without maintenance RPC, a directly observed outage, restart retry, and upload-response ambiguity reconciled without retransmitting the payload. It does not establish ADC/IAM, production bucket policy, actual cloud credentials, billing, retention/versioning, or external GCS mutation behavior; the IR explicitly says the emulator is not evidence for those semantics. `OPEN-GCS-GENERATION-AND-BUCKET-POLICY` and `OPEN-DELIVERY-MODE-MIGRATION` remain open decisions. The Local/GCS transfer mechanics are present; production deployment acceptance needs an explicit real-GCS environment decision/evidence.
+
+`nando sync` is currently a stub returning `ErrNotImplemented` through `internal/app/sync.go`. This is *intentionally deferred*, not a Phase A failure: `DES-PHASE7-SYNC` defers user-directed synchronization between repositories. It must not be confused with the missing Phase A automatic one-way GCS queue scheduler.
+
+=== CLI, daemon, IPC, errors, and operations
+
+[cols="1,2,1"]
+|===
+|Design references |Code and test trace |Status
+
+|`DES-CLI-BOUNDARY`, `DES-RUNTIME-CONFIGURATION`
+|Repository-facing `put/get/cat/list/stat/mkdir/move/remove/gc/doctor/recovery/maintenance` commands use `controlrpc` (`internal/cli/commands/`). `init` is provisioning; `daemon` is the composition root. TOML/CLI/XDG precedence and legacy-path migration guard are in `internal/config/config.go` and CLI root. Tests are in `commands_test.go` and `config_test.go`.
+|Implemented; G0 PASS. `nando sync` is Phase 7 deferred as noted above.
+
+|`DES-DEPENDENCY-DIRECTION`, `DES-DAEMON-RUNTIME`, `DES-REPOSITORY-BOUNDARIES`
+|Daemon is the sole Repository owner. CLI, FUSE and WebDAV are separate processes; FUSE and WebDAV have separate Go modules and import the public `controlrpc`, not `internal/*`. Daemon enforces one process per repository. Root Unix socket parent is mode 0700 and socket mode 0600; TCP requires TLS and bearer token.
+|Implemented; module tests, dependency inspection, protocol tests and E2E process runs PASS.
+
+|`DES-ERROR-MODEL`, `DES-CLI-BOUNDARY`, FUSE errno mapping in `REQ-FUSE-FILE-HANDLES`
+|Daemon emits stable JSON-RPC codes; FUSE explicitly maps missing/conflict/stale/permission/local errno. CLI maps the main not-found/conflict/invalid/corruption classes to exit codes. WebDAV maps Entry conflicts to HTTP precondition responses for PUT/MOVE/COPY and uses explicit 501 boundaries.
+|Implemented for tested surfaces. WebDAV lacks comprehensive status-mapping tests for all methods; broader adapter matrix is verification-incomplete.
+
+|`DES-DAEMON-RUNTIME` default systemd-user lifecycle; `OPEN-ADAPTER-AUTHORIZATION`
+|Foreground daemon command and graceful signal/shutdown handling exist. No `.service` or `.timer` unit, installation manifest, or systemd integration test was found in this repository. The design says a WSL systemd user service is the default lifecycle manager.
+|*Partial — deployment artifact/evidence missing.*
+
+|`REQ-METADATA-BACKUP-RESPONSIBILITY`, `OPEN-METADATA-BACKUP-PROCEDURE`
+|No backup/restore command or operator procedure found; responsibility is assigned to operator but atomic backup set/quiescence requirements remain open.
+|Open operational decision; not a runtime code invariant failure.
+|===
+
+Security policy remains a required human decision. Unix socket permissions and TCP transport protection are implemented, but TCP bind-address/certificate/token rotation and per-method authorization details are still open. WebDAV binds only loopback and has no client auth/TLS; this prevents remote exposure but does not authenticate other local users. Treat the listener as local-user accessible, not as per-user authorized. `ADC` is storage credential configuration, not WebDAV/client authorization.
+
+=== FUSE adapter
+
+`DES-ADAPTERS-FILESYSTEM`, `REQ-FUSE-DURABILITY`, and `REQ-FUSE-FILE-HANDLES` map to `fuse/filesystem.go` and its tests. The adapter is a separate read-write process/module using daemon RPC and shared `file://` resources. Source and tests cover stable Entry-ID rename, shared serialized writer session, atomic append, Fsync/final-close commit, terminal CAS failure, O_TRUNC staging, open-handle unlink/tombstones, no hard links, direct I/O/zero cache TTL, metadata refresh, and errno conversion.
+
+G1 exercised a real host kernel FUSE mount for CRUD, commit durability, multiple writers, rename, unlink, and CAS; G3 exercised daemon/FUSE crash/restart and recovery; optional G4 exercised a 2 MiB random-offset multi-handle stress file with independent final digest. Current run: *G1 PASS, G3 PASS, G4 PASS*. Unit/race results are in G0.
+
+*Status: Implemented for documented Phase A host/Linux behavior; G0/G1/G3/G4 evidence PASS.* This does not imply cross-platform support, multi-host filesystem coordination, or NFS export.
+
+=== WebDAV adapter and protocol-suite scope
+
+Phase A's IR says read-write WebDAV and requires a separate peer process using the public daemon/Resource contract. It does not enumerate RFC methods, require WebDAV class 2 locks, define dead-property storage, specify COPY replacement behavior, or require Litmus. Therefore:
+
+* `LOCK`/`UNLOCK`, `PROPPATCH`/dead properties, directory COPY, and overwrite semantics are *not independently mandated Phase A features* by the current IR. Their absence is an explicit partial protocol surface, not by itself a Phase A blocker. `DAV:1` is advertised; the adapter refuses LOCK/UNLOCK/PROPPATCH with 501. COPY supports only files to absent destinations; MOVE supports non-replacing namespace moves. Full Litmus `copymove`, `props`, and `locks` compliance cannot be claimed.
+* `nando-webdav` is a separate module/process using controlrpc and daemon file resources. PUT commits before 201/204 and uses Begin-time Entry/revision/absence as its CAS snapshot for conditional PUT. GET/HEAD/PROPFIND and tested namespace methods use daemon state. G5 curl covered the tested operations.
+* `OPEN-ADAPTER-AUTHORIZATION` explicitly makes WebDAV listener/auth/TLS and conditional-write requirements unresolved. Loopback-only HTTP is a temporary boundary, not a completed security decision. This remains a formal completion blocker.
+* Litmus and cadaver are unavailable; their suite/client status is SKIP, not PASS. This is not a Phase A scope blocker because neither tool nor full RFC compliance is a Design IR acceptance item. It leaves broader interoperability unverified.
+
+A concrete WebDAV defect was observed in addition to the intentional method limits: x/net/webdav's default PROPFIND allprop reports `<DAV:supportedlock>` as an exclusive write lock while this adapter intercepts LOCK and returns 501. This is contradictory capability metadata. It is a *P2 protocol correctness issue*, even though a full lock implementation is not required. Fix by preventing the adapter from advertising a capability it rejects, without inventing lock semantics; add a focused HTTP assertion before claiming the WebDAV surface internally consistent.
+
+Other unverified WebDAV behavior includes conditionals on methods beyond PUT, concurrent HTTP updates, non-empty collection DELETE behavior, MOVE/COPY precondition handling, persisted content-type presentation, and errors at every Resource cleanup boundary. The IR's conditional-write policy is open, so these are not all contractual failures today; the policy must be decided before accepting broader clients.
+
+[cols="1,2,2"]
+|===
+|Requested category |Current result |Strict interpretation
+
+|curl basic/HTTP smoke
+|*PASS* — `curl-basic`, `curl-http`
+|Only the listed methods/conditions; not a general DAV HTTP suite.
+
+|curl PROPFIND
+|*PASS* — `curl-propfind`
+|Depth-1 multistatus verified. The allprop lock-property contradiction was found by a separate audit request and is not covered by G5.
+
+|curl file MOVE/COPY
+|*PASS* — `curl-file-copymove`
+|Only file COPY to an absent target and non-replacing MOVE. This does not pass full `copymove` compliance.
+
+|locks, dead properties
+|*SKIP* — deliberately unsupported; the 501 boundary response itself was asserted by curl
+|Unsupported features are not counted as compliance PASS.
+
+|Litmus `basic`, `copymove`, `props`, `locks`, `http`
+|*SKIP* for each group — Litmus executable is not installed
+|No Litmus group is claimed PASS.
+
+|cadaver
+|*SKIP* — executable is not installed
+|No interactive-client interoperability claim.
+|===
+
+NFS export is *out of Phase A scope*. The IR lists CLI, FUSE, and WebDAV peer interfaces and a host FUSE mount; it contains no NFS adapter, NFS server/export requirement, or NFS acceptance criterion. Adding NFS would be an unrequested adapter, not a completion prerequisite.
+
+=== G0–G5 acceptance evidence
+
+PA-01 follow-up rerun: `e2e/run.sh --stress` completed with G0, G1, G2, G3, G4, G5, and cleanup all *PASS*. Evidence is retained in `{pa-01-evidence}/gates.tsv` and `{pa-01-evidence}/webdav-results.tsv`.
+
+[cols="1,2,1"]
+|===
+|Gate |What this run establishes |Result
+
+|G0
+|Root, FUSE, and WebDAV module tests and race tests; root/module lint; native builds; pinned Design IR validation.
+|PASS
+
+|G1
+|Real host FUSE in Local mode: CRUD, fsync/final-close, multiple writers, rename, unlink, CAS/recovery.
+|PASS
+
+|G2
+|fake-gcs-server outage/recovery and duplicate-content/lost-ack replay, all driven by the daemon scheduler without maintenance RPC; external API/proxy verified delivery, failed outage progress, object generation and idempotent reconciliation.
+|PASS
+
+|G3
+|Native daemon/FUSE crash, restart, committed durability, explicit Recovery retry and genuine CAS conflict retention.
+|PASS
+
+|G4
+|Optional bounded binary/truncate/random-offset concurrent-writer stress and final SHA-256.
+|PASS
+
+|G5
+|Native WebDAV + daemon and external curl for listed HTTP methods, ETag preconditions and unsupported method responses.
+|PASS (smoke scope only)
+
+|Litmus/cadaver
+|Availability check on host.
+|SKIP
+
+|GCS production/ADC
+|fake GCS emulator used; no production bucket/ADC test in this run.
+|Not run / not claimed
+|===
+
+G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-01 scheduler paths. It does not resolve scheduler defaults/idle semantics or other open deployment/security decisions, establish full WebDAV interoperability, or establish production GCS behavior.
+
+== Findings by severity
+
+[cols="1,2,3,2"]
+|===
+|ID / severity |Finding and impact |Smallest next action |Disposition
+
+|PA-01 — *P1 design/operations decision*
+|The daemon-owned scheduler is now implemented and G0–G5 exercises it. However, `OPEN-GCS-SCHEDULER-DEFAULTS` remains open: the IR asks the owner to define operational timing/parallelism defaults and whether idle means no repository writes or no dirty handles. Current code requires explicit settings and interprets idle as time since the last successful content commit observed by the daemon. GCS mode will not start without complete explicit settings; Local-mode automatic GC is also off unless those settings are supplied. No arbitrary default is installed.
+|Accept the idle interpretation or select another, and select deployment values for all four settings. Decide whether Local-mode GC must also be enabled by mandatory explicit scheduler configuration. Update the Design IR in a separate accepted design change.
+|Scheduler implementation complete; formal PA-01 acceptance conditional on the open policy decision
+
+|PA-02 — *P1 design blocker*
+|`OPEN-ADAPTER-AUTHORIZATION` remains open. WebDAV is unauthenticated HTTP on loopback only; local users share access. TCP bind and credential lifecycle policy also remain undecided. This is a deployment/security contract decision, not something code should guess.
+|Accept and record the WebDAV listener/auth/TLS/conditional-write policy (including local-user threat boundary) and TCP bind/token policy. Then decide whether loopback-only HTTP is acceptable for the intended single-user WSL Phase A deployment.
+|Block formal sign-off until decided
+
+|PA-03 — *P1 formal status blocker*
+|`DES-PHASE-A-DAEMON.attributes.phase_status` remains `planned`. A completion claim would contradict the canonical roadmap status.
+|After remaining PA-01 policy, PA-02, and accepted verification limits are resolved, have the Design IR owner update the phase status and its exit criteria in a separate design decision/change.
+|Block formal sign-off
+
+|PA-04 — *P2 protocol correctness*
+|PROPFIND allprop advertises exclusive write locking while LOCK/UNLOCK return 501. DAV clients can infer a capability the adapter rejects.
+|Filter/omit `supportedlock` from responses while lock semantics remain unsupported; add one assertion to G5. Do not add a lock store as part of this review.
+|Non-blocker to the IR's narrow read-write contract; fix before broader WebDAV acceptance
+
+|PA-05 — *P2 deployment evidence*
+|IR names a WSL systemd user service as the default lifecycle manager and permits system scope; no service unit/install manifest or lifecycle test was found here.
+|Confirm whether packaging lives outside this repository. If not, provide the Phase A service unit and test start/stop/restart/recovery under the selected scope.
+|Conditional operational acceptance
+
+|PA-06 — *P2 operational decision*
+|Backup/restore scope and quiescence are open (`OPEN-METADATA-BACKUP-PROCEDURE`). Losing association among SQLite, format/settings, Local objects, and queue can compromise recovery, but backup is assigned to operators.
+|Publish the minimal operator backup/restore procedure and specify whether daemon quiescence is required; no new backup framework is implied.
+|Operational sign-off item
+
+|PA-07 — *P2 production evidence*
+|G2 proves fake emulator behavior only. ADC/IAM, real GCS, bucket versioning/retention, external overwrite/delete, and policy are not verified; some are explicitly open or excluded by IR.
+|Before production GCS acceptance, run the same relevant delivery/recovery paths against a controlled real bucket and resolve only the open bucket policy decisions in scope.
+|Conditional production readiness; not a fake-GCS test failure
+
+|PA-08 — *P3 verification gap*
+|G5 is targeted curl smoke, not a WebDAV compliance suite. Litmus/cadaver are unavailable; supported subset and the allprop inconsistency are not fully covered.
+|Install/run Litmus when available after PA-04; retain category-level PASS/FAIL/SKIP. Keep unsupported operations SKIP/FAIL, never count them as PASS.
+|Non-blocker for current IR scope
+
+|PA-09 — *P3 unresolved semantics*
+|`OPEN-DELIVERY-MODE-MIGRATION`, `OPEN-GCS-GENERATION-AND-BUCKET-POLICY`, `OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS`, `OPEN-GCS-SCHEDULER-DEFAULTS`, and `OPEN-READ-REVISION-CHANGE` remain open. Current compatibility defaults to Local and does not silently change repository settings.
+|Resolve the operational decisions needed by the selected deployment profile; do not expand this review into Phase B/Firestore or deferred optimization work.
+|Documented conditional scope
+|===
+
+== Scope rulings
+
+[cols="1,2,1"]
+|===
+|Question |Design-rooted ruling |Completion effect
+
+|Litmus/cadaver SKIP
+|Neither is an IR requirement; Phase A requires a read-write peer adapter, not full RFC compliance. The tool absence is a verification limitation. Preserve the category SKIPs and targeted curl PASS evidence separately.
+|Non-blocker; no full interoperability claim
+
+|LOCK/UNLOCK
+|No lock contract, durability, scope, or Repository interaction is defined. Do not invent one. Returning 501 is an honest unsupported boundary, but do not advertise `supportedlock` meanwhile.
+|Intentional partial surface; PA-04 remains a defect
+
+|PROPPATCH/dead properties
+|No authoritative dead-property store/persistence contract exists in Metadata or Repository design.
+|Intentionally deferred; not a Phase A blocker
+
+|COPY/MOVE constraints
+|MOVE delegates namespace mutation and refuses replacement; file COPY to absent target uses daemon Resource/Commit. The IR does not specify WebDAV recursive COPY or replacement behavior. Existing-target, directory-copy, and MOVE replacement limitations are explicit and must remain out of full compliance claims.
+|Partial/unspecified behavior; not a core Phase A blocker
+
+|WebDAV auth/TLS
+|`OPEN-ADAPTER-AUTHORIZATION` specifically requires a human policy. Loopback-only is a code restriction, not closure of that open item.
+|Block formal sign-off until accepted
+
+|NFS export
+|No NFS requirement, component, or acceptance scenario exists; Phase A names FUSE and WebDAV adapters.
+|Out of scope; no action
+
+|`nando sync`
+|The IR explicitly defers user-directed inter-repository synchronization to Phase 7. This CLI stub is not the Phase A GCS content-ID scheduler.
+|Intentionally deferred; no action for Phase A
+|===
+
+== Next actions
+
+. Complete PA-01 acceptance by resolving `OPEN-GCS-SCHEDULER-DEFAULTS`; implementation and no-manual-RPC G2 evidence are now present.
+. Decide and record PA-02's WebDAV/TCP security and conditional-write policy.
+. Remove the false `supportedlock` capability response (PA-04) before extending interoperability claims.
+. Confirm systemd packaging ownership and provide PA-05 lifecycle evidence if required for the WSL default.
+. Publish the operator backup/restore procedure (PA-06) and choose the GCS deployment evidence threshold (PA-07).
+. Re-run G0–G5 after any fixes; run Litmus/cadaver only when available and retain strict per-group results. Then update `DES-PHASE-A-DAEMON` from `planned` only through an accepted Design IR change.
+

@@ -684,6 +684,19 @@ func (s *Store) PendingTransfers(ctx context.Context) ([]content.ID, error) {
 	return ids, rows.Err()
 }
 
+// OldestPendingTransfer returns the durable enqueue time of the oldest queue row.
+func (s *Store) OldestPendingTransfer(ctx context.Context) (time.Time, bool, error) {
+	var raw int64
+	err := s.db.QueryRowContext(ctx, "SELECT enqueued_at FROM transfer_queue ORDER BY enqueued_at LIMIT 1").Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return metadata.Timestamp(raw).Time(), true, nil
+}
+
 // CompleteTransfer removes a content-ID obligation after delivery confirmation.
 func (s *Store) CompleteTransfer(ctx context.Context, id content.ID) error {
 	if err := id.Validate(); err != nil {

@@ -29,3 +29,17 @@ Docker Compose starts only fake GCS; the daemon, real FUSE mount, WebDAV adapter
 == WebDAV Phase A
 
 WebDAV is a separate Go module and process. Build it with `cd webdav && go build ./cmd/nando-webdav`. It connects to the daemon using public controlrpc and daemon-issued `file://` Resource URIs only. The Phase A server binds to loopback HTTP only; remote exposure is rejected until authentication and TLS policy are decided. Supported operations, ETag conditions, and deliberate protocol gaps are documented in link:docs/webdav-phase-a.adoc[WebDAV Phase A].
+
+== Daemon maintenance scheduling
+
+GCS delivery requires an explicit scheduler policy in the daemon's TOML config; timing and parallelism have no implicit operational defaults. Example values below are illustrative and must be selected for the deployment:
+
+[source,toml]
+----
+gcs_sync_idle_interval = "30s"
+gcs_sync_periodic_interval = "5m"
+gcs_max_delivery_delay = "30m"
+gcs_sync_parallelism = 2
+----
+
+The daemon runs transfer processing, Capacity GC, and Orphan/Invalid GC as independent tasks. GCS queue rows retain their durable enqueue timestamps so maximum-delay eligibility survives daemon restart. Idle is currently measured from the last successful content commit observed by the daemon; the Design IR still records the broader idle definition/default policy as an open decision. The scheduler also runs for Local repositories when these settings are explicitly configured; without an explicit policy, Local repositories keep their existing manual maintenance behavior.

@@ -18,6 +18,7 @@ class ProxyState:
         self.armed = False
         self.held_commits = 0
         self.upload_puts = 0
+        self.object_attribute_gets = 0
         self.replay_preconditions = 0
         self.ambiguous_name = ""
         self.committed = threading.Event()
@@ -28,6 +29,7 @@ class ProxyState:
             self.armed = True
             self.held_commits = 0
             self.upload_puts = 0
+            self.object_attribute_gets = 0
             self.replay_preconditions = 0
             self.ambiguous_name = ""
             self.committed.clear()
@@ -39,6 +41,7 @@ class ProxyState:
                 "armed": self.armed,
                 "held_commits": self.held_commits,
                 "upload_puts": self.upload_puts,
+                "object_attribute_gets": self.object_attribute_gets,
                 "replay_preconditions": self.replay_preconditions,
                 "ambiguous_name": self.ambiguous_name,
             }
@@ -101,6 +104,9 @@ def handler_type(state: ProxyState, upstream_host: str, upstream_port: int):
                 if key.lower() not in {"host", "connection", "content-length", "expect"}
             }
             query = parse_qs(urlsplit(self.path).query)
+            if self.command == "GET" and "/o/" in urlsplit(self.path).path and "prefix" not in query:
+                with state.lock:
+                    state.object_attribute_gets += 1
             object_name = query.get("name", [""])[0]
             if (
                 self.command == "POST"

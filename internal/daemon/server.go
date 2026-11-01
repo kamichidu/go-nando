@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,6 +18,19 @@ import (
 // Serve runs the daemon control plane. The caller must hold the repository
 // process lock for the full lifetime of Serve.
 func Serve(ctx context.Context, application *app.App, repoDir string, listenConfig ListenConfig) (retErr error) {
+	return ServeWithScheduler(ctx, application, repoDir, listenConfig, nil)
+}
+
+// SchedulerConfig carries explicitly selected operational policy into the daemon.
+type SchedulerConfig struct {
+	IdleInterval     time.Duration
+	PeriodicInterval time.Duration
+	MaxDeliveryDelay time.Duration
+	Parallelism      int
+}
+
+// ServeWithScheduler runs the daemon and its optional repository-owned scheduler.
+func ServeWithScheduler(ctx context.Context, application *app.App, repoDir string, listenConfig ListenConfig, scheduler *SchedulerConfig) (retErr error) {
 	sessions, err := newSessionManager(application, repoDir)
 	if err != nil {
 		return err
@@ -50,6 +64,18 @@ func Serve(ctx context.Context, application *app.App, repoDir string, listenConf
 		Handler:           newHandler(newService(application, sessions), listenConfig.Token),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       2 * time.Minute,
+	}
+	if scheduler != nil {
+		schedulerCtx, cancelScheduler := context.WithCancel(ctx)
+		schedulerDone := make(chan error, 1)
+		go func() {
+			report := func(task string, err error) { log.Printf("[maintenance:%s] %v", task, err) }
+			schedulerDone <- application.RunScheduler(schedulerCtx, scheduler.IdleInterval, scheduler.PeriodicInterval, scheduler.MaxDeliveryDelay, scheduler.Parallelism, report)
+		}()
+		defer func() {
+			cancelScheduler()
+			retErr = errors.Join(retErr, <-schedulerDone)
+		}()
 	}
 	serveResult := make(chan error, 1)
 	go func() { serveResult <- httpServer.Serve(listener) }()

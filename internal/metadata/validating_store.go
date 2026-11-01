@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/kamichidu/go-nando/internal/content"
 )
@@ -124,6 +125,10 @@ func (s *ValidatingStore) CommitPut(ctx context.Context, entry Entry, enqueueTra
 // PendingTransfers delegates transfer queue listing.
 func (s *ValidatingStore) PendingTransfers(ctx context.Context) ([]content.ID, error) {
 	return s.next.PendingTransfers(ctx)
+}
+
+func (s *ValidatingStore) OldestPendingTransfer(ctx context.Context) (time.Time, bool, error) {
+	return s.next.OldestPendingTransfer(ctx)
 }
 
 // CompleteTransfer delegates transfer queue completion.
