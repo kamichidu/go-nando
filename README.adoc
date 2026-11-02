@@ -42,13 +42,27 @@ go install github.com/kamichidu/go-nando/adapters/fuse/cmd/nando-fuse@latest
 go install github.com/kamichidu/go-nando/adapters/webdav/cmd/nando-webdav@latest
 ----
 
-Ensure the Go binary directory is on `PATH`. To build from a checkout instead, run `go build ./cmd/nando` from the repository root. For Debian packages and the systemd user service, see the link:packaging/README.md[package and service guide].
+Ensure the Go binary directory is on `PATH`. `go install` places all three
+executables in that same directory, so invoke the optional adapters through
+`nando fuse` and `nando webdav`:
+
+[source,bash]
+----
+nando fuse --help
+nando webdav --help
+----
+
+`nando` finds `nando-fuse` and `nando-webdav` beside its own resolved
+executable. It does not search `PATH` for adapters. To build from a checkout
+instead, run `go build ./cmd/nando` from the repository root. For Debian
+packages and the systemd user service, see the
+link:packaging/README.md[package and service guide].
 
 The Debian package exposes only `nando` in `/usr/bin`; run the optional
-adapters as `nando fuse` and `nando webdav`. Those subcommands resolve
-`nando-fuse` and `nando-webdav` from the package's sibling `../libexec`
-directory. Source builds can set `NANDO_LIBEXEC_DIR` to an explicit adapter
-directory for development and tests.
+adapters as `nando fuse` and `nando webdav`. The resolved executable lives in
+`/opt/nando/bin`, and those subcommands resolve `nando-fuse` and `nando-webdav`
+from `/opt/nando/libexec`. Source builds can set `NANDO_LIBEXEC_DIR` to an
+explicit adapter directory for development and tests.
 
 == Quick Start
 

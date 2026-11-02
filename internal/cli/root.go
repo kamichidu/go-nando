@@ -143,9 +143,29 @@ func externalCommandIndex(args []string) int {
 	return -1
 }
 
-// runExternalSubcommand resolves adapters only beside the installed executable,
-// or in an explicit directory supplied for development and integration tests.
+// runExternalSubcommand resolves adapters beside the installed executable,
+// from the packaged libexec directory, or from an explicit directory supplied
+// for development and integration tests.
 func RunExternalSubcommand(args []string) error {
+	dirs := []string{os.Getenv("NANDO_LIBEXEC_DIR")}
+	if dirs[0] == "" {
+		path, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve nando executable: %w", err)
+		}
+		path, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("resolve nando executable symlink: %w", err)
+		}
+		execDir := filepath.Dir(path)
+		// go install places each command module's binary in the same bin
+		// directory. Debian packages instead place adapters in ../libexec.
+		dirs = []string{execDir, filepath.Clean(filepath.Join(execDir, "..", "libexec"))}
+	}
+	return runExternalSubcommandInDirs(args, dirs, os.Stdout)
+}
+
+func runExternalSubcommandInDirs(args, dirs []string, stdout io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("missing external subcommand")
 	}
@@ -157,29 +177,28 @@ func RunExternalSubcommand(args []string) error {
 	if name == "" || strings.ContainsAny(name, `/\\`) || name == "." || name == ".." {
 		return fmt.Errorf("invalid external subcommand %q", name)
 	}
-	dir := os.Getenv("NANDO_LIBEXEC_DIR")
-	if dir == "" {
-		path, err := os.Executable()
-		if err != nil {
-			return fmt.Errorf("resolve nando executable: %w", err)
+	var path string
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
 		}
-		path, err = filepath.EvalSymlinks(path)
+		candidate := filepath.Join(dir, "nando-"+name)
+		info, err := os.Stat(candidate)
 		if err != nil {
-			return fmt.Errorf("resolve nando executable symlink: %w", err)
+			continue
 		}
-		dir = filepath.Join(filepath.Dir(path), "..", "libexec")
+		if !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
+			return fmt.Errorf("adapter %q is not an executable regular file", candidate)
+		}
+		path = candidate
+		break
 	}
-	path := filepath.Join(dir, "nando-"+name)
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("unknown command %q (adapter %q not found in %s)", name, filepath.Base(path), dir)
-	}
-	if !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
-		return fmt.Errorf("adapter %q is not an executable regular file", path)
+	if path == "" {
+		return fmt.Errorf("unknown command %q (adapter nando-%s not found in %s)", name, name, strings.Join(dirs, ", "))
 	}
 	forwarded := append(append([]string(nil), args[:index]...), args[index+1:]...)
 	cmd := exec.Command(path, forwarded...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
 			return externalExitError{code: exit.ExitCode()}

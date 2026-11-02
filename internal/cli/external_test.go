@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kamichidu/go-flagshim"
@@ -41,6 +42,43 @@ func TestExternalSubcommandUsesExplicitDirectoryAndReturnsStatus(t *testing.T) {
 	status, ok := err.(externalExitError)
 	if !ok || status.code != 7 {
 		t.Fatalf("external status err=%v", err)
+	}
+}
+
+func TestExternalSubcommandFindsSiblingAdapterForGoInstallLayout(t *testing.T) {
+	binDir := t.TempDir()
+	adapter := filepath.Join(binDir, "nando-demo")
+	if err := os.WriteFile(adapter, []byte("#!/bin/sh\nprintf sibling\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	if err := runExternalSubcommandInDirs([]string{"demo"}, []string{binDir}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "sibling" {
+		t.Fatalf("adapter stdout=%q", output.String())
+	}
+}
+
+func TestExternalSubcommandFindsDebianLibexecLayout(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	libexecDir := filepath.Join(root, "libexec")
+	if err := os.MkdirAll(binDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(libexecDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(libexecDir, "nando-demo"), []byte("#!/bin/sh\nprintf deb\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	if err := runExternalSubcommandInDirs([]string{"demo"}, []string{binDir, filepath.Join(binDir, "..", "libexec")}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "deb" {
+		t.Fatalf("adapter stdout=%q", output.String())
 	}
 }
 
