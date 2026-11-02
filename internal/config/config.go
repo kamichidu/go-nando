@@ -37,6 +37,7 @@ type LoggingConfig struct {
 // RemoteConfig contains user-selected scheduling policy for remote delivery.
 // Repository backend selection is persisted separately in repository settings.
 type RemoteConfig struct {
+	URI                  string `toml:"remote_uri"`
 	SyncIdleInterval     string `toml:"sync_idle_interval"`
 	SyncPeriodicInterval string `toml:"sync_periodic_interval"`
 	MaxDeliveryDelay     string `toml:"max_delivery_delay"`

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+
+	"github.com/kamichidu/go-nando/internal/objectstore/gcs"
 )
 
 // DeliveryMode selects the repository's durable delivery contract.
@@ -19,7 +21,7 @@ const (
 type Settings struct {
 	DeliveryMode  DeliveryMode `json:"delivery_mode"`
 	RemoteBackend string       `json:"remote_backend,omitempty"`
-	RemoteBucket  string       `json:"remote_bucket,omitempty"`
+	RemoteURI     string       `json:"remote_uri,omitempty"`
 	MaxLocalBytes int64        `json:"max_local_bytes,omitempty"`
 }
 
@@ -43,12 +45,15 @@ func (s Settings) Validate() error {
 	}
 	switch s.DeliveryMode {
 	case DeliveryModeLocal:
-		if s.RemoteBucket != "" || s.RemoteBackend != "" {
+		if s.RemoteURI != "" || s.RemoteBackend != "" {
 			return fmt.Errorf("local delivery mode must not configure remote object storage")
 		}
 	case DeliveryModeRemote:
-		if s.RemoteBucket == "" {
-			return fmt.Errorf("remote delivery mode requires a bucket")
+		if s.RemoteURI == "" {
+			return fmt.Errorf("remote delivery mode requires a remote URI")
+		}
+		if _, _, err := gcs.ParseRemoteURI(s.RemoteURI); err != nil {
+			return fmt.Errorf("invalid remote URI: %w", err)
 		}
 		if s.RemoteBackend != "" && s.RemoteBackend != "gcs" {
 			return fmt.Errorf("unsupported remote object storage backend %q", s.RemoteBackend)

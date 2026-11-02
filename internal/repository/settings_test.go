@@ -12,7 +12,7 @@ func TestSettingsReadCanonicalRepositoryJSON(t *testing.T) {
 		want Settings
 	}{
 		{"local", `{"delivery_mode":"local"}`, Settings{DeliveryMode: DeliveryModeLocal}},
-		{"remote GCS", `{"delivery_mode":"remote","remote_backend":"gcs","remote_bucket":"archive","max_local_bytes":42}`, Settings{DeliveryMode: DeliveryModeRemote, RemoteBackend: "gcs", RemoteBucket: "archive", MaxLocalBytes: 42}},
+		{"remote GCS", `{"delivery_mode":"remote","remote_backend":"gcs","remote_uri":"gs://archive","max_local_bytes":42}`, Settings{DeliveryMode: DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://archive", MaxLocalBytes: 42}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -32,8 +32,8 @@ func TestSettingsReadCanonicalRepositoryJSON(t *testing.T) {
 		`{"delivery_mode":"gcs","gcs_bucket":"archive"}`,
 		`{"delivery_mode":"remote","gcs_bucket":"archive"}`,
 		`{"delivery_mode":"unsupported"}`,
-		`{"delivery_mode":"remote","remote_backend":"other","remote_bucket":"archive"}`,
-		`{"delivery_mode":"remote","remote_bucket":"archive","max_local_bytes":-1}`,
+		`{"delivery_mode":"remote","remote_backend":"other","remote_uri":"gs://archive"}`,
+		`{"delivery_mode":"remote","remote_uri":"gs://archive","max_local_bytes":-1}`,
 	} {
 		t.Run("reject "+raw, func(t *testing.T) {
 			var got Settings
@@ -47,7 +47,7 @@ func TestSettingsReadCanonicalRepositoryJSON(t *testing.T) {
 }
 
 func TestSettingsRejectUnsupportedRemoteBackend(t *testing.T) {
-	s := Settings{DeliveryMode: DeliveryModeRemote, RemoteBackend: "other", RemoteBucket: "bucket"}
+	s := Settings{DeliveryMode: DeliveryModeRemote, RemoteBackend: "other", RemoteURI: "gs://bucket"}
 	if err := s.Validate(); err == nil {
 		t.Fatal("unsupported remote backend was accepted")
 	}

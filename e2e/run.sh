@@ -109,7 +109,7 @@ if ! run_gate G2 "host-native real FUSE with fake GCS outage/retry/idempotency" 
   compose=(docker compose --project-directory "$1" -f "$1/e2e/compose.yaml" -p "$2")
   export E2E_REPOSITORY="$3" E2E_SOCKET="$4" E2E_FAKE_GCS=http://127.0.0.1:4443
   export E2E_GCS_PROXY=http://127.0.0.1:4444 GOOGLE_CLOUD_PROJECT=nando-e2e
-  "$5" --repository "$3" init --delivery-mode remote --remote-backend gcs --remote-bucket nando-e2e
+  "$5" --repository "$3" init --delivery-mode remote --remote-backend gcs --remote-uri gs://nando-e2e
   scheduler_config="$7/gcs-scheduler.toml"
   cat >"$scheduler_config" <<EOF
 [remote]
@@ -135,7 +135,7 @@ EOF
   ack_repository="$7/state/gcs-ack/repository"
   ack_socket="$7/run/gcs-ack.sock"
   mkdir -p "$(dirname "$ack_repository")"
-  "$5" --repository "$ack_repository" init --delivery-mode remote --remote-backend gcs --remote-bucket nando-e2e
+  "$5" --repository "$ack_repository" init --delivery-mode remote --remote-backend gcs --remote-uri gs://nando-e2e
   export E2E_REPOSITORY="$ack_repository" E2E_SOCKET="$ack_socket"
   setsid python3 "$6/e2e/gcs_proxy.py" >"$7/gcs-proxy.log" 2>&1 & proxy=$!
   printf "%s\tgcs-proxy\n" "$proxy" >>"$7/host-pids.tsv"

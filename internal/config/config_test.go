@@ -78,7 +78,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 			t.Errorf("sample is missing active config key %q", key)
 		}
 	}
-	for _, key := range []string{"path", "verbose", "listen", "token", "token_from_file", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory", "mountpoint"} {
+	for _, key := range []string{"path", "verbose", "listen", "token", "token_from_file", "token_from_env", "ca_cert", "tls_cert", "tls_key", "remote_uri", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory", "mountpoint"} {
 		if !strings.Contains(string(sampleBytes), "# "+key+" =") {
 			t.Errorf("sample is missing commented supported config key %q", key)
 		}
@@ -128,6 +128,20 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	}
 	if cfg.Repository.Path != "" || cfg.Daemon.Listen != "" || resolved.DataDir == filepath.Dir(resolved.ConfigFile) {
 		t.Fatalf("sample does not select active default data/transport paths: cfg=%+v paths=%+v", cfg, resolved)
+	}
+}
+
+func TestLoadConfigRemoteURIPreservesLiteralValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[remote]\nremote_uri = \"gs://bucket/hoge/\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Remote.URI != "gs://bucket/hoge/" {
+		t.Fatalf("remote URI=%q", cfg.Remote.URI)
 	}
 }
 

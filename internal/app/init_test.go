@@ -11,20 +11,20 @@ import (
 
 func TestInitRepositoryPersistsDeliverySettingsAndDoesNotReconfigure(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "repo")
-	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBucket: "bucket-a"}
+	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://bucket-a"}
 	if err := InitRepositoryWithSettings(context.Background(), root, want); err != nil {
 		t.Fatalf("init remote repository: %v", err)
 	}
 	got, err := LoadRepositorySettings(root)
-	if err != nil || got.DeliveryMode != want.DeliveryMode || got.RemoteBucket != want.RemoteBucket {
+	if err != nil || got.DeliveryMode != want.DeliveryMode || got.RemoteURI != want.RemoteURI {
 		t.Fatalf("load settings: got=%+v err=%v", got, err)
 	}
-	changed := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBucket: "bucket-b"}
+	changed := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://bucket-b"}
 	if err := InitRepositoryWithSettings(context.Background(), root, changed); err == nil {
 		t.Fatal("init unexpectedly reconfigured an existing repository")
 	}
 	got, err = LoadRepositorySettings(root)
-	if err != nil || got.DeliveryMode != want.DeliveryMode || got.RemoteBucket != want.RemoteBucket {
+	if err != nil || got.DeliveryMode != want.DeliveryMode || got.RemoteURI != want.RemoteURI {
 		t.Fatalf("existing settings changed: got=%+v err=%v", got, err)
 	}
 	if err := InitRepository(context.Background(), root); err == nil {

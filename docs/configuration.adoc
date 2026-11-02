@@ -8,7 +8,7 @@ use them without a home directory.
 
 Copy the complete, commented `samples/config.toml` to the default config path to
 begin. It documents all supported per-user settings, including optional TCP/TLS
-transport and remote scheduler policy. Its empty `[repository].path` setting
+transport, optional `[remote].remote_uri`, and remote scheduler policy. Its empty `[repository].path` setting
 selects the default local repository data directory. Set `[repository].path` to
 select another local repository. `[recovery].directory` selects a logical
 directory inside nando and defaults to `/recyclebin`; it is independent of the
@@ -77,6 +77,15 @@ instead. A literal can be provided with `token = "..."`, but environment or
 file sources avoid placing the token value in the TOML file.
 
 == Remote delivery scheduler
+
+GCS selection is persisted by `nando init --delivery-mode remote
+--remote-uri gs://bucket[/prefix]` in repository-owned `repository.json`.
+The optional `[remote].remote_uri` TOML value must match that persisted URI
+when present. Prefixes are literal object-key strings: `gs://bucket/hoge` and
+`gs://bucket/hoge/` remain distinct, with no normalization or automatic
+separator insertion. With the current `objects/{content_id}` suffix,
+`gs://bucket/hoge` maps to `hogeobjects/{content_id}` and
+`gs://bucket/hoge/` maps to `hoge/objects/{content_id}`.
 
 Remote delivery to the currently supported GCS backend requires all four scheduler settings in the daemon's TOML file. The only supported scheduler keys are grouped under `[remote]`: `sync_idle_interval`, `sync_periodic_interval`, `max_delivery_delay`, and `sync_parallelism`. Other scheduler key spellings are unknown configuration keys and are rejected.
 

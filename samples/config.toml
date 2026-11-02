@@ -18,6 +18,10 @@
 # Remote repositories require all four values. Durations must be positive.
 # Local repositories can also use these values to schedule maintenance.
 [remote]
+# GCS repository URI, for example "gs://my-nando-bucket/archive/".
+# The prefix is literal: trailing slashes are preserved and no separator is
+# inserted. When set, it must match the URI persisted at repository init.
+# remote_uri = "gs://my-nando-bucket/archive/"
 # sync_idle_interval = "30s"
 # sync_periodic_interval = "5m"
 # max_delivery_delay = "30m"

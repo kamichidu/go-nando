@@ -42,6 +42,7 @@ type DaemonConfig struct {
 	TLSKey        string `toml:"tls_key"`
 }
 type RemoteConfig struct {
+	URI                  string `toml:"remote_uri"`
 	SyncIdleInterval     string `toml:"sync_idle_interval"`
 	SyncPeriodicInterval string `toml:"sync_periodic_interval"`
 	MaxDeliveryDelay     string `toml:"max_delivery_delay"`

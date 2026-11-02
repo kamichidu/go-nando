@@ -14,7 +14,7 @@ import (
 type InitCommand struct {
 	deliveryMode  string
 	remoteBackend string
-	remoteBucket  string
+	remoteURI     string
 	maxLocalBytes int64
 }
 
@@ -27,7 +27,7 @@ func (c *InitCommand) Name() string {
 func (c *InitCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) context.Context {
 	fs.StringVar(&c.deliveryMode, "delivery-mode", "local", "repository delivery mode (local or remote)")
 	fs.StringVar(&c.remoteBackend, "remote-backend", "gcs", "selected remote object storage backend (currently: gcs)")
-	fs.StringVar(&c.remoteBucket, "remote-bucket", "", "bucket for the selected remote object storage backend")
+	fs.StringVar(&c.remoteURI, "remote-uri", "", "GCS URI (gs://bucket[/prefix]) for the selected remote object storage backend")
 	fs.Int64Var(&c.maxLocalBytes, "max-local-bytes", 0, "maximum Local object bytes before Capacity GC (0 disables capacity eviction)")
 	return ctx
 }
@@ -45,7 +45,7 @@ func (c *InitCommand) Run(ctx context.Context, args []string) error {
 	settings := repository.DefaultSettings()
 	settings.DeliveryMode = repository.DeliveryMode(c.deliveryMode)
 	settings.RemoteBackend = c.remoteBackend
-	settings.RemoteBucket = c.remoteBucket
+	settings.RemoteURI = c.remoteURI
 	if settings.DeliveryMode == repository.DeliveryModeLocal {
 		settings.RemoteBackend = ""
 	}

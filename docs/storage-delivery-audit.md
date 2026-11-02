@@ -61,7 +61,9 @@ The corresponding current-source facts and comparisons are recorded in `docs/des
 * One periodic Maintenance Job starts/schedules three independent subtasks: transfer queue processing, Capacity GC, and Orphan/Invalid GC. Scheduling is the only shared behavior; each subtask owns its failures, and transfer failure cannot stop either GC.
 * Capacity GC uses Repository capacity settings and runs periodically, reclaiming eligible Local space only when needed. It preserves Local authority, undelivered Remote-mode content, and RLock-protected resources. Actual capacity exhaustion ends Put/Download with a capacity error; there is no required reservation or preflight space guarantee. The two GC classes remain distinct. Physical deletion rechecks eligibility under WLock and does not intentionally delete the last known-good copy. An already-sent delete may still finish late after expiry.
 * Ordinary and scheduled GC operate on Local objects only. The explicit `nando admin recover` command detects GCS objects whose Content IDs have no SQLite Entry reference and restores metadata at `/recyclebin/<content-id>`. Original names are unknown. Recovery is idempotent and collision-safe, requires the GCS MD5 attribute to be exactly 16 bytes, and trusts GCS object bytes/attributes without downloading and re-hashing the object. Missing/invalid MD5 is reported as an actionable per-object error while other valid objects may be restored. Recovery never moves, copies, or deletes a GCS object. Any deletion of restored remote content requires a separate explicit human action through the operator's GCS administration workflow; this project has no GCS deletion command.
-* Local/Remote mode, selected remote backend and bucket, and capacity policy are Repository settings. No general settings framework is implied. Pre-v1 repository settings are unsupported; v1 settings use `remote_backend=gcs` for the current GCS backend. Automatic mode conversion and bucket changes remain unsupported.
+* Local/Remote mode, selected remote backend and `gs://bucket[/prefix]` remote URI, and capacity policy are Repository settings. `--remote-uri` is the initialization flag; optional per-user `[remote].remote_uri` must match persisted settings. The raw prefix is concatenated literally with `objects/{content_id}` for upload, lookup, read, and listing. Trailing slash, escaped bytes, and all other significant prefix bytes are preserved; URI parsing performs no path normalization. Pre-v1 repository settings are unsupported. For example, `gs://bucket/hoge` targets `hogeobjects/{content_id}` and
+  `gs://bucket/hoge/` targets `hoge/objects/{content_id}`. Automatic mode
+  conversion and URI changes remain unsupported.
 * The persistent queue is content-ID keyed, idempotently enqueued in the same Metadata transaction as Put, rediscovered after restart, and retried periodically from complete Local content. GCS API-contract completion (including API-attribute reconciliation of ambiguous/existing-name results) deletes the queue row. It is not a Pending Entry or resumed Put; no retry state machine is needed. Metadata backups remain an operator responsibility.
 
 == Accepted schema migration policy
@@ -79,7 +81,7 @@ The following matters remain open; the SQLite schema migration policy above is a
 . **GCS bucket policy:** define behavior under versioning, soft delete, retention, external overwrite/delete, bucket or prefix changes, and object recreation. Generation observations support reconciliation; GCS deletion is not a Repository operation.
 . **Capacity policy values:** Repository settings own capacity policy, periodic GC consults it, and actual exhaustion returns a capacity error. Exact configurable thresholds and eviction priority are operational details not specified here; no reservation guarantee is required.
 . **Doctor and Cat:** define GCS-mode Doctor findings for missing Local cache, pending transfer, or missing/corrupt GCS content. Cat can leave an already-written response prefix after downstream writer failure.
-. **Mode migration:** old GCS settings are read as Remote mode; new settings and examples use generic names. No automatic Local-to-Remote prefill, bucket change, Remote-to-Local conversion, or rollback migration is provided.
+. **Mode migration:** old GCS settings are read as Remote mode; new settings and examples use generic names. No automatic Local-to-Remote prefill, remote URI change, Remote-to-Local conversion, or rollback migration is provided.
 . **Firestore deployment:** current SQLite coordination is local-path/process scoped. A Firestore MetadataStore must define distributed coordination and consistent reference enumeration if deployed across hosts; adapter must retain atomic Entry-plus-queue semantics.
 . **Backup/restore:** define the recoverable set and quiescence boundary for Metadata, Repository Format, delivery configuration, transfer queue, and Local objects.
 . **Read revision policy:** decide whether a revision change during streaming returns the opened content or retries; this remains independent from Lease/GC safety.
@@ -109,7 +111,7 @@ This sequence maps dependencies; it does not authorize implementation in this de
 | Current source | Target responsibility or required change (design only)
 
 | `internal/cli/root.go`, `internal/config/config.go`, `internal/app/init.go`
-| Repository-owned mode/bucket selection and composition; exact persisted location and initialization/migration remain open.
+| Repository-owned mode/remote-URI selection and composition are implemented; pre-v1 settings are unsupported.
 
 | `internal/repository/put.go`
 | Preserve local spool/hash and Local publication before Metadata; add durable content-ID delivery discovery and async uploader only using the decided same-transaction Metadata queue contract.
@@ -139,7 +141,7 @@ This sequence maps dependencies; it does not authorize implementation in this de
 | Area | Scenarios and final-state assertion
 
 | Mode/configuration
-| Local mode initializes/runs with no GCS client or credentials; Remote mode selects one repository-owned backend and bucket. Pre-v1 repositories require explicit out-of-band handling and are not migrated. Queue enqueue is atomic with Put Entry mutation through MetadataStore. Invalid/missing format/config fails before writes.
+| Local mode initializes/runs with no GCS client or credentials; Remote mode selects one repository-owned backend and `gs://bucket[/prefix]` URI. Pre-v1 repositories require explicit out-of-band handling and are not migrated. Queue enqueue is atomic with Put Entry mutation through MetadataStore. Invalid/missing format/config fails before writes.
 
 | Put and durable transfer state
 | Same bytes under multiple logical names create one content-ID queue item; Put atomically commits Entry and queue item in one Metadata operation; restart re-discovers unconfirmed IDs; restart after upload-before-completion retries by verify/no-replace; duplicate enqueue is idempotent; failure before local publish leaves no metadata; metadata replacement preserves old entry until commit.
@@ -163,7 +165,7 @@ This sequence maps dependencies; it does not authorize implementation in this de
 | SQLite migration and golden compatibility; atomic expected-revision Create/Update/Move/Delete; sibling uniqueness; parent kind/existence; ancestry cycle; consistent ReferencedObjectIDs under GC; Firestore conformance and cross-host Coordinator test only if that deployment is approved.
 
 | Backup/restore and CLI
-| restore preserves format, delivery mode, content-ID queue/verification state and reference IDs; GCS/local missing replica diagnosis; external-removal 404 remains local and leaves Metadata unchanged; capacity error mapping; transfer visibility/output stability; no credentials or bucket secrets persisted to logs.
+| restore preserves format, delivery mode, content-ID queue/verification state and reference IDs; GCS/local missing replica diagnosis; external-removal 404 remains local and leaves Metadata unchanged; capacity error mapping; transfer visibility/output stability; no credentials or remote URI secrets persisted to logs.
 |===
 
 == Validation during this design task

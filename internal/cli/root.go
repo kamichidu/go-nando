@@ -374,7 +374,14 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func() error, err
 		if repoSettings.RemoteBackend != "" && repoSettings.RemoteBackend != "gcs" {
 			return nil, "", nil, errors.Join(fmt.Errorf("unsupported remote object storage backend %q", repoSettings.RemoteBackend), metaStore.Close())
 		}
-		gcsStore, client, err := gcs.NewClientStore(ctx, repoSettings.RemoteBucket)
+		cfg, err := ResolveConfigFromContext(ctx)
+		if err != nil {
+			return nil, "", nil, errors.Join(err, metaStore.Close())
+		}
+		if cfg.Remote.URI != "" && cfg.Remote.URI != repoSettings.RemoteURI {
+			return nil, "", nil, errors.Join(fmt.Errorf("configured remote_uri %q does not match repository remote_uri", cfg.Remote.URI), metaStore.Close())
+		}
+		gcsStore, client, err := gcs.NewClientStore(ctx, repoSettings.RemoteURI)
 		if err != nil {
 			return nil, "", nil, errors.Join(err, metaStore.Close())
 		}

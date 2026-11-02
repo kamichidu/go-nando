@@ -152,11 +152,11 @@ verbose = false
 ----
 
 To initialize remote delivery with the currently supported GCS backend, select
-the backend and provide a bucket:
+the backend and provide a GCS URI:
 
 [source,bash]
 ----
-nando --repository "$HOME/nando-data" init --delivery-mode remote --remote-backend gcs --remote-bucket my-nando-bucket
+nando --repository "$HOME/nando-data" init --delivery-mode remote --remote-backend gcs --remote-uri gs://my-nando-bucket
 ----
 
 Remote delivery requires explicit scheduler policy in the daemon's TOML
@@ -178,12 +178,19 @@ remote backend. Multiple backends, fanout, failover, and tiering are
 unsupported and not planned.
 
 The current GCS backend is selected with `delivery_mode: "remote"`,
-`remote_backend: "gcs"`, and `remote_bucket`. Pre-v1 repository settings,
+`remote_backend: "gcs"`, and `remote_uri` in the repository settings. Use
+`--remote-uri gs://bucket[/prefix]` when initializing. The optional TOML
+`[remote].remote_uri` must match the repository URI when set. Prefix bytes are
+literal object-key prefixes: a prefix ending in `/` is distinct from one that
+does not, and no separator is inserted automatically. The current content key suffix is
+`objects/{content_id}`; thus `gs://bucket/hoge` yields
+`hogeobjects/{content_id}`, while `gs://bucket/hoge/` yields
+`hoge/objects/{content_id}`. Pre-v1 repository settings,
 configuration spellings, CLI aliases, schema histories, and recovery manifests
 are unsupported. The program rejects unsupported state without modifying its
 data. TOML scheduler settings are supported only under `[remote]` with the four
 keys shown above; other spellings are rejected. Reinitializing an existing
-repository does not change its selected backend or bucket.
+repository does not change its selected backend or remote URI.
 
 The daemon runs remote delivery processing, Capacity GC, and Orphan/Invalid GC
 as independent tasks. Remote delivery queue rows retain durable enqueue

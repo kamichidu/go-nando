@@ -243,7 +243,7 @@ func TestAdminMigrateCurrentAndMissingDatabase(t *testing.T) {
 
 func TestInitAcceptsCurrentRemoteFlags(t *testing.T) {
 	repoDir := filepath.Join(t.TempDir(), "repository")
-	args := []string{"--repository", repoDir, "init", "--delivery-mode", "remote", "--remote-backend", "gcs", "--remote-bucket", "new-bucket"}
+	args := []string{"--repository", repoDir, "init", "--delivery-mode", "remote", "--remote-backend", "gcs", "--remote-uri", "gs://new-bucket"}
 	var stdout, stderr bytes.Buffer
 	if code := executeCLI(context.Background(), &stdout, &stderr, args); code != 0 {
 		t.Fatalf("init: code=%d stderr=%q", code, stderr.String())
@@ -252,13 +252,13 @@ func TestInitAcceptsCurrentRemoteFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.DeliveryMode != repository.DeliveryModeRemote || settings.RemoteBackend != "gcs" || settings.RemoteBucket != "new-bucket" {
+	if settings.DeliveryMode != repository.DeliveryModeRemote || settings.RemoteBackend != "gcs" || settings.RemoteURI != "gs://new-bucket" {
 		t.Fatalf("repository settings=%+v", settings)
 	}
 }
 
 func TestInitRejectsDeprecatedGCSCLIValues(t *testing.T) {
-	for _, args := range [][]string{{"--delivery-mode", "gcs"}, {"--gcs-bucket", "bucket"}} {
+	for _, args := range [][]string{{"--delivery-mode", "gcs"}, {"--remote-bucket", "bucket"}, {"--gcs-bucket", "bucket"}} {
 		repoDir := filepath.Join(t.TempDir(), "repository")
 		args = append([]string{"--repository", repoDir, "init"}, args...)
 		var stdout, stderr bytes.Buffer
