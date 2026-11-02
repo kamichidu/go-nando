@@ -83,6 +83,27 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 			t.Errorf("sample is missing commented supported config key %q", key)
 		}
 	}
+	// Enable every sample value that can be used together. Token sources are
+	// mutually exclusive, so choose token_from_env and leave the other examples
+	// commented. This checks the documented options decode in their shown tables.
+	enabledSample := string(sampleBytes)
+	for _, key := range []string{"path", "verbose", "endpoint", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory"} {
+		enabledSample = strings.ReplaceAll(enabledSample, "# "+key+" =", key+" =")
+	}
+	enabledPath := filepath.Join(t.TempDir(), "enabled-config.toml")
+	if err := os.WriteFile(enabledPath, []byte(enabledSample), 0600); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err := LoadConfig(enabledPath)
+	if err != nil {
+		t.Fatalf("sample options enabled in their documented sections: %v", err)
+	}
+	if enabled.Repository.Path != "/home/alex/nando-data" || enabled.Logging.Verbose || enabled.Daemon.Endpoint != "tcp://127.0.0.1:7443" || enabled.Daemon.TokenFromEnv != "NANDO_DAEMON_TOKEN" || enabled.Daemon.CACert != "/etc/nando/ca.pem" || enabled.Daemon.TLSCert != "/etc/nando/server.pem" || enabled.Daemon.TLSKey != "/etc/nando/server-key.pem" || enabled.Remote.SyncIdleInterval != "30s" || enabled.Remote.SyncPeriodicInterval != "5m" || enabled.Remote.MaxDeliveryDelay != "30m" || enabled.Remote.SyncParallelism != 2 || enabled.Recovery.Directory != "/recyclebin" {
+		t.Fatalf("enabled sample options decoded into unexpected fields: %+v", enabled)
+	}
+	if _, err := enabled.RemoteSchedulerPolicy(); err != nil {
+		t.Fatalf("enabled sample remote scheduler values are invalid: %v", err)
+	}
 	for _, key := range []string{"sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism"} {
 		if strings.Index(string(sampleBytes), "# "+key+" =") < strings.Index(string(sampleBytes), "[remote]") || strings.Index(string(sampleBytes), "# "+key+" =") > strings.Index(string(sampleBytes), "[daemon]") {
 			t.Errorf("remote key %q must appear inside [remote] before [daemon]", key)

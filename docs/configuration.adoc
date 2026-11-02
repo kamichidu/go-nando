@@ -6,10 +6,14 @@ is `${XDG_DATA_HOME:-~/.local/share}/nando`. On Windows, `USERPROFILE` supplies
 the home directory when the XDG variables are unset. Set both XDG variables to
 use them without a home directory.
 
-Copy `samples/config.toml` to the default config path to begin. Its empty
-`[repository].path` setting selects the default data directory. Set
-`[repository].path` to select another repository. Process-wide verbose logging
-is configured with `[logging].verbose`. Command-line options take precedence
+Copy the complete, commented `samples/config.toml` to the default config path to
+begin. It documents all supported per-user settings, including optional TCP/TLS
+transport and remote scheduler policy. Its empty `[repository].path` setting
+selects the default local repository data directory. Set `[repository].path` to
+select another local repository. `[recovery].directory` selects a logical
+directory inside nando and defaults to `/recyclebin`; it is independent of the
+local repository directory. Process-wide verbose logging is configured with
+`[logging].verbose`. Command-line options take precedence
 over TOML values. An absent default config file is allowed; a missing file named with
 `--config` is an error. Unknown TOML keys are rejected. The former top-level
 `repository` and `verbose` keys are unsupported; use `[repository].path` and
@@ -28,11 +32,14 @@ to keep.
 == Advanced daemon transport
 
 The standard local endpoint is a repository-specific Unix socket selected
-automatically. `samples/config.toml` lists supported settings, including the
-optional TCP transport keys under `[daemon]`. TCP requires server TLS and bearer authentication;
-clients also need the configured token and, when using a private CA, the CA
-certificate. The TLS certificate and key are read by `nando daemon`; the token
-and CA settings are used by client commands. Choose exactly one token source:
+automatically. `samples/config.toml` is the single configuration sample and
+lists supported settings, including the optional TCP transport keys under
+`[daemon]`. The commented option examples can be enabled in their shown tables;
+for TCP, select exactly one token source and configure TLS. TCP requires server
+TLS and bearer authentication; clients also need the configured token and,
+when using a private CA, the CA certificate. The TLS certificate and key are
+read by `nando daemon`; the token and CA settings are used by client commands.
+Choose exactly one token source:
 `token` for a literal, `token_from_file` for a protected file, or
 `token_from_env` for the name of an environment variable. The environment
 variable's value is the token. Prefer `token_from_env` to avoid storing a

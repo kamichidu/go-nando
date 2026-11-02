@@ -2,7 +2,9 @@
 # Copy this file to ${XDG_CONFIG_HOME:-~/.config}/nando/config.toml.
 # Uncomment only the settings you need. Command-line flags take precedence.
 
-# Repository directory. Actual default: empty (use the default data directory).
+# Local repository directory. Actual default: empty (use the default data
+# directory). This is the filesystem path for the repository, not a logical
+# directory inside nando.
 [repository]
 # path = "/home/alex/nando-data"
 
@@ -19,8 +21,10 @@
 # max_delivery_delay = "30m"
 # sync_parallelism = 2
 
-# Daemon transport and credentials. Empty or omitted endpoint uses the
-# repository's local Unix socket. TCP listeners require TLS and bearer auth.
+# Daemon transport and credentials. Actual default: empty or omitted endpoint
+# uses the repository's local Unix socket. The values below are illustrative.
+# TCP listeners require TLS and bearer auth; configure the matching client
+# token source and CA certificate where needed.
 [daemon]
 # endpoint = "tcp://127.0.0.1:7443"
 
@@ -37,7 +41,8 @@
 # tls_cert = "/etc/nando/server.pem"
 # tls_key = "/etc/nando/server-key.pem"
 
-# Logical destination for `nando admin recover` when restoring unreferenced
-# GCS objects. Default: /recyclebin.
+# Logical directory inside nando for `nando admin recover` when restoring
+# unreferenced GCS objects. Actual default: /recyclebin. This is not the local
+# repository directory configured by [repository].path.
 [recovery]
 # directory = "/recyclebin"
