@@ -351,6 +351,166 @@ func TestGCSOrphanRecoveryPreservesConflictingRecyclebinPath(t *testing.T) {
 	}
 }
 
+func TestGCSOrphanRecoveryRequiresMD5AndContinuesValidObjects(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(root, "objects"), filepath.Join(root, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(root, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := coordinator.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	}()
+	validID, err := content.ParseID("sha256-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingID, err := content.ParseID("sha256-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+	if err != nil {
+		t.Fatal(err)
+	}
+	validMD5 := md5.Sum([]byte("abc"))
+	remote := &fakeReplicaStore{listed: []objectstore.ReplicaInfo{
+		{ID: missingID, Size: 5, Generation: 1},
+		{ID: validID, Size: 3, Generation: 1, MD5: validMD5[:]},
+	}}
+	repo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "test"})
+	if recovered, err := repo.RestoreGCSOrphans(ctx); err == nil || recovered != 1 || !strings.Contains(err.Error(), "valid 16-byte MD5") {
+		t.Fatalf("recovery count=%d err=%v, want one recovery and actionable MD5 error", recovered, err)
+	}
+	if _, err := repo.ResolvePath(ctx, "/recyclebin/"+missingID.String()); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("object without MD5 was silently restored: %v", err)
+	}
+	entry, err := repo.ResolvePath(ctx, "/recyclebin/"+validID.String())
+	if err != nil || !bytes.Equal(entry.MD5, validMD5[:]) {
+		t.Fatalf("valid object recovery entry=%+v err=%v", entry, err)
+	}
+}
+
+func TestGCSOrphanRecoverySerializesWithPutAndRechecksReferences(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(root, "objects"), filepath.Join(root, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(root, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := coordinator.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	}()
+	id := hasherID(t, hasher, []byte("racing content"))
+	md5sum := md5.Sum([]byte("racing content"))
+	remote := &fakeReplicaStore{listed: []objectstore.ReplicaInfo{{ID: id, Size: int64(len("racing content")), Generation: 1, MD5: md5sum[:]}}}
+	recoveryRepo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "test"})
+	putRepo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "test"})
+	file := filepath.Join(root, "input")
+	if err := os.WriteFile(file, []byte("racing content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var putErr error
+	var restoreErr error
+	var recovered int
+	wg.Add(2)
+	go func() { defer wg.Done(); <-start; putErr = putRepo.Put(ctx, file, "/original") }()
+	go func() { defer wg.Done(); <-start; recovered, restoreErr = recoveryRepo.RestoreGCSOrphans(ctx) }()
+	close(start)
+	wg.Wait()
+	if putErr != nil || restoreErr != nil {
+		t.Fatalf("Put err=%v recovery err=%v", putErr, restoreErr)
+	}
+	if _, err := recoveryRepo.ResolvePath(ctx, "/original"); err != nil {
+		t.Fatalf("Put did not create its Entry: %v", err)
+	}
+	if recovered == 0 {
+		if _, err := recoveryRepo.ResolvePath(ctx, "/recyclebin/"+id.String()); !errors.Is(err, metadata.ErrEntryNotFound) {
+			t.Fatalf("recovery created an Entry after Put already referenced content: %v", err)
+		}
+	} else if _, err := recoveryRepo.ResolvePath(ctx, "/recyclebin/"+id.String()); err != nil {
+		t.Fatalf("serialized recovery outcome lost its recovery Entry (distinct references are allowed): %v", err)
+	}
+}
+
+func TestGCSOrphanRecoveryFailureCanBeRetried(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(root, "objects"), filepath.Join(root, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(root, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := coordinator.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	}()
+	id, err := content.ParseID("sha256-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	validMD5 := md5.Sum([]byte("abc"))
+	remote := &fakeReplicaStore{listed: []objectstore.ReplicaInfo{{ID: id, Size: 3, Generation: 1, MD5: validMD5[:]}}}
+	base := metadata.NewValidatingStore(metaStore)
+	failing := &failOnceCreateStore{MetadataStore: base}
+	repo := repository.NewRepositoryWithReplica(failing, objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "test"})
+	if recovered, err := repo.RestoreGCSOrphans(ctx); err == nil || recovered != 0 {
+		t.Fatalf("first recovery count=%d err=%v", recovered, err)
+	}
+	if _, err := repo.ResolvePath(ctx, "/recyclebin/"+id.String()); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("failed attempt left an Entry: %v", err)
+	}
+	if recovered, err := repo.RestoreGCSOrphans(ctx); err != nil || recovered != 1 {
+		t.Fatalf("retry recovery count=%d err=%v", recovered, err)
+	}
+}
+
+type failOnceCreateStore struct {
+	metadata.MetadataStore
+	mu     sync.Mutex
+	failed bool
+}
+
+func (s *failOnceCreateStore) Create(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
+	s.mu.Lock()
+	if !s.failed {
+		s.failed = true
+		s.mu.Unlock()
+		return metadata.Entry{}, errors.New("injected metadata create failure")
+	}
+	s.mu.Unlock()
+	return s.MetadataStore.Create(ctx, entry)
+}
+
+func hasherID(t *testing.T, hasher content.Hasher, data []byte) content.ID {
+	t.Helper()
+	id, err := hasher.Sum(context.Background(), bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 func TestGCSModePutAtomicallyEnqueuesContentID(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

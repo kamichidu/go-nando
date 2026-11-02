@@ -3,6 +3,7 @@ package local
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"errors"
 	"io"
 	"os"
@@ -111,6 +112,34 @@ func TestStageFailureLeavesDisposableFileForCleanup(t *testing.T) {
 	entries, err := os.ReadDir(store.tempDir)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("failed Stage left artifacts: entries=%v err=%v", entries, err)
+	}
+}
+
+func TestStageComputesSHA256AndMD5InSamePass(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewStore(filepath.Join(t.TempDir(), "objects"), filepath.Join(t.TempDir(), "temp"), content.NewHasher())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.BeginStage(ctx, "03d08be2-9c06-48a3-9f81-57b3b4ff8001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := session.Stage(ctx, strings.NewReader("stage digests"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wantMD5 := md5.Sum([]byte("stage digests"))
+	if !bytes.Equal(staged.MD5(), wantMD5[:]) {
+		t.Fatalf("Stage MD5=%x want=%x", staged.MD5(), wantMD5)
+	}
+	wantID := content.NewHasher()
+	id, err := wantID.Sum(ctx, strings.NewReader("stage digests"))
+	if err != nil || staged.ID() != id {
+		t.Fatalf("Stage ID=%s want=%s err=%v", staged.ID(), id, err)
 	}
 }
 

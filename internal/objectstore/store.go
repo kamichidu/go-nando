@@ -55,6 +55,7 @@ type ReplicaStore interface {
 type StagedObject interface {
 	ID() content.ID
 	Size() int64
+	MD5() []byte
 }
 
 // StageSession owns one operation-ID-specific temporary file opened for a

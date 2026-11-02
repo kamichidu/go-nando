@@ -333,65 +333,99 @@ func (r *Repository) RestoreGCSOrphansTo(ctx context.Context, recoveryDirectory 
 	if err != nil || normalized == "/" {
 		return 0, fmt.Errorf("invalid GCS recovery directory %q", recoveryDirectory)
 	}
-	refs, err := r.metaStore.ReferencedObjectIDs(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("list Metadata references: %w", err)
-	}
-	refSet := make(map[string]bool, len(refs))
-	for _, id := range refs {
-		refSet[id.String()] = true
-	}
 	all, err := r.replica.ListReplicas(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("list GCS objects: %w", err)
 	}
-	parent, err := r.ensureRecoveryDirectory(ctx, normalized)
-	if err != nil {
-		return 0, err
-	}
 	recovered := 0
+	var failures []error
 	for _, replica := range all {
-		if replica.ID.Validate() != nil || replica.Generation <= 0 {
+		if err := replica.ID.Validate(); err != nil || replica.Generation <= 0 {
+			failures = append(failures, fmt.Errorf("invalid GCS replica record %q: require a valid Content ID and generation", replica.ID))
 			continue
 		}
-		if refSet[replica.ID.String()] {
+		if len(replica.MD5) != 16 {
+			failures = append(failures, fmt.Errorf("GCS object %s has missing or invalid MD5 metadata (%d bytes); verify the object attributes in GCS and restore only after a valid 16-byte MD5 is available", replica.ID, len(replica.MD5)))
 			continue
 		}
 		name := replica.ID.String()
-		existing, err := r.metaStore.GetChild(ctx, parent.ID, name)
-		if err == nil {
-			if existing.Kind == metadata.EntryKindFile && existing.ObjectID != nil && *existing.ObjectID == replica.ID {
-				continue
-			}
-			return recovered, fmt.Errorf("recovery path %s is occupied by another Entry", path.Join(normalized, name))
-		}
-		if !errors.Is(err, metadata.ErrEntryNotFound) {
-			return recovered, fmt.Errorf("check recyclebin path for %s: %w", name, err)
-		}
-		now := metadata.TimestampFromTime(time.Now().UTC())
-		objectID := replica.ID
-		var objectMD5 []byte
-		if len(replica.MD5) == 16 {
-			objectMD5 = append([]byte(nil), replica.MD5...)
-		}
-		_, err = r.metaStore.Create(ctx, metadata.Entry{
-			ID: metadata.EntryID(uuid.NewString()), ParentID: &parent.ID, Name: name,
-			Kind: metadata.EntryKindFile, ObjectID: &objectID, MD5: objectMD5,
-			Size: replica.Size, Mtime: now, Mode: 0644, ContentType: "application/octet-stream",
-			Revision: 1, CreatedAt: now, UpdatedAt: now,
-		})
-		if errors.Is(err, metadata.ErrEntryConflict) {
-			existing, getErr := r.metaStore.GetChild(ctx, parent.ID, name)
-			if getErr == nil && existing.Kind == metadata.EntryKindFile && existing.ObjectID != nil && *existing.ObjectID == replica.ID {
-				continue
-			}
-		}
+		created, err := r.restoreGCSOrphan(ctx, replica, normalized, name)
 		if err != nil {
-			return recovered, fmt.Errorf("restore GCS object %s into %s: %w", name, normalized, err)
+			failures = append(failures, fmt.Errorf("restore GCS object %s: %w", name, err))
+			continue
 		}
-		recovered++
+		if created {
+			recovered++
+		}
 	}
-	return recovered, nil
+	return recovered, errors.Join(failures...)
+}
+
+func (r *Repository) restoreGCSOrphan(ctx context.Context, replica objectstore.ReplicaInfo, directory, name string) (created bool, retErr error) {
+	opID := uuid.NewString()
+	resourceID := contentResourceID(replica.ID.String())
+	if err := r.coordinator.AcquireResourceLock(ctx, resourceID, opID, coordinator.WLock, resourceLeaseTTL); err != nil {
+		return false, fmt.Errorf("acquire content WLock: %w", err)
+	}
+	leaseCtx, stopHeartbeat, err := r.startLeaseHeartbeat(ctx, opID)
+	if err != nil {
+		return false, errors.Join(err, r.releaseResourceLocks(opID))
+	}
+	defer func() {
+		stopErr := stopHeartbeat()
+		releaseErr := r.releaseResourceLocks(opID)
+		retErr = errors.Join(retErr, stopErr, releaseErr)
+		if retErr != nil {
+			created = false
+		}
+	}()
+	if err := r.validateLease(leaseCtx, opID); err != nil {
+		return false, err
+	}
+	refs, err := r.metaStore.ReferencedObjectIDs(leaseCtx)
+	if err != nil {
+		return false, fmt.Errorf("recheck Metadata references under content WLock: %w", err)
+	}
+	for _, id := range refs {
+		if id == replica.ID {
+			return false, nil
+		}
+	}
+	parent, err := r.ensureRecoveryDirectory(leaseCtx, directory)
+	if err != nil {
+		return false, err
+	}
+	existing, err := r.metaStore.GetChild(leaseCtx, parent.ID, name)
+	if err == nil {
+		if existing.Kind == metadata.EntryKindFile && existing.ObjectID != nil && *existing.ObjectID == replica.ID {
+			return false, nil
+		}
+		return false, fmt.Errorf("recovery path %s is occupied by another Entry", path.Join(directory, name))
+	}
+	if !errors.Is(err, metadata.ErrEntryNotFound) {
+		return false, fmt.Errorf("check recovery path: %w", err)
+	}
+	if err := r.validateLease(leaseCtx, opID); err != nil {
+		return false, err
+	}
+	now := metadata.TimestampFromTime(time.Now().UTC())
+	objectID := replica.ID
+	_, err = r.metaStore.Create(leaseCtx, metadata.Entry{
+		ID: metadata.EntryID(uuid.NewString()), ParentID: &parent.ID, Name: name,
+		Kind: metadata.EntryKindFile, ObjectID: &objectID, MD5: append([]byte(nil), replica.MD5...),
+		Size: replica.Size, Mtime: now, Mode: 0644, ContentType: "application/octet-stream",
+		Revision: 1, CreatedAt: now, UpdatedAt: now,
+	})
+	if errors.Is(err, metadata.ErrEntryConflict) {
+		existing, getErr := r.metaStore.GetChild(leaseCtx, parent.ID, name)
+		if getErr == nil && existing.Kind == metadata.EntryKindFile && existing.ObjectID != nil && *existing.ObjectID == replica.ID {
+			return false, nil
+		}
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *Repository) ensureRecoveryDirectory(ctx context.Context, directory string) (metadata.Entry, error) {

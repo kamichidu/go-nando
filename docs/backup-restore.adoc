@@ -29,6 +29,24 @@ automatic GC or the `gcs-orphans` recovery command. That command restores
 missing Metadata Entries under `/recyclebin/<content-id>` without changing GCS
 objects. Do not run GC as a backup-preparation step.
 
+GCS recovery treats the listed object's GCS bytes and API attributes as the
+recovery authority. It does not download the full object or recompute its
+SHA-256 content ID. Each recovered object must have a valid Content ID,
+generation, size, and an available 16-byte MD5 attribute; objects with missing
+or malformed MD5 are reported as errors and are not restored. Recovery may
+continue restoring other valid objects and reports a combined error, so the
+operator should review the reported IDs and rerun after resolving GCS attribute
+problems. A restored Entry does not independently prove that the bytes match
+its Content ID; operators should verify the object through their approved GCS
+inspection process before relying on it.
+
+Automatic and scheduled GC never delete GCS objects. Restored GCS objects may
+be deleted only after an explicit human decision and action using the
+operator's approved GCS administration workflow. This project does not provide
+a GCS deletion command. Verify the object's generation, attributes, and
+retention/policy constraints before that separate action; metadata recovery
+does not authorize remote deletion.
+
 The current SQLite setup does not explicitly enable WAL mode. Still, do not
 copy a live database file by itself. Quiesce the daemon and let its SQLite
 connections close; if sidecars exist, preserve them together with their

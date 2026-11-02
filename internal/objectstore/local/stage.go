@@ -1,7 +1,10 @@
 package local
 
 import (
+	"bytes"
 	"context"
+	"crypto/md5"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -21,11 +24,13 @@ type stagedObject struct {
 	id          content.ID
 	size        int64
 	info        os.FileInfo
+	md5         []byte
 }
 
 func (s *stagedObject) ID() content.ID    { return s.id }
 func (s *stagedObject) Size() int64       { return s.size }
 func (s *stagedObject) LocalPath() string { return s.path }
+func (s *stagedObject) MD5() []byte       { return append([]byte(nil), s.md5...) }
 
 type stageSession struct {
 	store       *Store
@@ -82,12 +87,24 @@ func (session *stageSession) Stage(ctx context.Context, src io.Reader) (result o
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("seek staged content for hashing: %w", err)
 	}
-	id, err := session.store.hasher.Sum(ctx, contextReader{ctx: ctx, reader: file})
+	md5Hash := md5.New()
+	id, err := session.store.hasher.Sum(ctx, io.TeeReader(contextReader{ctx: ctx, reader: file}, md5Hash))
 	if err != nil {
 		return nil, fmt.Errorf("hash staged content: %w", err)
 	}
 	if err := id.Validate(); err != nil {
 		return nil, fmt.Errorf("hasher returned invalid object ID: %w", err)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("seek staged content for integrity verification: %w", err)
+	}
+	sha := sha256.New()
+	verifiedBytes, err := io.Copy(sha, contextReader{ctx: ctx, reader: file})
+	if err != nil {
+		return nil, fmt.Errorf("hash staged content: %w", err)
+	}
+	if verifiedBytes != written || !bytes.Equal(sha.Sum(nil), id.Digest()) {
+		return nil, objectstore.ErrHashMismatch
 	}
 	return &stagedObject{
 		store:       session.store,
@@ -96,6 +113,7 @@ func (session *stageSession) Stage(ctx context.Context, src io.Reader) (result o
 		id:          id,
 		size:        written,
 		info:        fileInfo,
+		md5:         md5Hash.Sum(nil),
 	}, nil
 }
 

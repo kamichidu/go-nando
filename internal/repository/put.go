@@ -1,10 +1,7 @@
 package repository
 
 import (
-	"bytes"
 	"context"
-	"crypto/md5"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -170,10 +167,7 @@ func (r *Repository) put(ctx context.Context, localPath string, repoPath string,
 		contentType = "application/octet-stream"
 	}
 	baseName := path.Base(normalized)
-	md5Sum, err := stagedMD5(leaseCtx, staged)
-	if err != nil {
-		return fmt.Errorf("calculate local content MD5: %w", err)
-	}
+	md5Sum := staged.MD5()
 	now := metadata.TimestampFromTime(time.Now().UTC())
 
 	err = func() error {
@@ -258,28 +252,6 @@ func (r *Repository) put(ctx context.Context, localPath string, repoPath string,
 		return nil
 	}()
 	return err
-}
-
-func stagedMD5(ctx context.Context, staged objectstore.StagedObject) ([]byte, error) {
-	localPath, ok := staged.(interface{ LocalPath() string })
-	if !ok {
-		return nil, errors.New("staged object does not expose its local content for MD5")
-	}
-	reader, err := os.Open(localPath.LocalPath())
-	if err != nil {
-		return nil, err
-	}
-	h := md5.New()
-	sha := sha256.New()
-	_, copyErr := io.Copy(io.MultiWriter(h, sha), reader)
-	closeErr := reader.Close()
-	if err := errors.Join(copyErr, closeErr); err != nil {
-		return nil, err
-	}
-	if !bytes.Equal(sha.Sum(nil), staged.ID().Digest()) {
-		return nil, objectstore.ErrHashMismatch
-	}
-	return h.Sum(nil), nil
 }
 
 func (r *Repository) stagePutInput(ctx context.Context, session objectstore.StageSession, input *os.File) (objectstore.StagedObject, error) {
