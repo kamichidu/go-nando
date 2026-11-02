@@ -47,7 +47,7 @@ backend. Other databases, including Firestore, could implement the same
 interface if they provide equivalent transactional and compare-and-set (CAS)
 semantics; no alternative backend is currently implemented.
 
-[mermaid]
+[source,mermaid]
 ....
 flowchart LR
     CLI["nando CLI"] -->|control RPC| DAEMON["nando daemon"]
@@ -67,9 +67,11 @@ flowchart LR
 
 Solid arrows show request or local object access. Dashed arrows show remote
 configuration and remote transfer/read-through. In remote mode, complete Local
-content is published before its SQLite Entry reference and delivery obligation
-commit atomically; GCS delivery is asynchronous. GCS is the only implemented
-remote backend.
+content is published as a separate operation before the SQLite transaction.
+That transaction atomically commits the Entry reference and durable
+remote-delivery queue obligation; GCS delivery is asynchronous. If the SQLite
+transaction fails, the published Local object remains unreferenced for later
+cleanup. GCS is the only implemented remote backend.
 
 == Requirements
 
