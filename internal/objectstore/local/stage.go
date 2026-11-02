@@ -23,8 +23,9 @@ type stagedObject struct {
 	info        os.FileInfo
 }
 
-func (s *stagedObject) ID() content.ID { return s.id }
-func (s *stagedObject) Size() int64    { return s.size }
+func (s *stagedObject) ID() content.ID    { return s.id }
+func (s *stagedObject) Size() int64       { return s.size }
+func (s *stagedObject) LocalPath() string { return s.path }
 
 type stageSession struct {
 	store       *Store

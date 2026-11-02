@@ -1,7 +1,9 @@
 package gcs
 
 import (
+	"bytes"
 	"context"
+	"crypto/md5"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +25,7 @@ type apiAttrs struct {
 	Size       int64
 	Generation int64
 	ContentID  string
+	MD5        []byte
 }
 
 type gcsAPI interface {
@@ -73,15 +76,16 @@ func (s *Store) Upload(ctx context.Context, id content.ID, size int64, src io.Re
 	if err := id.Validate(); err != nil {
 		return objectstore.ReplicaInfo{}, err
 	}
-	attrs, uploadErr := s.api.Upload(ctx, objectName(id), id, size, src)
-	if uploadErr == nil && matches(attrs, id, size) {
+	localHash := md5.New()
+	attrs, uploadErr := s.api.Upload(ctx, objectName(id), id, size, io.TeeReader(src, localHash))
+	if uploadErr == nil && matches(attrs, id, size, localHash.Sum(nil)) {
 		return toReplicaInfo(attrs), nil
 	}
 	if uploadErr == nil {
 		uploadErr = ErrReplicaConflict
 	}
 	attrs, attrsErr := s.api.Attrs(ctx, objectName(id))
-	if attrsErr == nil && matches(attrs, id, size) {
+	if attrsErr == nil && matches(attrs, id, size, localHash.Sum(nil)) {
 		return toReplicaInfo(attrs), nil
 	}
 	if attrsErr == nil {
@@ -90,12 +94,26 @@ func (s *Store) Upload(ctx context.Context, id content.ID, size int64, src io.Re
 	return objectstore.ReplicaInfo{}, errors.Join(fmt.Errorf("resumable GCS upload %q: %w", objectName(id), uploadErr), attrsErr)
 }
 
-func matches(attrs apiAttrs, id content.ID, size int64) bool {
-	return attrs.ID == id && attrs.ContentID == id.String() && attrs.Size == size && attrs.Generation > 0
+func matches(attrs apiAttrs, id content.ID, size int64, localMD5 []byte) bool {
+	return attrs.ID == id && attrs.ContentID == id.String() && attrs.Size == size && attrs.Generation > 0 && len(attrs.MD5) == md5.Size && bytes.Equal(attrs.MD5, localMD5)
 }
 
 func toReplicaInfo(attrs apiAttrs) objectstore.ReplicaInfo {
-	return objectstore.ReplicaInfo{ID: attrs.ID, Size: attrs.Size, Generation: attrs.Generation}
+	return objectstore.ReplicaInfo{ID: attrs.ID, Size: attrs.Size, Generation: attrs.Generation, MD5: append([]byte(nil), attrs.MD5...)}
+}
+
+func (s *Store) ReplicaAttrs(ctx context.Context, id content.ID) (objectstore.ReplicaInfo, error) {
+	if err := id.Validate(); err != nil {
+		return objectstore.ReplicaInfo{}, err
+	}
+	attrs, err := s.api.Attrs(ctx, objectName(id))
+	if err != nil {
+		return objectstore.ReplicaInfo{}, err
+	}
+	if attrs.ID != id || attrs.ContentID != id.String() || attrs.Generation <= 0 {
+		return objectstore.ReplicaInfo{}, ErrReplicaConflict
+	}
+	return toReplicaInfo(attrs), nil
 }
 
 func (s *Store) OpenReplica(ctx context.Context, id content.ID) (io.ReadCloser, error) {
@@ -150,6 +168,8 @@ func (s *Store) DeleteReplica(ctx context.Context, id content.ID, generation int
 type storageAPI struct{ bucket *storage.BucketHandle }
 
 func (a *storageAPI) Upload(ctx context.Context, name string, id content.ID, size int64, src io.Reader) (apiAttrs, error) {
+	localMD5 := md5.New()
+	src = io.TeeReader(src, localMD5)
 	obj := a.bucket.Object(name).If(storage.Conditions{DoesNotExist: true})
 	uploadCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -167,7 +187,11 @@ func (a *storageAPI) Upload(ctx context.Context, name string, id content.ID, siz
 	if attrs == nil {
 		return a.Attrs(ctx, name)
 	}
-	return convertAttrs(name, attrs), nil
+	result := convertAttrs(name, attrs)
+	if len(result.MD5) != md5.Size || !bytes.Equal(result.MD5, localMD5.Sum(nil)) {
+		return apiAttrs{}, ErrReplicaConflict
+	}
+	return result, nil
 }
 
 func (a *storageAPI) Attrs(ctx context.Context, name string) (apiAttrs, error) {
@@ -189,7 +213,7 @@ func convertAttrs(name string, attrs *storage.ObjectAttrs) apiAttrs {
 			id = parsed
 		}
 	}
-	return apiAttrs{ID: id, Size: attrs.Size, Generation: attrs.Generation, ContentID: id.String()}
+	return apiAttrs{ID: id, Size: attrs.Size, Generation: attrs.Generation, ContentID: id.String(), MD5: append([]byte(nil), attrs.MD5...)}
 }
 
 func (a *storageAPI) Open(ctx context.Context, name string) (io.ReadCloser, error) {

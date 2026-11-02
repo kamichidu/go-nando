@@ -3,6 +3,7 @@ package repository_test
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"errors"
 	"fmt"
 	"io"
@@ -28,11 +29,13 @@ type fixedIDMetadataStore struct {
 }
 
 type fakeReplicaStore struct {
-	fail    bool
-	calls   int
-	stored  map[content.ID][]byte
-	listed  []objectstore.ReplicaInfo
-	deleted []objectstore.ReplicaInfo
+	fail     bool
+	calls    int
+	stored   map[content.ID][]byte
+	listed   []objectstore.ReplicaInfo
+	deleted  []objectstore.ReplicaInfo
+	attrsErr error
+	attrsMD5 []byte
 }
 
 func (s *fakeReplicaStore) Upload(_ context.Context, id content.ID, size int64, src io.Reader) (objectstore.ReplicaInfo, error) {
@@ -51,7 +54,8 @@ func (s *fakeReplicaStore) Upload(_ context.Context, id content.ID, size int64, 
 		s.stored = make(map[content.ID][]byte)
 	}
 	s.stored[id] = data
-	return objectstore.ReplicaInfo{ID: id, Size: size, Generation: 1}, nil
+	md5sum := md5.Sum(data)
+	return objectstore.ReplicaInfo{ID: id, Size: size, Generation: 1, MD5: md5sum[:]}, nil
 }
 func (s *fakeReplicaStore) OpenReplica(_ context.Context, id content.ID) (io.ReadCloser, error) {
 	data, ok := s.stored[id]
@@ -63,6 +67,20 @@ func (s *fakeReplicaStore) OpenReplica(_ context.Context, id content.ID) (io.Rea
 func (s *fakeReplicaStore) ReplicaExists(_ context.Context, id content.ID) (bool, error) {
 	_, ok := s.stored[id]
 	return ok, nil
+}
+func (s *fakeReplicaStore) ReplicaAttrs(_ context.Context, id content.ID) (objectstore.ReplicaInfo, error) {
+	data, ok := s.stored[id]
+	if !ok {
+		return objectstore.ReplicaInfo{}, objectstore.ErrObjectNotFound
+	}
+	sum := md5.Sum(data)
+	if s.attrsErr != nil {
+		return objectstore.ReplicaInfo{}, s.attrsErr
+	}
+	if s.attrsMD5 != nil {
+		return objectstore.ReplicaInfo{ID: id, Size: int64(len(data)), Generation: 1, MD5: s.attrsMD5}, nil
+	}
+	return objectstore.ReplicaInfo{ID: id, Size: int64(len(data)), Generation: 1, MD5: append([]byte{}, sum[:]...)}, nil
 }
 func (s *fakeReplicaStore) ListReplicas(context.Context) ([]objectstore.ReplicaInfo, error) {
 	return append([]objectstore.ReplicaInfo(nil), s.listed...), nil
@@ -422,6 +440,62 @@ func TestCapacityGCOnlyEvictsConfirmedReferencedLocalCache(t *testing.T) {
 	}
 	if _, err := repo.Stat(ctx, "/cached"); err != nil {
 		t.Fatalf("capacity eviction changed Metadata: %v", err)
+	}
+}
+
+func TestCapacityGCPreservesCacheWhenGCSMD5IsMissingOrDifferent(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		remoteMD5 []byte
+	}{
+		{name: "missing", remoteMD5: []byte{}}, {name: "different", remoteMD5: []byte("not an md5")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			hasher := content.NewHasher()
+			store := openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)
+			objects, err := local.NewStore(filepath.Join(root, "objects"), filepath.Join(root, "temp"), hasher)
+			if err != nil {
+				t.Fatal(err)
+			}
+			repoLocal := openRepositoryInstance(t, root, store, objects, hasher)
+			source := filepath.Join(root, "source")
+			data := []byte("md5 protected cache")
+			if err := os.WriteFile(source, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := repoLocal.Put(ctx, source, "/cached"); err != nil {
+				t.Fatal(err)
+			}
+			entry, err := repoLocal.Stat(ctx, "/cached")
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := *entry.ObjectID
+			coordinator, err := coordinatorsqlite.Open(filepath.Join(root, "coordination.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := coordinator.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			remote := &fakeReplicaStore{stored: map[content.ID][]byte{id: data}, attrsMD5: tc.remoteMD5}
+			settings := repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "bucket", MaxLocalBytes: 1}
+			repo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(store), objects, remote, hasher, coordinator, settings)
+			deleted, err := repo.CapacityGC(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if deleted != 0 {
+				t.Fatalf("deleted cache despite unusable MD5: %d", deleted)
+			}
+			if exists, err := objects.Exists(ctx, id); err != nil || !exists {
+				t.Fatalf("cache removed: exists=%v err=%v", exists, err)
+			}
+		})
 	}
 }
 

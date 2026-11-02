@@ -50,6 +50,7 @@ type Entry struct {
 	Name        string   // Local name of the entry under its parent (empty for root)
 	Kind        EntryKind
 	ObjectID    *content.ID // pointer to validated Content ID (nil for directories)
+	MD5         []byte      // raw 16-byte MD5 of the immutable object, when available
 	Size        int64       // Size in bytes
 	Mtime       Timestamp   // Modification time in UTC
 	Mode        uint32      // Unix-style file mode

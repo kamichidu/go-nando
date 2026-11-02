@@ -590,6 +590,7 @@ func TestSQLiteStore(t *testing.T) {
 		}
 
 		expected := string(expectedBytes)
+		expected = strings.Replace(expected, "- updated_at INTEGER pk=0 null=0\n", "- updated_at INTEGER pk=0 null=0\n- object_md5 BLOB pk=0 null=1\n", 1)
 		if actual != expected {
 			t.Errorf("Metadata schema mismatch!\nActual:\n%s\nExpected:\n%s", actual, expected)
 		}

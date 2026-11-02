@@ -1,9 +1,12 @@
 package repository
 
 import (
+	"bytes"
 	"context"
+	"crypto/md5"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -78,7 +81,9 @@ func (r *Repository) ProcessTransferQueueParallel(ctx context.Context, paralleli
 				if err != nil {
 					return fmt.Errorf("open Local source %s for transfer: %w", id, err)
 				}
-				info, uploadErr := r.replica.Upload(transferCtx, id, size, reader)
+				localHash := md5.New()
+				hashingReader := io.TeeReader(reader, localHash)
+				info, uploadErr := r.replica.Upload(transferCtx, id, size, hashingReader)
 				closeErr := reader.Close()
 				if uploadErr != nil || closeErr != nil {
 					if uploadErr != nil {
@@ -86,7 +91,7 @@ func (r *Repository) ProcessTransferQueueParallel(ctx context.Context, paralleli
 					}
 					return errors.Join(uploadErr, closeErr)
 				}
-				if info.ID != id || info.Size != size || info.Generation <= 0 {
+				if info.ID != id || info.Size != size || info.Generation <= 0 || len(info.MD5) != md5.Size || !bytes.Equal(info.MD5, localHash.Sum(nil)) {
 					return fmt.Errorf("GCS upload returned mismatched API attributes for %s: %+v", id, info)
 				}
 				if err := r.validateLease(transferCtx, operationID); err != nil {

@@ -127,6 +127,12 @@ func (s *Store) Initialize(ctx context.Context, repoFormat repositoryformat.Form
 	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?)", int64(now)); err != nil {
 		return fmt.Errorf("failed to record SQLite schema migration 2: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, MigrationV3); err != nil {
+		return fmt.Errorf("failed to apply SQLite schema migration 3: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)", int64(now)); err != nil {
+		return fmt.Errorf("failed to record SQLite schema migration 3: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit SQLite schema migration: %w", err)
 	}
@@ -194,7 +200,7 @@ func (s *Store) CheckMigrations(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, "SELECT count(*), coalesce(min(version), 0), coalesce(max(version), 0) FROM schema_migrations").Scan(&count, &minVersion, &maxVersion); err != nil {
 		return fmt.Errorf("failed to read SQLite migration ledger: %w", err)
 	}
-	if minVersion != 1 || maxVersion > CurrentSchemaVersion || count != maxVersion {
+	if minVersion != 1 || maxVersion > CurrentSchemaVersion || count < maxVersion-1 || count > maxVersion {
 		return fmt.Errorf("%w: found %d migrations from version %d through %d; supported history is 1 through %d", ErrMigrationsUnsupported, count, minVersion, maxVersion, CurrentSchemaVersion)
 	}
 	return nil
@@ -224,6 +230,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 		switch version {
 		case 2:
 			migration = MigrationV2
+		case 3:
+			migration = MigrationV3
 		default:
 			return fmt.Errorf("%w: no migration implementation for version %d", ErrMigrationsUnsupported, version)
 		}
@@ -245,6 +253,7 @@ func (s *Store) scanEntry(scanner interface{ Scan(dest ...any) error }) (metadat
 	var idStr string
 	var parentIDStr sql.NullString
 	var objectIDStr sql.NullString
+	var objectMD5 []byte
 	var mtimeVal, createdAtVal, updatedAtVal int64
 	var kindStr string
 
@@ -254,6 +263,7 @@ func (s *Store) scanEntry(scanner interface{ Scan(dest ...any) error }) (metadat
 		&entry.Name,
 		&kindStr,
 		&objectIDStr,
+		&objectMD5,
 		&entry.Size,
 		&mtimeVal,
 		&entry.Mode,
@@ -275,6 +285,7 @@ func (s *Store) scanEntry(scanner interface{ Scan(dest ...any) error }) (metadat
 		entry.ParentID = &pid
 	}
 	entry.Kind = metadata.EntryKind(kindStr)
+	entry.MD5 = append([]byte(nil), objectMD5...)
 
 	if objectIDStr.Valid && objectIDStr.String != "" {
 		oid, err := content.ParseID(objectIDStr.String)
@@ -294,7 +305,7 @@ func (s *Store) scanEntry(scanner interface{ Scan(dest ...any) error }) (metadat
 // Root retrieves the root entry of the logical repository.
 func (s *Store) Root(ctx context.Context) (metadata.Entry, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at
+		SELECT entry_id, parent_id, name, kind, object_id, object_md5, size, mtime, mode, content_type, revision, created_at, updated_at
 		FROM entries
 		WHERE entry_id = 'root'
 	`)
@@ -309,7 +320,7 @@ type dbtx interface {
 
 func (s *Store) getByID(ctx context.Context, q dbtx, id metadata.EntryID) (metadata.Entry, error) {
 	row := q.QueryRowContext(ctx, `
-		SELECT entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at
+		SELECT entry_id, parent_id, name, kind, object_id, object_md5, size, mtime, mode, content_type, revision, created_at, updated_at
 		FROM entries
 		WHERE entry_id = ?
 	`, id.String())
@@ -323,7 +334,7 @@ func (s *Store) GetByID(ctx context.Context, id metadata.EntryID) (metadata.Entr
 
 func (s *Store) getChild(ctx context.Context, q dbtx, parentID metadata.EntryID, name string) (metadata.Entry, error) {
 	row := q.QueryRowContext(ctx, `
-		SELECT entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at
+		SELECT entry_id, parent_id, name, kind, object_id, object_md5, size, mtime, mode, content_type, revision, created_at, updated_at
 		FROM entries
 		WHERE parent_id = ? AND name = ?
 	`, parentID.String(), name)
@@ -338,7 +349,7 @@ func (s *Store) GetChild(ctx context.Context, parentID metadata.EntryID, name st
 // ListChildren returns direct child entries under parentID.
 func (s *Store) ListChildren(ctx context.Context, parentID metadata.EntryID) ([]metadata.Entry, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at
+		SELECT entry_id, parent_id, name, kind, object_id, object_md5, size, mtime, mode, content_type, revision, created_at, updated_at
 		FROM entries
 		WHERE parent_id = ?
 	`, parentID.String())
@@ -425,14 +436,15 @@ func (s *Store) Create(ctx context.Context, entry metadata.Entry) (metadata.Entr
 
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO entries (
-			entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			entry_id, parent_id, name, kind, object_id, object_md5, size, mtime, mode, content_type, revision, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		entry.ID.String(),
 		parentIDVal,
 		entry.Name,
 		string(entry.Kind),
 		objectIDVal,
+		entry.MD5,
 		entry.Size,
 		int64(entry.Mtime),
 		entry.Mode,
@@ -549,6 +561,7 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 			name = ?,
 			kind = ?,
 			object_id = ?,
+			object_md5 = ?,
 			size = ?,
 			mtime = ?,
 			mode = ?,
@@ -561,6 +574,7 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 		entry.Name,
 		string(entry.Kind),
 		objectIDVal,
+		entry.MD5,
 		entry.Size,
 		int64(entry.Mtime),
 		entry.Mode,
@@ -618,8 +632,8 @@ func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTran
 		if entry.ParentID != nil {
 			parentID = sql.NullString{String: entry.ParentID.String(), Valid: true}
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO entries (entry_id,parent_id,name,kind,object_id,size,mtime,mode,content_type,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-			entry.ID.String(), parentID, entry.Name, string(entry.Kind), entry.ObjectID.String(), entry.Size, int64(entry.Mtime), entry.Mode, entry.ContentType, entry.Revision, int64(entry.CreatedAt), int64(entry.UpdatedAt))
+		_, err = tx.ExecContext(ctx, `INSERT INTO entries (entry_id,parent_id,name,kind,object_id,object_md5,size,mtime,mode,content_type,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			entry.ID.String(), parentID, entry.Name, string(entry.Kind), entry.ObjectID.String(), entry.MD5, entry.Size, int64(entry.Mtime), entry.Mode, entry.ContentType, entry.Revision, int64(entry.CreatedAt), int64(entry.UpdatedAt))
 		if err != nil {
 			return metadata.Entry{}, fmt.Errorf("%w: failed to create Put Entry: %w", metadata.ErrEntryConflict, err)
 		}
@@ -637,8 +651,8 @@ func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTran
 		}
 		newRevision := entry.Revision + 1
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		res, err := tx.ExecContext(ctx, `UPDATE entries SET object_id=?,size=?,mtime=?,mode=?,content_type=?,revision=?,updated_at=? WHERE entry_id=? AND revision=?`,
-			entry.ObjectID.String(), entry.Size, int64(entry.Mtime), entry.Mode, entry.ContentType, newRevision, int64(now), entry.ID.String(), entry.Revision)
+		res, err := tx.ExecContext(ctx, `UPDATE entries SET object_id=?,object_md5=?,size=?,mtime=?,mode=?,content_type=?,revision=?,updated_at=? WHERE entry_id=? AND revision=?`,
+			entry.ObjectID.String(), entry.MD5, entry.Size, int64(entry.Mtime), entry.Mode, entry.ContentType, newRevision, int64(now), entry.ID.String(), entry.Revision)
 		if err != nil {
 			return metadata.Entry{}, fmt.Errorf("update Put Entry: %w", err)
 		}
@@ -933,7 +947,7 @@ func (s *Store) ReferencedObjectIDs(ctx context.Context) ([]content.ID, error) {
 // ListAll lists all entries.
 func (s *Store) ListAll(ctx context.Context) ([]metadata.Entry, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at
+		SELECT entry_id, parent_id, name, kind, object_id, object_md5, size, mtime, mode, content_type, revision, created_at, updated_at
 		FROM entries
 	`)
 	if err != nil {

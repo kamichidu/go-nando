@@ -1,7 +1,9 @@
 package repository
 
 import (
+	"bytes"
 	"context"
+	"crypto/md5"
 	"errors"
 	"fmt"
 	"sort"
@@ -89,11 +91,35 @@ func (r *Repository) evictCapacityCandidate(ctx context.Context, id content.ID) 
 				return nil
 			}
 		}
-		remoteExists, err := r.replica.ReplicaExists(leaseCtx, id)
+		var expectedMD5 []byte
+		foundReference := false
+		validMD5 := true
+		entries, err := r.metaStore.ListAll(leaseCtx)
 		if err != nil {
-			return fmt.Errorf("recheck GCS replica: %w", err)
+			return fmt.Errorf("read local MD5 metadata: %w", err)
 		}
-		if !remoteExists {
+		for _, entry := range entries {
+			if entry.ObjectID != nil && *entry.ObjectID == id {
+				foundReference = true
+				if len(entry.MD5) != md5.Size {
+					validMD5 = false
+					continue
+				}
+				if expectedMD5 == nil {
+					expectedMD5 = entry.MD5
+				} else if !bytes.Equal(expectedMD5, entry.MD5) {
+					validMD5 = false
+				}
+			}
+		}
+		if !foundReference || !validMD5 || len(expectedMD5) != md5.Size {
+			return nil
+		}
+		remote, err := r.replica.ReplicaAttrs(leaseCtx, id)
+		if err != nil {
+			return fmt.Errorf("read GCS attributes for capacity candidate: %w", err)
+		}
+		if len(remote.MD5) != md5.Size || !bytes.Equal(remote.MD5, expectedMD5) {
 			return nil
 		}
 		if err := r.validateLease(leaseCtx, operationID); err != nil {

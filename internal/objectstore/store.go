@@ -30,6 +30,7 @@ type ReplicaInfo struct {
 	ID         content.ID
 	Size       int64
 	Generation int64
+	MD5        []byte
 }
 
 // LocalObjectInfo exposes only physical accounting data, not filesystem paths.
@@ -45,6 +46,7 @@ type ReplicaStore interface {
 	Upload(context.Context, content.ID, int64, io.Reader) (ReplicaInfo, error)
 	OpenReplica(context.Context, content.ID) (io.ReadCloser, error)
 	ReplicaExists(context.Context, content.ID) (bool, error)
+	ReplicaAttrs(context.Context, content.ID) (ReplicaInfo, error)
 	ListReplicas(context.Context) ([]ReplicaInfo, error)
 	DeleteReplica(context.Context, content.ID, int64) error
 }

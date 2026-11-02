@@ -78,6 +78,9 @@ func (id ID) String() string {
 	return string(id.algorithm) + "-" + hex.EncodeToString(id.digest[:])
 }
 
+// Digest returns a copy of the raw digest bytes.
+func (id ID) Digest() []byte { return append([]byte(nil), id.digest[:]...) }
+
 // Algorithm returns the hashing algorithm used.
 func (id ID) Algorithm() Algorithm {
 	return id.algorithm

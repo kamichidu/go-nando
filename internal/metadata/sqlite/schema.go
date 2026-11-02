@@ -39,4 +39,7 @@ CREATE TABLE transfer_queue (
 );
 `
 
-const CurrentSchemaVersion = 2
+// MigrationV3 stores the locally observed MD5 for each committed content object.
+const MigrationV3 = `ALTER TABLE entries ADD COLUMN object_md5 BLOB NULL;`
+
+const CurrentSchemaVersion = 3

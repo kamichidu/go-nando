@@ -2,6 +2,7 @@ package gcs
 
 import (
 	"context"
+	"crypto/md5"
 	"errors"
 	"io"
 	"strings"
@@ -28,7 +29,8 @@ func (a *fakeAPI) Upload(_ context.Context, name string, id content.ID, size int
 	}
 	a.bytes, a.uploadSize = string(data), size
 	if a.uploadErr == nil {
-		a.attrs = apiAttrs{ID: id, ContentID: id.String(), Size: int64(len(data)), Generation: 17}
+		sum := md5.Sum(data)
+		a.attrs = apiAttrs{ID: id, ContentID: id.String(), Size: int64(len(data)), Generation: 17, MD5: sum[:]}
 	}
 	return a.attrs, a.uploadErr
 }
@@ -48,7 +50,8 @@ func TestUploadTargetsFinalNameAndUsesAPIAttributesForAmbiguousResponse(t *testi
 		t.Fatal(err)
 	}
 	api := &fakeAPI{uploadErr: errors.New("response lost")}
-	api.attrs = apiAttrs{ID: id, ContentID: id.String(), Size: 3, Generation: 91}
+	sum := md5.Sum([]byte("abc"))
+	api.attrs = apiAttrs{ID: id, ContentID: id.String(), Size: 3, Generation: 91, MD5: sum[:]}
 	store := NewStoreWithAPI("bucket", api)
 	info, err := store.Upload(context.Background(), id, 3, strings.NewReader("abc"))
 	if err != nil || info.ID != id || info.Size != 3 || info.Generation != 91 {
@@ -65,9 +68,24 @@ func TestUploadRejectsExistingObjectWithIncompatibleAttributes(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := &fakeAPI{uploadErr: errors.New("precondition failed")}
-	api.attrs = apiAttrs{ID: id, ContentID: id.String(), Size: 4, Generation: 4}
+	sum := md5.Sum([]byte("abcd"))
+	api.attrs = apiAttrs{ID: id, ContentID: id.String(), Size: 4, Generation: 4, MD5: sum[:]}
 	store := NewStoreWithAPI("bucket", api)
 	if _, err := store.Upload(context.Background(), id, 3, strings.NewReader("abc")); !errors.Is(err, ErrReplicaConflict) {
 		t.Fatalf("incompatible existing object was accepted: %v", err)
+	}
+}
+
+func TestUploadRejectsMismatchedMD5(t *testing.T) {
+	id, err := content.ParseID("sha256-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &fakeAPI{uploadErr: errors.New("ambiguous response")}
+	wrong := md5.Sum([]byte("different"))
+	api.attrs = apiAttrs{ID: id, ContentID: id.String(), Size: 3, Generation: 1, MD5: wrong[:]}
+	store := NewStoreWithAPI("bucket", api)
+	if _, err := store.Upload(context.Background(), id, 3, strings.NewReader("abc")); !errors.Is(err, ErrReplicaConflict) {
+		t.Fatalf("MD5 mismatch accepted: %v", err)
 	}
 }
