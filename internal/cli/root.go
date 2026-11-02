@@ -87,7 +87,7 @@ func NewDaemonClientFromContext(ctx context.Context) (*controlrpc.Client, error)
 	}
 	endpoint := flags.DaemonEndpoint
 	if endpoint == "" {
-		endpoint = cfg.Daemon.Endpoint
+		endpoint = cfg.Daemon.Listen
 	}
 	if endpoint == "" {
 		endpoint, err = controlrpc.DefaultEndpoint(repoDir)

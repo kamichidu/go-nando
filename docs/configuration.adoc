@@ -31,9 +31,11 @@ to keep.
 
 == Advanced daemon transport
 
-The standard local endpoint is a repository-specific Unix socket selected
-automatically. `samples/config.toml` is the single configuration sample and
-lists supported settings, including the optional TCP transport keys under
+The standard local listener is a repository-specific Unix socket selected
+automatically. The optional `[daemon].listen` setting selects the address the
+daemon listens on and CLI commands connect to. `samples/config.toml` is the
+single configuration sample and lists supported settings, including the
+optional TCP transport keys under
 `[daemon]`. The commented option examples can be enabled in their shown tables;
 for TCP, select exactly one token source and configure TLS. TCP requires server
 TLS and bearer authentication; clients also need the configured token and,
@@ -48,7 +50,9 @@ unconfigured; TCP still requires a nonempty token and TLS. More than one
 configured source is rejected even if one source's value is empty. Conflicting sources
 are rejected without printing token contents. The prior nested `token_file`
 spelling and top-level `daemon_token_file` remain accepted as file-source
-aliases. Existing top-level `daemon_*` transport keys remain supported. When
+aliases. Existing top-level daemon token and TLS keys remain supported. The former
+`[daemon].endpoint` and top-level `daemon_endpoint` address keys are rejected;
+use `[daemon].listen`. When
 the old and new spelling of the same non-token setting both occur,
 configuration loading fails and names both keys; migrate each setting to the
 new spelling and remove its legacy key.
@@ -56,7 +60,7 @@ new spelling and remove its legacy key.
 [source,toml]
 ----
 [daemon]
-endpoint = "tcp://127.0.0.1:7443"
+listen = "tcp://127.0.0.1:7443"
 token_from_env = "NANDO_DAEMON_TOKEN"
 ca_cert = "/etc/nando/ca.pem"
 tls_cert = "/etc/nando/server.pem"

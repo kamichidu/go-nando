@@ -75,6 +75,11 @@ Without `--repository`, nando uses the `repository` value in its user TOML confi
 
 The TOML repository path is configured as `[repository].path`, and process-wide verbose logging as `[logging].verbose`. Previous top-level `repository` and `verbose` keys are rejected. The `--repository` and `--verbose` CLI flags remain available.
 
+Optional `[daemon].listen` sets the daemon's listening address and the address
+CLI commands use to connect. If omitted, both use the repository-specific local
+Unix socket. The old `[daemon].endpoint` and top-level `daemon_endpoint` keys are
+rejected.
+
 A minimal configuration file is:
 
 [source,toml]

@@ -21,12 +21,13 @@
 # max_delivery_delay = "30m"
 # sync_parallelism = 2
 
-# Daemon transport and credentials. Actual default: empty or omitted endpoint
-# uses the repository's local Unix socket. The values below are illustrative.
+# Daemon transport and credentials. `listen` configures both the daemon's
+# listening address and the address CLI commands connect to. If omitted, both
+# use the repository-specific local Unix socket. The values below are illustrative.
 # TCP listeners require TLS and bearer auth; configure the matching client
 # token source and CA certificate where needed.
 [daemon]
-# endpoint = "tcp://127.0.0.1:7443"
+# listen = "tcp://127.0.0.1:7443"
 
 # Select at most one token source. Uncomment exactly one line when using TCP.
 # These three settings are mutually exclusive, even when an empty value is set.

@@ -255,7 +255,7 @@ func TestTOMLConfigSelectsRepositoryAndSharedDaemonEndpoint(t *testing.T) {
 	// Use a test-owned absolute socket path as the configured endpoint.
 	endpoint := "unix://" + filepath.Join(socketDir, "configured.sock")
 	configPath := filepath.Join(t.TempDir(), "config.toml")
-	configText := fmt.Sprintf("[repository]\npath = %q\n[logging]\nverbose = true\n[daemon]\nendpoint = %q\n", repoDir, endpoint)
+	configText := fmt.Sprintf("[repository]\npath = %q\n[logging]\nverbose = true\n[daemon]\nlisten = %q\n", repoDir, endpoint)
 	if err := os.WriteFile(configPath, []byte(configText), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +375,7 @@ func TestTOMLConfigTCPAuthenticationAndTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(t.TempDir(), "tcp-config.toml")
-	configText := fmt.Sprintf("[repository]\npath = %q\n[logging]\nverbose = false\n[daemon]\nendpoint = %q\ntoken_from_env = \"NANDO_TEST_DAEMON_TOKEN\"\nca_cert = %q\ntls_cert = %q\ntls_key = %q\n", repoDir, endpoint, certPath, certPath, keyPath)
+	configText := fmt.Sprintf("[repository]\npath = %q\n[logging]\nverbose = false\n[daemon]\nlisten = %q\ntoken_from_env = \"NANDO_TEST_DAEMON_TOKEN\"\nca_cert = %q\ntls_cert = %q\ntls_key = %q\n", repoDir, endpoint, certPath, certPath, keyPath)
 	if err := os.WriteFile(configPath, []byte(configText), 0600); err != nil {
 		t.Fatal(err)
 	}

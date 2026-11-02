@@ -18,7 +18,6 @@ type Config struct {
 	Repository            RepositoryConfig `toml:"repository"`
 	Logging               LoggingConfig    `toml:"logging"`
 	Daemon                DaemonConfig     `toml:"daemon"`
-	LegacyDaemonEndpoint  string           `toml:"daemon_endpoint"`
 	LegacyDaemonTokenFile string           `toml:"daemon_token_file"`
 	LegacyDaemonCACert    string           `toml:"daemon_ca_cert"`
 	LegacyDaemonTLSCert   string           `toml:"daemon_tls_cert"`
@@ -48,7 +47,7 @@ type RemoteConfig struct {
 
 // DaemonConfig contains daemon listener and client transport settings.
 type DaemonConfig struct {
-	Endpoint      string `toml:"endpoint"`
+	Listen        string `toml:"listen"`
 	Token         string `toml:"token"`
 	TokenFromFile string `toml:"token_from_file"`
 	TokenFromEnv  string `toml:"token_from_env"`
@@ -146,7 +145,6 @@ func LoadConfig(path string) (*Config, error) {
 		name, old string
 		new       *string
 	}{
-		{"daemon_endpoint", cfg.LegacyDaemonEndpoint, &cfg.Daemon.Endpoint},
 		{"daemon_ca_cert", cfg.LegacyDaemonCACert, &cfg.Daemon.CACert},
 		{"daemon_tls_cert", cfg.LegacyDaemonTLSCert, &cfg.Daemon.TLSCert},
 		{"daemon_tls_key", cfg.LegacyDaemonTLSKey, &cfg.Daemon.TLSKey},

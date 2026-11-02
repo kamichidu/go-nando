@@ -15,7 +15,7 @@ path = "/var/lib/nando/<instance>"
 # sync_parallelism = 1
 
 [daemon]
-endpoint = "unix:///run/nando-<instance>/control.sock"
+listen = "unix:///run/nando-<instance>/control.sock"
 
 [recovery]
 # directory = "/recyclebin"

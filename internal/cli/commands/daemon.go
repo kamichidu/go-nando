@@ -49,7 +49,7 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 		endpoint = globalFlags.DaemonEndpoint
 	}
 	if endpoint == "" {
-		endpoint = cfg.Daemon.Endpoint
+		endpoint = cfg.Daemon.Listen
 	}
 	if endpoint == "" {
 		endpoint, err = controlrpc.DefaultEndpoint(repoDir)

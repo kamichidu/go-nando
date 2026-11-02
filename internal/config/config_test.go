@@ -78,7 +78,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 			t.Errorf("sample is missing active config key %q", key)
 		}
 	}
-	for _, key := range []string{"path", "verbose", "endpoint", "token", "token_from_file", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory"} {
+	for _, key := range []string{"path", "verbose", "listen", "token", "token_from_file", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory"} {
 		if !strings.Contains(string(sampleBytes), "# "+key+" =") {
 			t.Errorf("sample is missing commented supported config key %q", key)
 		}
@@ -87,7 +87,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	// mutually exclusive, so choose token_from_env and leave the other examples
 	// commented. This checks the documented options decode in their shown tables.
 	enabledSample := string(sampleBytes)
-	for _, key := range []string{"path", "verbose", "endpoint", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory"} {
+	for _, key := range []string{"path", "verbose", "listen", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory"} {
 		enabledSample = strings.ReplaceAll(enabledSample, "# "+key+" =", key+" =")
 	}
 	enabledPath := filepath.Join(t.TempDir(), "enabled-config.toml")
@@ -98,7 +98,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sample options enabled in their documented sections: %v", err)
 	}
-	if enabled.Repository.Path != "/home/alex/nando-data" || enabled.Logging.Verbose || enabled.Daemon.Endpoint != "tcp://127.0.0.1:7443" || enabled.Daemon.TokenFromEnv != "NANDO_DAEMON_TOKEN" || enabled.Daemon.CACert != "/etc/nando/ca.pem" || enabled.Daemon.TLSCert != "/etc/nando/server.pem" || enabled.Daemon.TLSKey != "/etc/nando/server-key.pem" || enabled.Remote.SyncIdleInterval != "30s" || enabled.Remote.SyncPeriodicInterval != "5m" || enabled.Remote.MaxDeliveryDelay != "30m" || enabled.Remote.SyncParallelism != 2 || enabled.Recovery.Directory != "/recyclebin" {
+	if enabled.Repository.Path != "/home/alex/nando-data" || enabled.Logging.Verbose || enabled.Daemon.Listen != "tcp://127.0.0.1:7443" || enabled.Daemon.TokenFromEnv != "NANDO_DAEMON_TOKEN" || enabled.Daemon.CACert != "/etc/nando/ca.pem" || enabled.Daemon.TLSCert != "/etc/nando/server.pem" || enabled.Daemon.TLSKey != "/etc/nando/server-key.pem" || enabled.Remote.SyncIdleInterval != "30s" || enabled.Remote.SyncPeriodicInterval != "5m" || enabled.Remote.MaxDeliveryDelay != "30m" || enabled.Remote.SyncParallelism != 2 || enabled.Recovery.Directory != "/recyclebin" {
 		t.Fatalf("enabled sample options decoded into unexpected fields: %+v", enabled)
 	}
 	if _, err := enabled.RemoteSchedulerPolicy(); err != nil {
@@ -109,7 +109,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 			t.Errorf("remote key %q must appear inside [remote] before [daemon]", key)
 		}
 	}
-	for key, section := range map[string]string{"path": "[repository]", "verbose": "[logging]", "endpoint": "[daemon]", "directory": "[recovery]"} {
+	for key, section := range map[string]string{"path": "[repository]", "verbose": "[logging]", "listen": "[daemon]", "directory": "[recovery]"} {
 		if strings.Index(string(sampleBytes), "# "+key+" =") < strings.Index(string(sampleBytes), section) {
 			t.Errorf("config key %q must appear inside %s", key, section)
 		}
@@ -123,7 +123,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Repository.Path != "" || cfg.Daemon.Endpoint != "" || resolved.DataDir == filepath.Dir(resolved.ConfigFile) {
+	if cfg.Repository.Path != "" || cfg.Daemon.Listen != "" || resolved.DataDir == filepath.Dir(resolved.ConfigFile) {
 		t.Fatalf("sample does not select active default data/transport paths: cfg=%+v paths=%+v", cfg, resolved)
 	}
 }
@@ -134,10 +134,10 @@ func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
 		text string
 		want DaemonConfig
 	}{
-		{"nested token sources", "[daemon]\nendpoint = \"tcp://host:7443\"\ntoken = \"literal\"\nca_cert = \"ca.pem\"\ntls_cert = \"cert.pem\"\ntls_key = \"key.pem\"\n", DaemonConfig{Endpoint: "tcp://host:7443", Token: "literal", CACert: "ca.pem", TLSCert: "cert.pem", TLSKey: "key.pem"}},
+		{"nested token sources", "[daemon]\nlisten = \"tcp://host:7443\"\ntoken = \"literal\"\nca_cert = \"ca.pem\"\ntls_cert = \"cert.pem\"\ntls_key = \"key.pem\"\n", DaemonConfig{Listen: "tcp://host:7443", Token: "literal", CACert: "ca.pem", TLSCert: "cert.pem", TLSKey: "key.pem"}},
 		{"nested file alias", "[daemon]\ntoken_file = \"token\"\n", DaemonConfig{TokenFromFile: "token", TokenFile: "token"}},
-		{"legacy", "daemon_endpoint = \"tcp://host:7443\"\ndaemon_token_file = \"token\"\ndaemon_ca_cert = \"ca.pem\"\ndaemon_tls_cert = \"cert.pem\"\ndaemon_tls_key = \"key.pem\"\n", DaemonConfig{Endpoint: "tcp://host:7443", TokenFromFile: "token", TokenFile: "token", CACert: "ca.pem", TLSCert: "cert.pem", TLSKey: "key.pem"}},
-		{"mixed distinct fields", "daemon_endpoint = \"tcp://host:7443\"\n[daemon]\ntoken_from_file = \"token\"\n", DaemonConfig{Endpoint: "tcp://host:7443", TokenFromFile: "token"}},
+		{"legacy token and TLS keys", "daemon_token_file = \"token\"\ndaemon_ca_cert = \"ca.pem\"\ndaemon_tls_cert = \"cert.pem\"\ndaemon_tls_key = \"key.pem\"\n", DaemonConfig{TokenFromFile: "token", TokenFile: "token", CACert: "ca.pem", TLSCert: "cert.pem", TLSKey: "key.pem"}},
+		{"mixed distinct fields", "[daemon]\nlisten = \"tcp://host:7443\"\ntoken_from_file = \"token\"\n", DaemonConfig{Listen: "tcp://host:7443", TokenFromFile: "token"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -152,16 +152,23 @@ func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
 		})
 	}
 	for _, text := range []string{
-		"daemon_endpoint = \"\"\n[daemon]\nendpoint = \"tcp://host:7443\"\n",
-		"daemon_tls_key = \"key.pem\"\n[daemon]\ntls_key = \"\"\n",
+		"daemon_endpoint = \"tcp://host:7443\"\n",
+		"[daemon]\nendpoint = \"tcp://host:7443\"\n",
 	} {
 		path := filepath.Join(t.TempDir(), "ambiguous.toml")
 		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "both set") {
-			t.Fatalf("duplicate old/new daemon keys accepted: %v", err)
+		if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "unknown configuration keys") {
+			t.Fatalf("removed or ambiguous daemon key accepted: %q", text)
 		}
+	}
+	path := filepath.Join(t.TempDir(), "ambiguous.toml")
+	if err := os.WriteFile(path, []byte("daemon_tls_key = \"key.pem\"\n[daemon]\ntls_key = \"\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "both set") {
+		t.Fatalf("duplicate old/new daemon TLS keys accepted: %v", err)
 	}
 	for _, text := range []string{
 		"[daemon]\ntoken = \"secret-value\"\ntoken_from_file = \"path\"\n",
