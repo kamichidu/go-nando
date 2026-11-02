@@ -1,9 +1,40 @@
-# Copy to the per-user config path. Leave repository empty to use the default.
+# nando per-user configuration.
+# Copy this file to ${XDG_CONFIG_HOME:-~/.config}/nando/config.toml.
+# Uncomment only the settings you need. Command-line flags take precedence.
+
+# Repository directory. Actual default: empty (use the default data directory).
 repository = ""
+
+# Enable diagnostic logging. Actual default: false.
 verbose = false
 
-# TCP daemon authentication can use one token source under [daemon]:
-# token_from_env = "NANDO_DAEMON_TOKEN"
+# Remote delivery scheduler policy. These are examples, not defaults.
+# Remote repositories require all four values. Durations must be positive.
+# Local repositories can also use these values to schedule maintenance.
+# remote_sync_idle_interval = "30s"
+# remote_sync_periodic_interval = "5m"
+# remote_max_delivery_delay = "30m"
+# remote_sync_parallelism = 2
 
-# Remote delivery also needs explicit scheduler policy; see README and
-# docs/configuration.adoc.
+# Daemon transport and credentials. Empty or omitted endpoint uses the
+# repository's local Unix socket. TCP listeners require TLS and bearer auth.
+[daemon]
+# endpoint = "tcp://127.0.0.1:7443"
+
+# Select at most one token source. Uncomment exactly one line when using TCP.
+# These three settings are mutually exclusive, even when an empty value is set.
+# token = "replace-with-a-secret"       # Example literal token value.
+# token_from_file = "/etc/nando/token"  # Example path containing the token.
+# token_from_env = "NANDO_DAEMON_TOKEN" # Example environment variable name.
+
+# CA certificate used by clients to verify a private server certificate.
+# ca_cert = "/etc/nando/ca.pem"
+
+# Server certificate and private key read by `nando daemon` for TCP TLS.
+# tls_cert = "/etc/nando/server.pem"
+# tls_key = "/etc/nando/server-key.pem"
+
+# Logical destination for `nando admin recover` when restoring unreferenced
+# GCS objects. Default: /recyclebin.
+[recovery]
+# directory = "/recyclebin"

@@ -73,21 +73,14 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 			t.Errorf("sample is missing active config key %q", key)
 		}
 	}
-	advancedPath := filepath.Join("..", "..", "samples", "config-advanced.toml")
-	advanced, err := LoadConfig(advancedPath)
-	if err != nil {
-		t.Fatal(err)
+	for _, key := range []string{"endpoint", "token", "token_from_file", "token_from_env", "ca_cert", "tls_cert", "tls_key", "remote_sync_idle_interval", "remote_sync_periodic_interval", "remote_max_delivery_delay", "remote_sync_parallelism", "directory"} {
+		if !strings.Contains(string(sampleBytes), "# "+key+" =") {
+			t.Errorf("sample is missing commented supported config key %q", key)
+		}
 	}
-	if *advanced != (Config{}) {
-		t.Fatalf("advanced sample=%+v, want empty transport defaults", advanced)
-	}
-	advancedBytes, err := os.ReadFile(advancedPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range []string{"endpoint", "token_from_env", "ca_cert", "tls_cert", "tls_key"} {
-		if !strings.Contains(string(advancedBytes), key+" =") {
-			t.Errorf("advanced sample is missing supported config key %q", key)
+	for _, key := range []string{"remote_sync_idle_interval", "remote_sync_periodic_interval", "remote_max_delivery_delay", "remote_sync_parallelism"} {
+		if strings.Index(string(sampleBytes), "# "+key+" =") > strings.Index(string(sampleBytes), "[daemon]") {
+			t.Errorf("top-level key %q must appear before TOML tables", key)
 		}
 	}
 	if runtime.GOOS == "windows" {
@@ -144,6 +137,10 @@ func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
 		"[daemon]\ntoken_from_file = \"path\"\ntoken_from_env = \"SECRET_NAME\"\n",
 		"[daemon]\ntoken = \"secret-value\"\ntoken_from_env = \"SECRET_NAME\"\n",
 		"daemon_token_file = \"legacy-path\"\n[daemon]\ntoken_from_env = \"SECRET_NAME\"\n",
+		"[daemon]\ntoken = \"\"\ntoken_from_env = \"SECRET_NAME\"\n",
+		"[daemon]\ntoken_from_file = \"\"\ntoken_from_env = \"SECRET_NAME\"\n",
+		"[daemon]\ntoken_file = \"\"\ntoken = \"secret-value\"\n",
+		"daemon_token_file = \"\"\n[daemon]\ntoken = \"secret-value\"\n",
 	} {
 		path := filepath.Join(t.TempDir(), "conflicting-token-sources.toml")
 		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
@@ -151,6 +148,21 @@ func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
 		}
 		if _, err := LoadConfig(path); err == nil || strings.Contains(err.Error(), "secret-value") || !strings.Contains(err.Error(), "mutually exclusive") {
 			t.Fatalf("conflicting token sources were not safely rejected: %v", err)
+		}
+	}
+	for _, text := range []string{
+		"[daemon]\ntoken = \"\"\n",
+		"[daemon]\ntoken_from_file = \"\"\n",
+		"[daemon]\ntoken_from_env = \"\"\n",
+		"[daemon]\ntoken_file = \"\"\n",
+		"daemon_token_file = \"\"\n",
+	} {
+		path := filepath.Join(t.TempDir(), "empty-token-source.toml")
+		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(path); err != nil {
+			t.Fatalf("single empty token source %q rejected: %v", text, err)
 		}
 	}
 }

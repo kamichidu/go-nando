@@ -104,15 +104,11 @@ Existing repositories with `delivery_mode: "gcs"` and `gcs_bucket` remain readab
 
 The daemon runs remote delivery processing, Capacity GC, and Orphan/Invalid GC as independent tasks. Remote delivery queue rows retain durable enqueue timestamps so maximum-delay eligibility survives daemon restart. See the link:samples/config.toml[configuration example] and link:packaging/README.md[Debian service guide] for setup details.
 
-== Object storage delivery
-
-Repositories use either Local durable delivery or Remote delivery. Remote mode commits complete content locally before asynchronous delivery to GCS, the only currently implemented remote backend. Each repository selects at most one remote backend; multiple backends, fanout, failover, and tiering are unsupported and not planned. Existing `delivery_mode: "gcs"` and `gcs_bucket` repository settings, legacy scheduler TOML keys, and `--delivery-mode gcs` / `--gcs-bucket` flags remain readable aliases. Opening and reinitializing an existing repository does not change its backend or bucket.
-
 == Operations
 
 The main commands are `init`, `daemon`, `put`, `get`, `cat`, `ls`, `stat`, `mv`, `rm`, `gc`, `doctor`, `recovery`, and `admin recover`. Run commands with `--help` for their flags and arguments. `doctor` checks repository health; `recovery list`, `recovery retry`, and `recovery discard` manage preserved write work after an interrupted operation.
 
-For safe backup and restore, stop clients and the daemon and preserve the complete repository as one consistent set. Follow the [backup and restore guide](docs/backup-restore.adoc). Package installation and service lifecycle details are in the [package guide](packaging/README.md).
+For safe backup and restore, stop clients and the daemon and preserve the complete repository as one consistent set. Follow the link:docs/backup-restore.adoc[backup and restore guide]. Package installation and service lifecycle details are in the link:packaging/README.md[package guide].
 
 == Operational Considerations
 
@@ -129,11 +125,3 @@ This README is the user-facing entry point. The link:docs/backup-restore.adoc[ba
 == Project Status
 
 nando is under active development. Local object storage and asynchronous delivery to the single selected GCS backend are implemented, alongside the daemon, CLI, FUSE, and WebDAV clients. User-directed repository-to-repository synchronization is not implemented. Consult the link:docs/phase-a-completion-review.adoc[Phase A completion review] for current status and known gaps.
-
-== User configuration
-
-Copy link:samples/config.toml[the beginner configuration sample] to the default config path. For path selection, existing repository migration guidance, daemon token sources, remote scheduling, recovery directory settings, and advanced TCP/TLS transport, see link:docs/configuration.adoc[Configuration].
-
-== Backup and restore
-
-Backup and restore are operator-managed. Preserve the entire stopped Repository as one consistent set, including SQLite and any sidecars, CAS objects, Recovery staging/manifests, coordination state, repository settings, and pending remote delivery obligations. The operator chooses the snapshot or copy mechanism; no particular storage technology is required. See link:docs/backup-restore.adoc[Repository Backup and Restore] for the static point, restore checks, and current Recovery path constraint.

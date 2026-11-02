@@ -28,6 +28,49 @@ func TestSettingsReadLegacyAndWriteCanonicalRemoteNames(t *testing.T) {
 	}
 }
 
+func TestSettingsReadRepositoryJSONCompatibilityCases(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+		want Settings
+	}{
+		{"oldest local settings", `{"delivery_mode":"local"}`, Settings{DeliveryMode: DeliveryModeLocal}},
+		{"gcs mode and bucket", `{"delivery_mode":"gcs","gcs_bucket":"archive"}`, Settings{DeliveryMode: DeliveryModeRemote, RemoteBackend: "gcs", RemoteBucket: "archive"}},
+		{"generic mode with legacy bucket", `{"delivery_mode":"remote","gcs_bucket":"archive"}`, Settings{DeliveryMode: DeliveryModeRemote, RemoteBucket: "archive"}},
+		{"generic settings", `{"delivery_mode":"remote","remote_backend":"gcs","remote_bucket":"archive","max_local_bytes":42}`, Settings{DeliveryMode: DeliveryModeRemote, RemoteBackend: "gcs", RemoteBucket: "archive", MaxLocalBytes: 42}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var got Settings
+			if err := json.Unmarshal([]byte(test.json), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("settings=%+v, want %+v", got, test.want)
+			}
+			if err := got.Validate(); err != nil {
+				t.Fatalf("valid compatibility settings rejected: %v", err)
+			}
+		})
+	}
+	for _, raw := range []string{
+		`{"delivery_mode":"remote","remote_bucket":"new","gcs_bucket":"old"}`,
+		`{"delivery_mode":"unsupported"}`,
+		`{"delivery_mode":"remote","remote_backend":"other","remote_bucket":"archive"}`,
+		`{"delivery_mode":"remote","remote_bucket":"archive","max_local_bytes":-1}`,
+	} {
+		t.Run("reject "+raw, func(t *testing.T) {
+			var got Settings
+			if err := json.Unmarshal([]byte(raw), &got); err != nil {
+				return
+			}
+			if err := got.Validate(); err == nil {
+				t.Fatalf("invalid settings accepted: %+v", got)
+			}
+		})
+	}
+}
+
 func TestSettingsRejectMultipleRemoteBackends(t *testing.T) {
 	s := Settings{DeliveryMode: DeliveryModeRemote, RemoteBackend: "other", RemoteBucket: "bucket"}
 	if err := s.Validate(); err == nil {

@@ -181,7 +181,19 @@ func LoadConfig(path string) (*Config, error) {
 		}
 		*item.new = item.old
 	}
-	if cfg.Daemon.TokenFile != "" && cfg.Daemon.TokenFromFile != "" {
+	// Count source spellings by presence, not value. An explicitly empty source
+	// still selects that source and must not be combined with another one.
+	tokenSources := 0
+	for _, key := range [][2]string{{"daemon", "token"}, {"daemon", "token_from_file"}, {"daemon", "token_from_env"}, {"daemon", "token_file"}, {"", "daemon_token_file"}} {
+		if key[0] == "" {
+			if metadata.IsDefined(key[1]) {
+				tokenSources++
+			}
+		} else if metadata.IsDefined(key[0], key[1]) {
+			tokenSources++
+		}
+	}
+	if tokenSources > 1 {
 		return nil, errors.New("daemon token sources are mutually exclusive")
 	}
 	fileDefined := metadata.IsDefined("daemon", "token_file")
@@ -189,9 +201,6 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.Daemon.TokenFromFile = cfg.Daemon.TokenFile
 	}
 	if metadata.IsDefined("daemon_token_file") {
-		if cfg.Daemon.TokenFromFile != "" || cfg.Daemon.Token != "" || cfg.Daemon.TokenFromEnv != "" {
-			return nil, errors.New("daemon token sources are mutually exclusive")
-		}
 		cfg.Daemon.TokenFromFile = cfg.LegacyDaemonTokenFile
 		cfg.Daemon.TokenFile = cfg.Daemon.TokenFromFile
 	}
