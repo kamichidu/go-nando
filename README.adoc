@@ -47,6 +47,30 @@ backend. Other databases, including Firestore, could implement the same
 interface if they provide equivalent transactional and compare-and-set (CAS)
 semantics; no alternative backend is currently implemented.
 
+[mermaid]
+....
+flowchart LR
+    CLI["nando CLI"] -->|control RPC| DAEMON["nando daemon"]
+    FUSE["nando-fuse"] -->|control RPC| DAEMON
+    WEBDAV["nando-webdav"] -->|control RPC| DAEMON
+    DAEMON --> APP["Application use cases"]
+    APP --> REPO["Repository coordination"]
+    REPO -->|entries, namespace, delivery queue| SQLITE[("SQLite Metadata Store\ncommitted metadata authority")]
+    REPO -->|stage, publish, read| LOCAL[("Local object storage\ndurable objects or remote-mode cache")]
+    REPO -.->|queued asynchronous upload| GCS[("GCS object storage\nselected by remote_uri")]
+    GCS -.->|read-through on Local cache miss| REPO
+
+    classDef config fill:#fff,stroke:#777,stroke-dasharray:4 3,color:#333
+    URI["remote_uri: gs://bucket[/prefix]\nliteral prefix + objects/{content_id}"]:::config
+    URI -. config .-> GCS
+....
+
+Solid arrows show request or local object access. Dashed arrows show remote
+configuration and remote transfer/read-through. In remote mode, complete Local
+content is published before its SQLite Entry reference and delivery obligation
+commit atomically; GCS delivery is asynchronous. GCS is the only implemented
+remote backend.
+
 == Requirements
 
 Using a prebuilt release requires a supported operating system and
