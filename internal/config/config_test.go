@@ -46,7 +46,7 @@ func TestLoadOptionalConfigMissingExplicitMalformedAndDefault(t *testing.T) {
 		t.Fatal("missing explicit config was accepted")
 	}
 	bad := filepath.Join(t.TempDir(), "bad.toml")
-	if err := os.WriteFile(bad, []byte("repository = ["), 0600); err != nil {
+	if err := os.WriteFile(bad, []byte("[repository]\npath = ["), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := LoadOptionalConfig(bad); err == nil {
@@ -68,12 +68,17 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"repository", "verbose"} {
+	for _, section := range []string{"[repository]", "[logging]", "[remote]", "[daemon]", "[recovery]"} {
+		if !strings.Contains(string(sampleBytes), section) {
+			t.Errorf("sample is missing config section %q", section)
+		}
+	}
+	for _, key := range []string{"path", "verbose"} {
 		if !strings.Contains(string(sampleBytes), key+" =") {
 			t.Errorf("sample is missing active config key %q", key)
 		}
 	}
-	for _, key := range []string{"endpoint", "token", "token_from_file", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory"} {
+	for _, key := range []string{"path", "verbose", "endpoint", "token", "token_from_file", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory"} {
 		if !strings.Contains(string(sampleBytes), "# "+key+" =") {
 			t.Errorf("sample is missing commented supported config key %q", key)
 		}
@@ -81,6 +86,11 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	for _, key := range []string{"sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism"} {
 		if strings.Index(string(sampleBytes), "# "+key+" =") < strings.Index(string(sampleBytes), "[remote]") || strings.Index(string(sampleBytes), "# "+key+" =") > strings.Index(string(sampleBytes), "[daemon]") {
 			t.Errorf("remote key %q must appear inside [remote] before [daemon]", key)
+		}
+	}
+	for key, section := range map[string]string{"path": "[repository]", "verbose": "[logging]", "endpoint": "[daemon]", "directory": "[recovery]"} {
+		if strings.Index(string(sampleBytes), "# "+key+" =") < strings.Index(string(sampleBytes), section) {
+			t.Errorf("config key %q must appear inside %s", key, section)
 		}
 	}
 	if runtime.GOOS == "windows" {
@@ -92,7 +102,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Repository != "" || cfg.Daemon.Endpoint != "" || resolved.DataDir == filepath.Dir(resolved.ConfigFile) {
+	if cfg.Repository.Path != "" || cfg.Daemon.Endpoint != "" || resolved.DataDir == filepath.Dir(resolved.ConfigFile) {
 		t.Fatalf("sample does not select active default data/transport paths: cfg=%+v paths=%+v", cfg, resolved)
 	}
 }
@@ -219,7 +229,7 @@ func TestRemoteSchedulerConfigRejectsLegacyKeys(t *testing.T) {
 		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "unknown configuration keys") {
+		if _, err := LoadConfig(path); err == nil || (!strings.Contains(err.Error(), "unknown configuration keys") && !strings.Contains(err.Error(), "type mismatch")) {
 			t.Errorf("legacy scheduler key accepted: %s err=%v", contents, err)
 		}
 	}
@@ -227,11 +237,34 @@ func TestRemoteSchedulerConfigRejectsLegacyKeys(t *testing.T) {
 
 func TestLoadConfigRejectsUnknownKeys(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "unknown.toml")
-	if err := os.WriteFile(path, []byte("verbose = true\ninert_key = 1\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("[logging]\nverbose = true\ninert_key = 1\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "inert_key") {
 		t.Fatalf("unknown/inert setting was not rejected: %v", err)
+	}
+}
+
+func TestLoadConfigRequiresRepositoryAndLoggingTables(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	for _, contents := range []string{
+		"repository = \"/old/path\"\n",
+		"verbose = true\n",
+		"repository = \"/old/path\"\nverbose = true\n",
+	} {
+		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(path); err == nil || (!strings.Contains(err.Error(), "unknown configuration keys") && !strings.Contains(err.Error(), "type mismatch")) {
+			t.Errorf("old top-level config keys accepted: %q err=%v", contents, err)
+		}
+	}
+	if err := os.WriteFile(path, []byte("[repository]\npath = \"/new/path\"\n[logging]\nverbose = true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil || cfg.Repository.Path != "/new/path" || !cfg.Logging.Verbose {
+		t.Fatalf("nested repository/logging config=%+v err=%v", cfg, err)
 	}
 }
 

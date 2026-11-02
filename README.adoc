@@ -73,11 +73,16 @@ The daemon must remain running while clients use the repository. The examples ch
 
 Without `--repository`, nando uses the `repository` value in its user TOML configuration, or the default data directory (`${XDG_DATA_HOME:-~/.local/share}/nando`). The default configuration file is `${XDG_CONFIG_HOME:-~/.config}/nando/config.toml`. Command-line options take precedence over configuration values.
 
+The TOML repository path is configured as `[repository].path`, and process-wide verbose logging as `[logging].verbose`. Previous top-level `repository` and `verbose` keys are rejected. The `--repository` and `--verbose` CLI flags remain available.
+
 A minimal configuration file is:
 
 [source,toml]
 ----
-repository = "/home/alex/nando-data"
+[repository]
+path = "/home/alex/nando-data"
+
+[logging]
 verbose = false
 ----
 

@@ -211,6 +211,24 @@ nodes:
     statement: Metadata backup and restoration are operator responsibilities. A Phase A backup MUST capture the complete Repository at one consistent static point after FUSE/WebDAV clients have stopped and the daemon has shut down normally with all Repository writes ceased. It MUST preserve the association among SQLite Metadata and any WAL/SHM sidecars, Repository Format, delivery obligations, Local Objects, Recovery staging/manifests, coordination state, and repository-owned settings. Operators select the snapshot/copy mechanism; no storage technology is mandated. Restore MUST occur while stopped, preserve owner/mode and Repository configuration, and verify integrity before clients resume. Backup procedures do not require GCS delivery to drain; pending obligations are preserved for scheduler retry. Repository-external configuration and credentials remain operator-managed separately.
     provenance:
       origin: imported
+  - id: REQ-USER-CONFIG-TABLES
+    level: system_requirement
+    kind: configuration-contract
+    statement: >-
+      User TOML configuration MUST place the repository path at
+      [repository].path and the process-wide verbose logging flag at
+      [logging].verbose. The previous top-level repository and verbose keys
+      MUST be rejected as unknown keys. CLI --repository and --verbose flags
+      remain supported, and this configuration schema change MUST NOT alter
+      the repository-owned repository.json persistence format.
+    attributes:
+      repository_path: repository.path
+      verbose_flag: logging.verbose
+      legacy_top_level_keys: rejected
+      cli_overrides: supported
+      repository_settings_file: repository.json
+    provenance:
+      origin: human-authored
   - id: REQ-ENTRY-ID
     level: system_requirement
     kind: identity-invariant

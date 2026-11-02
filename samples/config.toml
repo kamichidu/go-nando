@@ -3,10 +3,12 @@
 # Uncomment only the settings you need. Command-line flags take precedence.
 
 # Repository directory. Actual default: empty (use the default data directory).
-repository = ""
+[repository]
+# path = "/home/alex/nando-data"
 
 # Enable diagnostic logging. Actual default: false.
-verbose = false
+[logging]
+# verbose = false
 
 # Remote delivery scheduler policy. These are examples, not defaults.
 # Remote repositories require all four values. Durations must be positive.

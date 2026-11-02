@@ -15,16 +15,26 @@ import (
 // Config represents per-user runtime configuration. Repository delivery
 // settings remain in the repository-owned repository.json file.
 type Config struct {
-	Repository            string         `toml:"repository"`
-	Verbose               bool           `toml:"verbose"`
-	Daemon                DaemonConfig   `toml:"daemon"`
-	LegacyDaemonEndpoint  string         `toml:"daemon_endpoint"`
-	LegacyDaemonTokenFile string         `toml:"daemon_token_file"`
-	LegacyDaemonCACert    string         `toml:"daemon_ca_cert"`
-	LegacyDaemonTLSCert   string         `toml:"daemon_tls_cert"`
-	LegacyDaemonTLSKey    string         `toml:"daemon_tls_key"`
-	Remote                RemoteConfig   `toml:"remote"`
-	Recovery              RecoveryConfig `toml:"recovery"`
+	Repository            RepositoryConfig `toml:"repository"`
+	Logging               LoggingConfig    `toml:"logging"`
+	Daemon                DaemonConfig     `toml:"daemon"`
+	LegacyDaemonEndpoint  string           `toml:"daemon_endpoint"`
+	LegacyDaemonTokenFile string           `toml:"daemon_token_file"`
+	LegacyDaemonCACert    string           `toml:"daemon_ca_cert"`
+	LegacyDaemonTLSCert   string           `toml:"daemon_tls_cert"`
+	LegacyDaemonTLSKey    string           `toml:"daemon_tls_key"`
+	Remote                RemoteConfig     `toml:"remote"`
+	Recovery              RecoveryConfig   `toml:"recovery"`
+}
+
+// RepositoryConfig contains the configured repository data path.
+type RepositoryConfig struct {
+	Path string `toml:"path"`
+}
+
+// LoggingConfig contains process-wide logging settings.
+type LoggingConfig struct {
+	Verbose bool `toml:"verbose"`
 }
 
 // RemoteConfig contains user-selected scheduling policy for remote delivery.

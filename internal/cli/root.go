@@ -221,17 +221,17 @@ func ResolveRepositoryAndVerbose(ctx context.Context) (string, bool, error) {
 		return "", false, fmt.Errorf("failed to determine XDG-style data directory: %w", err)
 	}
 	repoDir := resolvedPaths.DataDir
-	if cfg.Repository != "" {
-		repoDir = cfg.Repository
+	if cfg.Repository.Path != "" {
+		repoDir = cfg.Repository.Path
 	}
 	if gFlags.Repository != "" {
 		repoDir = gFlags.Repository
 	}
-	verbose := cfg.Verbose
+	verbose := cfg.Logging.Verbose
 	if gFlags.VerboseSet {
 		verbose = gFlags.Verbose
 	}
-	if cfg.Repository == "" && gFlags.Repository == "" {
+	if cfg.Repository.Path == "" && gFlags.Repository == "" {
 		legacyDir, err := config.DefaultLegacyRepositoryDir()
 		if err != nil {
 			return "", false, fmt.Errorf("failed to resolve legacy repository location: %w", err)

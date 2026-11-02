@@ -7,17 +7,21 @@ the home directory when the XDG variables are unset. Set both XDG variables to
 use them without a home directory.
 
 Copy `samples/config.toml` to the default config path to begin. Its empty
-`repository` value selects the default data directory. Set `repository` to
-select another repository. Command-line options take precedence over TOML
-values. An absent default config file is allowed; a missing file named with
-`--config` is an error. Unknown TOML keys are rejected.
+`[repository].path` setting selects the default data directory. Set
+`[repository].path` to select another repository. Process-wide verbose logging
+is configured with `[logging].verbose`. Command-line options take precedence
+over TOML values. An absent default config file is allowed; a missing file named with
+`--config` is an error. Unknown TOML keys are rejected. The former top-level
+`repository` and `verbose` keys are unsupported; use `[repository].path` and
+`[logging].verbose` respectively. CLI `--repository` and `--verbose` remain
+available and override their TOML settings.
 
 == Existing repositories
 
 Older versions used a repository under the user config directory. If nando
 detects an initialized repository there and no repository was explicitly
 selected, it stops rather than silently opening a different data directory.
-Set `repository` in the config file or pass `--repository` to select the old
+Set `[repository].path` in the config file or pass `--repository` to select the old
 repository explicitly. Do not initialize a new repository over data you intend
 to keep.
 
