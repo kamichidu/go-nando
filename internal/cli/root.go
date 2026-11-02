@@ -87,7 +87,7 @@ func NewDaemonClientFromContext(ctx context.Context) (*controlrpc.Client, error)
 	}
 	endpoint := flags.DaemonEndpoint
 	if endpoint == "" {
-		endpoint = cfg.DaemonEndpoint
+		endpoint = cfg.Daemon.Endpoint
 	}
 	if endpoint == "" {
 		endpoint, err = controlrpc.DefaultEndpoint(repoDir)
@@ -98,7 +98,7 @@ func NewDaemonClientFromContext(ctx context.Context) (*controlrpc.Client, error)
 	var token string
 	tokenFile := flags.DaemonTokenFile
 	if tokenFile == "" {
-		tokenFile = cfg.DaemonTokenFile
+		tokenFile = cfg.Daemon.TokenFile
 	}
 	if tokenFile != "" {
 		token, err = controlrpc.ReadTokenFile(tokenFile)
@@ -109,7 +109,7 @@ func NewDaemonClientFromContext(ctx context.Context) (*controlrpc.Client, error)
 	var caPEM []byte
 	caCertFile := flags.DaemonCACertFile
 	if caCertFile == "" {
-		caCertFile = cfg.DaemonCACert
+		caCertFile = cfg.Daemon.CACert
 	}
 	if caCertFile != "" {
 		caPEM, err = os.ReadFile(caCertFile)

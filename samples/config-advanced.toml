@@ -1,12 +1,13 @@
 # Optional daemon transport settings for advanced deployments.
-# Leave daemon_endpoint empty to use the repository's local Unix socket.
+# Leave endpoint empty to use the repository's local Unix socket.
 # TCP requires TLS on the daemon and a bearer token for clients.
-daemon_endpoint = ""
+[daemon]
+endpoint = ""
 
 # Client authentication for a TCP daemon.
-daemon_token_file = ""
-daemon_ca_cert = ""
+token_file = ""
+ca_cert = ""
 
 # Server TLS files, read by `nando daemon` when using TCP.
-daemon_tls_cert = ""
-daemon_tls_key = ""
+tls_cert = ""
+tls_key = ""

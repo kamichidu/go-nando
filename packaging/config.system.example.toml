@@ -1,7 +1,8 @@
 # Copy to /etc/nando/<instance>.toml. The instance must be initialized as
 # the packaged nando account before starting nando@<instance>.service.
 repository = "/var/lib/nando/<instance>"
-daemon_endpoint = "unix:///run/nando-<instance>/control.sock"
+[daemon]
+endpoint = "unix:///run/nando-<instance>/control.sock"
 
 # For GCS repositories, provide all four scheduler settings explicitly.
 # No package or unit defaults are supplied.

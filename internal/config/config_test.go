@@ -85,7 +85,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"daemon_endpoint", "daemon_token_file", "daemon_ca_cert", "daemon_tls_cert", "daemon_tls_key"} {
+	for _, key := range []string{"endpoint", "token_file", "ca_cert", "tls_cert", "tls_key"} {
 		if !strings.Contains(string(advancedBytes), key+" =") {
 			t.Errorf("advanced sample is missing supported config key %q", key)
 		}
@@ -99,8 +99,44 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Repository != "" || cfg.DaemonEndpoint != "" || resolved.DataDir == filepath.Dir(resolved.ConfigFile) {
+	if cfg.Repository != "" || cfg.Daemon.Endpoint != "" || resolved.DataDir == filepath.Dir(resolved.ConfigFile) {
 		t.Fatalf("sample does not select active default data/transport paths: cfg=%+v paths=%+v", cfg, resolved)
+	}
+}
+
+func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want DaemonConfig
+	}{
+		{"nested", "[daemon]\nendpoint = \"tcp://host:7443\"\ntoken_file = \"token\"\nca_cert = \"ca.pem\"\ntls_cert = \"cert.pem\"\ntls_key = \"key.pem\"\n", DaemonConfig{"tcp://host:7443", "token", "ca.pem", "cert.pem", "key.pem"}},
+		{"legacy", "daemon_endpoint = \"tcp://host:7443\"\ndaemon_token_file = \"token\"\ndaemon_ca_cert = \"ca.pem\"\ndaemon_tls_cert = \"cert.pem\"\ndaemon_tls_key = \"key.pem\"\n", DaemonConfig{"tcp://host:7443", "token", "ca.pem", "cert.pem", "key.pem"}},
+		{"mixed distinct fields", "daemon_endpoint = \"tcp://host:7443\"\n[daemon]\ntoken_file = \"token\"\n", DaemonConfig{Endpoint: "tcp://host:7443", TokenFile: "token"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(test.text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadConfig(path)
+			if err != nil || cfg.Daemon != test.want {
+				t.Fatalf("daemon config=%+v err=%v, want %+v", cfg, err, test.want)
+			}
+		})
+	}
+	for _, text := range []string{
+		"daemon_endpoint = \"\"\n[daemon]\nendpoint = \"tcp://host:7443\"\n",
+		"daemon_tls_key = \"key.pem\"\n[daemon]\ntls_key = \"\"\n",
+	} {
+		path := filepath.Join(t.TempDir(), "ambiguous.toml")
+		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "both set") {
+			t.Fatalf("duplicate old/new daemon keys accepted: %v", err)
+		}
 	}
 }
 

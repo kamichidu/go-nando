@@ -25,10 +25,23 @@ to keep.
 
 The standard local endpoint is a repository-specific Unix socket selected
 automatically. `samples/config-advanced.toml` lists the supported TCP transport
-keys. TCP requires server TLS and bearer authentication; clients also need the
-token file and, when using a private CA, the CA certificate. The TLS certificate
-and key are read by `nando daemon`; the token and CA settings are used by client
-commands.
+keys under `[daemon]`. TCP requires server TLS and bearer authentication;
+clients also need the token file and, when using a private CA, the CA
+certificate. The TLS certificate and key are read by `nando daemon`; the token
+and CA settings are used by client commands. Existing top-level `daemon_*` keys
+remain supported. When the old and new spelling of the same setting both occur,
+configuration loading fails and names both keys; migrate each setting to the
+new spelling and remove its legacy key.
+
+[source,toml]
+----
+[daemon]
+endpoint = "tcp://127.0.0.1:7443"
+token_file = "/etc/nando/token"
+ca_cert = "/etc/nando/ca.pem"
+tls_cert = "/etc/nando/server.pem"
+tls_key = "/etc/nando/server-key.pem"
+----
 
 == GCS scheduler
 

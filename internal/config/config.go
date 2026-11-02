@@ -15,18 +15,30 @@ import (
 // Config represents per-user runtime configuration. Repository delivery
 // settings remain in the repository-owned repository.json file.
 type Config struct {
-	Repository              string         `toml:"repository"`
-	Verbose                 bool           `toml:"verbose"`
-	DaemonEndpoint          string         `toml:"daemon_endpoint"`
-	DaemonTokenFile         string         `toml:"daemon_token_file"`
-	DaemonCACert            string         `toml:"daemon_ca_cert"`
-	DaemonTLSCert           string         `toml:"daemon_tls_cert"`
-	DaemonTLSKey            string         `toml:"daemon_tls_key"`
+	Repository string       `toml:"repository"`
+	Verbose    bool         `toml:"verbose"`
+	Daemon     DaemonConfig `toml:"daemon"`
+	// Legacy daemon_* keys remain accepted for compatibility. LoadConfig
+	// merges them into Daemon and rejects duplicate old/new spellings.
+	LegacyDaemonEndpoint    string         `toml:"daemon_endpoint"`
+	LegacyDaemonTokenFile   string         `toml:"daemon_token_file"`
+	LegacyDaemonCACert      string         `toml:"daemon_ca_cert"`
+	LegacyDaemonTLSCert     string         `toml:"daemon_tls_cert"`
+	LegacyDaemonTLSKey      string         `toml:"daemon_tls_key"`
 	GCSSyncIdleInterval     string         `toml:"gcs_sync_idle_interval"`
 	GCSSyncPeriodicInterval string         `toml:"gcs_sync_periodic_interval"`
 	GCSMaxDeliveryDelay     string         `toml:"gcs_max_delivery_delay"`
 	GCSSyncParallelism      int            `toml:"gcs_sync_parallelism"`
 	Recovery                RecoveryConfig `toml:"recovery"`
+}
+
+// DaemonConfig contains daemon listener and client transport settings.
+type DaemonConfig struct {
+	Endpoint  string `toml:"endpoint"`
+	TokenFile string `toml:"token_file"`
+	CACert    string `toml:"ca_cert"`
+	TLSCert   string `toml:"tls_cert"`
+	TLSKey    string `toml:"tls_key"`
 }
 
 // RecoveryConfig configures the logical destination for restored GCS metadata.
@@ -95,6 +107,27 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if unknown := metadata.Undecoded(); len(unknown) != 0 {
 		return nil, fmt.Errorf("unknown configuration keys: %s", strings.Join(keysToStrings(unknown), ", "))
+	}
+	legacy := []struct {
+		name string
+		old  string
+		new  *string
+	}{
+		{"daemon_endpoint", cfg.LegacyDaemonEndpoint, &cfg.Daemon.Endpoint},
+		{"daemon_token_file", cfg.LegacyDaemonTokenFile, &cfg.Daemon.TokenFile},
+		{"daemon_ca_cert", cfg.LegacyDaemonCACert, &cfg.Daemon.CACert},
+		{"daemon_tls_cert", cfg.LegacyDaemonTLSCert, &cfg.Daemon.TLSCert},
+		{"daemon_tls_key", cfg.LegacyDaemonTLSKey, &cfg.Daemon.TLSKey},
+	}
+	for _, item := range legacy {
+		if !metadata.IsDefined(item.name) {
+			continue
+		}
+		newKey := "daemon." + strings.TrimPrefix(item.name, "daemon_")
+		if metadata.IsDefined("daemon", strings.TrimPrefix(item.name, "daemon_")) {
+			return nil, fmt.Errorf("configuration keys %q and %q are both set", item.name, newKey)
+		}
+		*item.new = item.old
 	}
 	return &cfg, nil
 }

@@ -49,7 +49,7 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 		endpoint = globalFlags.DaemonEndpoint
 	}
 	if endpoint == "" {
-		endpoint = cfg.DaemonEndpoint
+		endpoint = cfg.Daemon.Endpoint
 	}
 	if endpoint == "" {
 		endpoint, err = controlrpc.DefaultEndpoint(repoDir)
@@ -74,7 +74,7 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 		tokenFile = globalFlags.DaemonTokenFile
 	}
 	if tokenFile == "" {
-		tokenFile = cfg.DaemonTokenFile
+		tokenFile = cfg.Daemon.TokenFile
 	}
 	var token string
 	if tokenFile != "" {
@@ -97,8 +97,8 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 	}
 	return daemon.ServeWithScheduler(ctx, application, repoDir, daemon.ListenConfig{
 		Endpoint: endpoint,
-		CertFile: firstNonEmpty(c.tlsCert, cfg.DaemonTLSCert),
-		KeyFile:  firstNonEmpty(c.tlsKey, cfg.DaemonTLSKey),
+		CertFile: firstNonEmpty(c.tlsCert, cfg.Daemon.TLSCert),
+		KeyFile:  firstNonEmpty(c.tlsKey, cfg.Daemon.TLSKey),
 		Token:    token,
 	}, scheduler)
 }
