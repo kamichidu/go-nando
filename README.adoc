@@ -1,44 +1,94 @@
-= nando
+= nando — 納戸
 
-`docs/design.ir.yaml` is the sole semantic authority and direct design reference for this repository. See `docs/design-ir-migration.md` for the one-time source coverage record.
+== About the Name
 
-== Validate the design
+nando is a Japanese word for a household storeroom: a place to keep useful things that are not needed every day. The name reflects nando's role as a dependable home for files that should be preserved and retrieved when needed.
 
-Check out the official Design IR validator and provide its path:
+== Overview
+
+nando is a content-addressed file repository for keeping durable collections of files. It stores file content as immutable objects and organizes names and directories in a separate metadata namespace. A daemon owns a repository while command-line and filesystem clients access it.
+
+The design suits collections that are written, preserved, and read over time. It is less suited to workloads that frequently rewrite files in place, require every write to wait for remote durability, or need replication across multiple remote providers.
+
+== Use Cases
+
+Examples include:
+
+* Photo and video original archives.
+* AI model weights, checkpoints, configuration, and evaluation artifacts.
+* Project archives, research outputs, and other durable file collections.
+* A local-first repository with asynchronous delivery to remote object storage.
+
+For remote delivery, nando currently supports Google Cloud Storage (GCS). Content is committed locally first; delivery to GCS is asynchronous. A repository uses local storage alone or local storage with one remote backend. GCS is the only implemented remote backend. Combining multiple remote backends in one repository is not supported and is not planned.
+
+== Architecture
+
+nando separates the Repository, Metadata Store, and Object Storage responsibilities. The Repository coordinates operations and consistency. The Metadata Store owns file and directory names, hierarchy, and revisions. Object Storage holds immutable file content; its interface is abstract, with local storage and GCS implementations.
+
+The Metadata Store is also an abstract interface. SQLite is the implemented backend. Firestore or another database with suitable transactional and compare-and-set (CAS) behavior could implement the interface, but those backends are not implemented.
+
+== Requirements
+
+Using a prebuilt release requires a supported operating system and architecture listed with that release. Building from source requires Go 1.25.1 or later. GCS repositories also require Google Cloud credentials with access to the configured bucket. Local repositories do not require cloud credentials.
+
+== Installation
+
+Install the latest published Go module version with:
 
 [source,bash]
 ----
-git clone https://github.com/kamichidu/design-ir.git ../design-ir
-git -C ../design-ir checkout 455ed318b7bc409d3e1da320620ef92d457042b9
-DESIGN_IR_REPO=../design-ir tools/validate-design-ir.sh
+go install github.com/kamichidu/go-nando/cmd/nando@latest
 ----
 
-The script verifies the pinned schema digest, then validates structure and semantics with the official v1alpha1 validator. Unresolved representation gaps are reported as warnings; validation errors fail the command.
+Ensure the Go binary directory is on `PATH`. To build from a checkout instead, run `go build ./cmd/nando` from the repository root. For Debian packages and the systemd user service, see the link:packaging/README.md[package and service guide].
 
-== Reproducible E2E gates
+== Quick Start
 
-Run host-native G0-G3 and WebDAV G5 checks with:
+Initialize a local repository:
 
 [source,bash]
 ----
-e2e/run.sh
+nando --repository "$HOME/nando-data" init
 ----
 
-Docker Compose starts only fake GCS; the daemon, real FUSE mount, WebDAV adapter, scenario runner, and fault-injection proxy stay on the Linux/WSL host. The optional bounded binary/concurrency FUSE stress profile is `e2e/run.sh --stress`. Scenario assertions, host requirements, fake-GCS limitations, and retained evidence are documented in link:docs/e2e-gates.md[docs/e2e-gates.md].
+In one terminal, start its daemon:
 
-== WebDAV Phase A
+[source,bash]
+----
+nando --repository "$HOME/nando-data" daemon
+----
 
-WebDAV is a separate Go module and process. Build it with `cd webdav && go build ./cmd/nando-webdav`. It connects to the daemon using public controlrpc and daemon-issued `file://` Resource URIs only. Approved Phase A operation is single-user and local-host only: the daemon uses a per-user Unix socket (private parent mode 0700, socket mode 0600), while WebDAV serves unauthenticated plain HTTP on loopback only. External exposure, multi-user authorization, WebDAV client authentication, and TLS termination are deferred. Supported conditional PUT headers and deliberate protocol gaps are documented in link:docs/webdav-phase-a.adoc[WebDAV Phase A].
+In another terminal, import a file and browse or export it:
 
-== Object storage delivery
+[source,bash]
+----
+nando --repository "$HOME/nando-data" put ./photo.jpg /photos/photo.jpg
+nando --repository "$HOME/nando-data" ls /photos
+nando --repository "$HOME/nando-data" get /photos/photo.jpg ./photo-copy.jpg
+----
 
-Repositories use either `local` delivery or `remote` delivery. Remote mode keeps complete content in Local durable staging/cache and delivers it asynchronously to exactly one selected backend. The only implemented remote backend is GCS; multiple backends, fanout, failover, and tiering are unsupported and not planned. Initialize a remote repository with `nando init --delivery-mode remote --remote-backend gcs --remote-bucket <bucket>`.
+The daemon must remain running while clients use the repository. The examples choose a repository path explicitly so every command addresses the same repository.
 
-Existing repositories with `delivery_mode: "gcs"` and `gcs_bucket` remain readable and are not rewritten when opened. Existing TOML scheduler keys (`gcs_sync_idle_interval`, `gcs_sync_periodic_interval`, `gcs_max_delivery_delay`, and `gcs_sync_parallelism`) and CLI flags (`--delivery-mode gcs`, `--gcs-bucket`) remain accepted aliases. New repositories and examples use generic names. Reinitializing an existing repository does not change its selected backend or bucket.
+== Configuration
 
-== Daemon maintenance scheduling
+Without `--repository`, nando uses the `repository` value in its user TOML configuration, or the default data directory (`${XDG_DATA_HOME:-~/.local/share}/nando`). The default configuration file is `${XDG_CONFIG_HOME:-~/.config}/nando/config.toml`. Command-line options take precedence over configuration values.
 
-Remote object delivery requires an explicit scheduler policy in the daemon's TOML config; timing and parallelism have no implicit operational defaults. Example values below are illustrative and must be selected for the deployment:
+A minimal configuration file is:
+
+[source,toml]
+----
+repository = "/home/alex/nando-data"
+verbose = false
+----
+
+To initialize remote delivery with the currently supported GCS backend, select the backend and provide a bucket:
+
+[source,bash]
+----
+nando --repository "$HOME/nando-data" init --delivery-mode remote --remote-backend gcs --remote-bucket my-nando-bucket
+----
+
+Remote delivery requires explicit scheduler policy in the daemon's TOML configuration. Example values are deployment choices:
 
 [source,toml]
 ----
@@ -48,14 +98,32 @@ remote_max_delivery_delay = "30m"
 remote_sync_parallelism = 2
 ----
 
-The daemon runs remote delivery processing, Capacity GC, and Orphan/Invalid GC as independent tasks. The current implementation supports one selected remote backend per repository, GCS; multiple remote backends, fanout, failover, and tiering are unsupported and not planned. Remote delivery queue rows retain their durable enqueue timestamps so maximum-delay eligibility survives daemon restart. Idle is currently measured from the last successful content commit observed by the daemon; the Design IR records the broader idle definition/default policy as an open decision. The scheduler also runs for Local repositories when these settings are explicitly configured; without an explicit policy, Local repositories keep their existing manual maintenance behavior.
+Repositories use either `local` delivery or `remote` delivery. Remote mode keeps complete content in Local durable staging/cache and delivers it asynchronously to exactly one selected backend. GCS is the only implemented remote backend. Multiple backends, fanout, failover, and tiering are unsupported and not planned.
 
-== Debian package and systemd
+Existing repositories with `delivery_mode: "gcs"` and `gcs_bucket` remain readable and are not rewritten when opened. Existing TOML scheduler keys (`gcs_sync_idle_interval`, `gcs_sync_periodic_interval`, `gcs_max_delivery_delay`, and `gcs_sync_parallelism`) and CLI flags (`--delivery-mode gcs`, `--gcs-bucket`) remain accepted aliases. New repositories and examples use generic names. Reinitializing an existing repository does not change its selected backend or bucket.
 
-The nfpm Debian package installs the CLI, FUSE and WebDAV executables, plus separate systemd user and system `nando@.service` templates. The user service is the supported Phase A mode and uses each user's XDG configuration, data, and per-user Unix socket. See link:packaging/README.md[Debian package and service setup] for instance configuration and lifecycle instructions. Installation and upgrade do not enable, start, or restart services; removal preserves repositories, configuration, credentials, and the dedicated system account.
+The daemon runs remote delivery processing, Capacity GC, and Orphan/Invalid GC as independent tasks. Remote delivery queue rows retain durable enqueue timestamps so maximum-delay eligibility survives daemon restart. See the link:samples/config.toml[configuration example] and link:packaging/README.md[Debian service guide] for setup details.
 
-The system service template is experimental and is not a Phase A acceptance gate. It uses a dedicated non-login `nando` account, `/etc/nando/<instance>.toml`, `/var/lib/nando/<instance>`, and `/run/nando-<instance>`. Because the control socket remains mode 0600, system-mode FUSE and WebDAV clients must run under the same `nando` account. The template must not be treated as supported multi-user sharing.
+== Operations
 
-== Backup and restore
+The main commands are `init`, `daemon`, `put`, `get`, `cat`, `ls`, `stat`, `mv`, `rm`, `gc`, `doctor`, `recovery`, and `admin recover`. Run commands with `--help` for their flags and arguments. `doctor` checks repository health; `recovery list`, `recovery retry`, and `recovery discard` manage preserved write work after an interrupted operation.
 
-Backup and restore are operator-managed. Preserve the entire stopped Repository as one consistent set, including SQLite and any sidecars, CAS objects, Recovery staging/manifests, coordination state, repository settings, and pending remote delivery obligations. The operator chooses the snapshot or copy mechanism; no particular storage technology is required. See link:docs/backup-restore.adoc[Repository Backup and Restore] for the static point, restore checks, and current Recovery path constraint.
+For safe backup and restore, stop clients and the daemon and preserve the complete repository as one consistent set. Follow the [backup and restore guide](docs/backup-restore.adoc). Package installation and service lifecycle details are in the [package guide](packaging/README.md).
+
+== Operational Considerations
+
+* nando is intended for durable collections, not high-churn files that are repeatedly modified in place.
+* Remote delivery is asynchronous, so a successful local commit does not mean the remote copy is already durable. Keep the local repository available until delivery completes.
+* A repository uses local storage alone or local storage with one remote backend. nando does not replicate across multiple remote providers.
+* Keep the daemon and its repository on storage with enough capacity for the selected workload. Back up the full repository while it is stopped.
+* GCS credentials and user configuration are managed outside the repository data directory.
+
+== Documentation
+
+This README is the user-facing entry point. The link:docs/backup-restore.adoc[backup and restore guide], link:docs/webdav-phase-a.adoc[WebDAV Phase A notes], link:packaging/README.md[Debian package guide], and link:docs/e2e-gates.md[E2E gate guide] cover specific topics in more detail. The link:docs/phase-a-completion-review.adoc[Phase A completion review] records current implementation status and open decisions.
+
+== Project Status
+
+nando is under active development. Local object storage and asynchronous delivery to the single selected GCS backend are implemented, alongside the daemon, CLI, FUSE, and WebDAV clients. User-directed repository-to-repository synchronization is not implemented. Consult the link:docs/phase-a-completion-review.adoc[Phase A completion review] for current status and known gaps.
+
+Backup and restore are operator-managed. Preserve the entire stopped Repository as one consistent set, including SQLite and any sidecars, CAS objects, Recovery staging/manifests, coordination state, repository settings, and pending remote delivery obligations. See link:docs/backup-restore.adoc[Repository Backup and Restore] for restore checks and current constraints.
