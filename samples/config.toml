@@ -1,5 +1,7 @@
 # nando per-user configuration.
-# Copy this file to ${XDG_CONFIG_HOME:-~/.config}/nando/config.toml.
+# Copy this file to ${XDG_CONFIG_HOME:-~/.config}/nando/config.toml. nando,
+# nando-fuse, and nando-webdav all read this same per-user file; each accepts
+# --config/-config to select an alternate file.
 # Uncomment only the settings you need. Command-line flags take precedence.
 
 # Local repository directory. Actual default: empty (use the default data
@@ -22,8 +24,10 @@
 # sync_parallelism = 2
 
 # Daemon transport and credentials. `listen` configures both the daemon's
-# listening address and the address CLI commands connect to. If omitted, both
-# use the repository-specific local Unix socket. The values below are illustrative.
+# listening address and the address all client commands connect to, including
+# FUSE and WebDAV. If omitted, both use the repository-specific local Unix
+# socket. The values below are illustrative.
+# WebDAV's -listen flag remains its separate HTTP bind address.
 # TCP listeners require TLS and bearer auth; configure the matching client
 # token source and CA certificate where needed.
 [daemon]

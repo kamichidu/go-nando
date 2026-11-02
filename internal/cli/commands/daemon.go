@@ -6,11 +6,11 @@ import (
 	"fmt"
 
 	"github.com/kamichidu/go-flagshim"
-	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/cli"
 	"github.com/kamichidu/go-nando/internal/daemon"
 	"github.com/kamichidu/go-nando/internal/repository"
+	"github.com/kamichidu/go-nando/runtimeconfig"
 )
 
 // DaemonCommand runs the single Repository-owning daemon process.
@@ -44,18 +44,9 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 		return err
 	}
 	globalFlags := flagshim.MustFlagFromContext[cli.GlobalFlags](ctx)
-	endpoint := c.listen
-	if endpoint == "" {
-		endpoint = globalFlags.DaemonEndpoint
-	}
-	if endpoint == "" {
-		endpoint = cfg.Daemon.Listen
-	}
-	if endpoint == "" {
-		endpoint, err = controlrpc.DefaultEndpoint(repoDir)
-		if err != nil {
-			return err
-		}
+	endpoint, err := runtimeconfig.ResolveEndpoint(cfg, repoDir, firstNonEmpty(c.listen, globalFlags.DaemonEndpoint))
+	if err != nil {
+		return err
 	}
 	unlock, err := daemon.AcquireRepositoryLock(repoDir)
 	if err != nil {
@@ -69,17 +60,7 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 	}
 	defer func() { runErr = errors.Join(runErr, cleanup()) }()
 
-	tokenFile := c.tokenFile
-	if tokenFile == "" {
-		tokenFile = globalFlags.DaemonTokenFile
-	}
-	literal, envName := cfg.Daemon.Token, cfg.Daemon.TokenFromEnv
-	if tokenFile == "" {
-		tokenFile = cfg.Daemon.TokenFromFile
-	} else {
-		literal, envName = "", ""
-	}
-	token, err := controlrpc.ResolveToken(literal, tokenFile, envName)
+	token, err := runtimeconfig.ResolveToken(cfg, firstNonEmpty(c.tokenFile, globalFlags.DaemonTokenFile))
 	if err != nil {
 		return fmt.Errorf("resolve daemon bearer token: %w", err)
 	}

@@ -1,6 +1,6 @@
 = Configuration
 
-nando reads an optional per-user TOML file. The default path is
+`nando`, `nando-fuse`, and `nando-webdav` read the same optional per-user TOML file. The default path is
 `${XDG_CONFIG_HOME:-~/.config}/nando/config.toml`; the default data directory
 is `${XDG_DATA_HOME:-~/.local/share}/nando`. On Windows, `USERPROFILE` supplies
 the home directory when the XDG variables are unset. Set both XDG variables to
@@ -13,12 +13,17 @@ selects the default local repository data directory. Set `[repository].path` to
 select another local repository. `[recovery].directory` selects a logical
 directory inside nando and defaults to `/recyclebin`; it is independent of the
 local repository directory. Process-wide verbose logging is configured with
-`[logging].verbose`. Command-line options take precedence
-over TOML values. An absent default config file is allowed; a missing file named with
-`--config` is an error. Unknown TOML keys are rejected. The former top-level
+`[logging].verbose`. Command-line options take precedence over TOML values. All
+three binaries accept `--config` and `-config` to select an explicit file. An
+absent default config file is allowed; a missing explicitly selected file is an
+error. Unknown TOML keys are rejected. The former top-level
 `repository` and `verbose` keys are unsupported; use `[repository].path` and
 `[logging].verbose` respectively. CLI `--repository` and `--verbose` remain
-available and override their TOML settings.
+available and override their TOML settings. `[repository].path`, `[daemon].listen`,
+and daemon token/CA settings are resolved consistently by all three binaries.
+FUSE retains `-mountpoint`. WebDAV's `-listen` is its own loopback HTTP bind
+address; it is independent of `[daemon].listen`, which selects the daemon
+control endpoint.
 
 == Existing repositories
 
@@ -33,7 +38,7 @@ to keep.
 
 The standard local listener is a repository-specific Unix socket selected
 automatically. The optional `[daemon].listen` setting selects the address the
-daemon listens on and CLI commands connect to. `samples/config.toml` is the
+daemon listens on and all three client binaries connect to. `samples/config.toml` is the
 single configuration sample and lists supported settings, including the
 optional TCP transport keys under
 `[daemon]`. The commented option examples can be enabled in their shown tables;

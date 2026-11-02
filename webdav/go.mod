@@ -7,4 +7,6 @@ require (
 	golang.org/x/net v0.33.0
 )
 
+require github.com/BurntSushi/toml v1.6.0 // indirect
+
 replace github.com/kamichidu/go-nando => ..

@@ -24,6 +24,7 @@ import (
 	"github.com/kamichidu/go-nando/internal/objectstore/local"
 	"github.com/kamichidu/go-nando/internal/repository"
 	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
+	"github.com/kamichidu/go-nando/runtimeconfig"
 )
 
 // ErrInvalidArguments is returned when CLI arguments are missing or invalid.
@@ -85,40 +86,13 @@ func NewDaemonClientFromContext(ctx context.Context) (*controlrpc.Client, error)
 	if err != nil {
 		return nil, err
 	}
-	endpoint := flags.DaemonEndpoint
-	if endpoint == "" {
-		endpoint = cfg.Daemon.Listen
-	}
-	if endpoint == "" {
-		endpoint, err = controlrpc.DefaultEndpoint(repoDir)
-		if err != nil {
-			return nil, err
-		}
-	}
-	var token string
-	tokenFile := flags.DaemonTokenFile
-	literal, envName := cfg.Daemon.Token, cfg.Daemon.TokenFromEnv
-	if tokenFile == "" {
-		tokenFile = cfg.Daemon.TokenFromFile
-	} else {
-		literal, envName = "", ""
-	}
-	token, err = controlrpc.ResolveToken(literal, tokenFile, envName)
+	clientConfig, err := runtimeconfig.ResolveClientConfig(cfg, repoDir, runtimeconfig.ClientOptions{
+		Endpoint: flags.DaemonEndpoint, TokenFile: flags.DaemonTokenFile, CACert: flags.DaemonCACertFile,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("resolve daemon bearer token: %w", err)
+		return nil, err
 	}
-	var caPEM []byte
-	caCertFile := flags.DaemonCACertFile
-	if caCertFile == "" {
-		caCertFile = cfg.Daemon.CACert
-	}
-	if caCertFile != "" {
-		caPEM, err = os.ReadFile(caCertFile)
-		if err != nil {
-			return nil, fmt.Errorf("read daemon CA certificate: %w", err)
-		}
-	}
-	return controlrpc.NewClient(controlrpc.ClientConfig{Endpoint: endpoint, Token: token, CACertPEM: caPEM})
+	return controlrpc.NewClient(clientConfig)
 }
 
 // Commands exposes subcommands of the root command.
@@ -200,9 +174,9 @@ func (c *RootCommand) MapError(err error) int {
 }
 
 // ResolveConfigFromContext loads explicit or default TOML user configuration.
-func ResolveConfigFromContext(ctx context.Context) (*config.Config, error) {
+func ResolveConfigFromContext(ctx context.Context) (*runtimeconfig.Config, error) {
 	flags := flagshim.MustFlagFromContext[GlobalFlags](ctx)
-	cfg, _, err := config.LoadOptionalConfig(flags.ConfigFile)
+	cfg, _, err := runtimeconfig.Load(flags.ConfigFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load configuration file: %w", err)
 	}
