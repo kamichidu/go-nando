@@ -25,7 +25,7 @@ complete directory, including:
 Include the complete `objects/` directory rather than filtering to currently
 referenced IDs: valid unreferenced Local Objects are GC-eligible and the
 Repository must be captured as one state. GCS Objects are never removed by
-automatic GC or the `gcs-orphans` recovery command. That command restores
+automatic GC or the `nando admin recover` command. That command restores
 missing Metadata Entries under `/recyclebin/<content-id>` without changing GCS
 objects. Do not run GC as a backup-preparation step.
 

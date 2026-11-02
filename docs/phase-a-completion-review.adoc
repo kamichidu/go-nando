@@ -104,7 +104,7 @@ Remaining verification limits: no process-kill E2E is run at every individual ma
 |*Implemented with explicit policy; open operational semantics remain*
 
 |`REQ-LOCAL-CAPACITY-GC`, `DES-GC-CLASSES`
-|`internal/repository/capacity_gc.go` evicts eligible Local cache copies only. Ordinary and scheduled GC do not enumerate or delete GCS Objects. `nando gcs-orphans` restores Entries for unreferenced GCS Objects under `/recyclebin/<content-id>` and leaves remote objects unchanged. Recovery trusts GCS bytes/API attributes without a full download or SHA-256 re-hash and requires exactly 16 bytes of MD5; missing/invalid MD5 is an actionable per-object error while valid entries can still be restored.
+|`internal/repository/capacity_gc.go` evicts eligible Local cache copies only. Ordinary and scheduled GC do not enumerate or delete GCS Objects. `nando admin recover` restores Entries for unreferenced GCS Objects under `/recyclebin/<content-id>` and leaves remote objects unchanged. Recovery trusts GCS bytes/API attributes without a full download or SHA-256 re-hash and requires exactly 16 bytes of MD5; missing/invalid MD5 is an actionable per-object error while valid entries can still be restored.
 |Repository capacity/lease tests and GCS orphan recovery tests for idempotency, path conflict safety, and retained MD5; scheduler periodic ticks launch Local Capacity GC and Local Orphan/Invalid GC independently.
 |Local automatic maintenance implemented; GCS orphan metadata recovery is an explicit CLI operation.
 
