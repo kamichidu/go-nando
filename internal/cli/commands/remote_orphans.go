@@ -13,9 +13,6 @@ import (
 // are missing. Remote objects themselves are never modified.
 type RemoteOrphansCommand struct{}
 
-// GCSOrphansCommand is a source compatibility alias.
-type GCSOrphansCommand = RemoteOrphansCommand
-
 func (c *RemoteOrphansCommand) Name() string { return "admin" }
 
 func (c *RemoteOrphansCommand) RegisterFlags(ctx context.Context, _ *flagshim.FlagSet) context.Context {

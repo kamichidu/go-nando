@@ -1,7 +1,6 @@
 package sqlite
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -793,6 +792,25 @@ func TestSQLiteStore(t *testing.T) {
 		}
 		if err := persisted.Validate(); !errors.Is(err, repositoryformat.ErrUnsupported) {
 			t.Fatalf("Repository owner should reject unsupported format: %v", err)
+		}
+	})
+
+	t.Run("Pre-v1 SQLite migration history is rejected without changing schema", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+		if _, err := store.db.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(2, 0)"); err != nil {
+			t.Fatal(err)
+		}
+		var before int
+		if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&before); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CheckMigrations(ctx); !errors.Is(err, ErrMigrationsUnsupported) {
+			t.Fatalf("unsupported migration history accepted: %v", err)
+		}
+		var after int
+		if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&after); err != nil || after != before {
+			t.Fatalf("unsupported history changed: before=%d after=%d err=%v", before, after, err)
 		}
 	})
 
@@ -2577,87 +2595,5 @@ func TestCommitPutTransferQueue(t *testing.T) {
 	ids, err = store.PendingTransfers(ctx)
 	if err != nil || len(ids) != 0 {
 		t.Fatalf("failed Put leaked transfer queue state: %v, err %v", ids, err)
-	}
-}
-
-func TestMetadataV1MigrationPreservesCommittedEntries(t *testing.T) {
-	ctx := context.Background()
-	store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
-		t.Fatal(err)
-	}
-	root, err := store.Root(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Create(ctx, metadata.Entry{ID: "existing", ParentID: &root.ID, Name: "kept", Kind: metadata.EntryKindDirectory, Revision: 1, Mode: 0o755}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.ExecContext(ctx, "DROP TABLE transfer_queue; DELETE FROM schema_migrations WHERE version=2"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.CheckMigrations(ctx); err != nil {
-		t.Fatalf("v1 history should be supported for additive migration: %v", err)
-	}
-	if err := store.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.GetByID(ctx, "existing"); err != nil {
-		t.Fatalf("migration lost committed Entry: %v", err)
-	}
-	if err := store.CheckMigrations(ctx); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestMetadataV3MigrationNormalizesMD5ByContentID(t *testing.T) {
-	ctx := context.Background()
-	store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
-		t.Fatal(err)
-	}
-	root, err := store.Root(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id, err := content.ParseID("sha256-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := []byte{0x90, 0x01, 0x50, 0x98, 0x3c, 0xd2, 0x4f, 0xb0, 0xd6, 0x96, 0x3f, 0x7d, 0x28, 0xe1, 0x7f, 0x72}
-	for _, name := range []string{"one", "two"} {
-		entry := metadata.Entry{ID: metadata.EntryID(name), ParentID: &root.ID, Name: name, Kind: metadata.EntryKindFile, ObjectID: &id, MD5: sum, Revision: 1}
-		if _, err := store.Create(ctx, entry); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := store.db.ExecContext(ctx, `ALTER TABLE entries ADD COLUMN object_md5 BLOB;
-		UPDATE entries SET object_md5=(SELECT md5 FROM content_metadata WHERE content_id=entries.object_id);
-		DROP TABLE content_metadata;
-		DELETE FROM schema_migrations WHERE version>=4`); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Migrate(ctx); err != nil {
-		t.Fatalf("migrate v3 schema: %v", err)
-	}
-	got, err := store.ContentMD5(ctx, id)
-	if err != nil || !bytes.Equal(got, sum) {
-		t.Fatalf("normalized MD5=%x err=%v, want %x", got, err, sum)
-	}
-	var count int
-	if err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM content_metadata`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("content metadata rows=%d err=%v, want one row", count, err)
-	}
-	entry, err := store.GetByID(ctx, "one")
-	if err != nil || !bytes.Equal(entry.MD5, sum) {
-		t.Fatalf("Entry MD5 projection=%x err=%v", entry.MD5, err)
 	}
 }

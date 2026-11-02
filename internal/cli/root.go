@@ -320,26 +320,6 @@ func ResolveRepositoryAndVerbose(ctx context.Context) (string, bool, error) {
 	if gFlags.VerboseSet {
 		verbose = gFlags.Verbose
 	}
-	if cfg.Repository.Path == "" && gFlags.Repository == "" {
-		legacyDir, err := config.DefaultLegacyRepositoryDir()
-		if err != nil {
-			return "", false, fmt.Errorf("failed to resolve legacy repository location: %w", err)
-		}
-		legacyDB := filepath.Join(legacyDir, "metadata.sqlite")
-		newDB := filepath.Join(repoDir, "metadata.sqlite")
-		if filepath.Clean(legacyDir) != filepath.Clean(repoDir) {
-			if _, err := os.Stat(newDB); errors.Is(err, os.ErrNotExist) {
-				if _, legacyErr := os.Stat(legacyDB); legacyErr == nil {
-					return "", false, fmt.Errorf("legacy repository found at %q; set repository in config.toml or pass --repository to select it explicitly", legacyDir)
-				} else if !errors.Is(legacyErr, os.ErrNotExist) {
-					return "", false, fmt.Errorf("inspect legacy repository location %q: %w", legacyDir, legacyErr)
-				}
-			} else if err != nil {
-				return "", false, err
-			}
-		}
-	}
-
 	return repoDir, verbose, nil
 }
 
@@ -373,9 +353,6 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func() error, err
 	if err := repoFormat.Validate(); err != nil {
 		return nil, "", nil, errors.Join(err, metaStore.Close())
 	}
-	if err := metaStore.Migrate(ctx); err != nil {
-		return nil, "", nil, errors.Join(fmt.Errorf("failed to apply metadata schema migrations: %w", err), metaStore.Close())
-	}
 
 	objectsDir := filepath.Join(repoDir, "objects")
 	tempDir := filepath.Join(repoDir, "temp")
@@ -397,7 +374,7 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func() error, err
 		if repoSettings.RemoteBackend != "" && repoSettings.RemoteBackend != "gcs" {
 			return nil, "", nil, errors.Join(fmt.Errorf("unsupported remote object storage backend %q", repoSettings.RemoteBackend), metaStore.Close())
 		}
-		gcsStore, client, err := gcs.NewClientStore(ctx, repoSettings.Bucket())
+		gcsStore, client, err := gcs.NewClientStore(ctx, repoSettings.RemoteBucket)
 		if err != nil {
 			return nil, "", nil, errors.Join(err, metaStore.Close())
 		}

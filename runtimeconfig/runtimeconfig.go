@@ -18,17 +18,13 @@ import (
 
 // Config represents settings shared by all binaries.
 type Config struct {
-	Repository            RepositoryConfig `toml:"repository"`
-	Logging               LoggingConfig    `toml:"logging"`
-	Daemon                DaemonConfig     `toml:"daemon"`
-	Remote                RemoteConfig     `toml:"remote"`
-	Recovery              RecoveryConfig   `toml:"recovery"`
-	Fuse                  FuseConfig       `toml:"fuse"`
-	WebDAV                WebDAVConfig     `toml:"webdav"`
-	LegacyDaemonTokenFile string           `toml:"daemon_token_file"`
-	LegacyDaemonCACert    string           `toml:"daemon_ca_cert"`
-	LegacyDaemonTLSCert   string           `toml:"daemon_tls_cert"`
-	LegacyDaemonTLSKey    string           `toml:"daemon_tls_key"`
+	Repository RepositoryConfig `toml:"repository"`
+	Logging    LoggingConfig    `toml:"logging"`
+	Daemon     DaemonConfig     `toml:"daemon"`
+	Remote     RemoteConfig     `toml:"remote"`
+	Recovery   RecoveryConfig   `toml:"recovery"`
+	Fuse       FuseConfig       `toml:"fuse"`
+	WebDAV     WebDAVConfig     `toml:"webdav"`
 }
 type RepositoryConfig struct {
 	Path string `toml:"path"`
@@ -41,7 +37,6 @@ type DaemonConfig struct {
 	Token         string `toml:"token"`
 	TokenFromFile string `toml:"token_from_file"`
 	TokenFromEnv  string `toml:"token_from_env"`
-	TokenFile     string `toml:"token_file"`
 	CACert        string `toml:"ca_cert"`
 	TLSCert       string `toml:"tls_cert"`
 	TLSKey        string `toml:"tls_key"`
@@ -65,7 +60,6 @@ type RemoteSchedulerSettings struct {
 	IdleInterval, PeriodicInterval, MaxDeliveryDelay time.Duration
 	Parallelism                                      int
 }
-type GCSSchedulerSettings = RemoteSchedulerSettings
 
 func (c Config) HasRemoteSchedulerSettings() bool {
 	return c.Remote.SyncIdleInterval != "" || c.Remote.SyncPeriodicInterval != "" || c.Remote.MaxDeliveryDelay != "" || c.Remote.SyncParallelism != 0
@@ -76,9 +70,6 @@ func (c Config) RemoteRecoveryDirectory() string {
 	}
 	return c.Recovery.Directory
 }
-func (c Config) GCSRecoveryDirectory() string                      { return c.RemoteRecoveryDirectory() }
-func (c Config) HasGCSSchedulerSettings() bool                     { return c.HasRemoteSchedulerSettings() }
-func (c Config) GCSSchedulerPolicy() (GCSSchedulerSettings, error) { return c.RemoteSchedulerPolicy() }
 
 func (c Config) RemoteSchedulerPolicy() (RemoteSchedulerSettings, error) {
 	parse := func(name, value string) (time.Duration, error) {
@@ -123,30 +114,8 @@ func LoadConfig(path string) (*Config, error) {
 		}
 		return nil, fmt.Errorf("unknown configuration keys: %s", strings.Join(keys, ", "))
 	}
-	for _, item := range []struct {
-		name, old string
-		value     *string
-	}{
-		{"daemon_ca_cert", "ca_cert", &cfg.Daemon.CACert},
-		{"daemon_tls_cert", "tls_cert", &cfg.Daemon.TLSCert},
-		{"daemon_tls_key", "tls_key", &cfg.Daemon.TLSKey},
-	} {
-		if metadata.IsDefined(item.name) {
-			if metadata.IsDefined("daemon", item.old) {
-				return nil, fmt.Errorf("configuration keys %q and %q are both set", item.name, "daemon."+item.old)
-			}
-			switch item.name {
-			case "daemon_ca_cert":
-				*item.value = cfg.LegacyDaemonCACert
-			case "daemon_tls_cert":
-				*item.value = cfg.LegacyDaemonTLSCert
-			case "daemon_tls_key":
-				*item.value = cfg.LegacyDaemonTLSKey
-			}
-		}
-	}
 	tokenSources := 0
-	for _, key := range [][2]string{{"daemon", "token"}, {"daemon", "token_from_file"}, {"daemon", "token_from_env"}, {"daemon", "token_file"}, {"", "daemon_token_file"}} {
+	for _, key := range [][2]string{{"daemon", "token"}, {"daemon", "token_from_file"}, {"daemon", "token_from_env"}} {
 		if key[0] == "" {
 			if metadata.IsDefined(key[1]) {
 				tokenSources++
@@ -157,12 +126,6 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if tokenSources > 1 {
 		return nil, errors.New("daemon token sources are mutually exclusive")
-	}
-	if metadata.IsDefined("daemon", "token_file") {
-		cfg.Daemon.TokenFromFile = cfg.Daemon.TokenFile
-	}
-	if metadata.IsDefined("daemon_token_file") {
-		cfg.Daemon.TokenFromFile, cfg.Daemon.TokenFile = cfg.LegacyDaemonTokenFile, cfg.LegacyDaemonTokenFile
 	}
 	return &cfg, nil
 }

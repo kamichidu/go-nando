@@ -80,9 +80,8 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// Initialize applies the SQLite schema migrations and persists the supplied
-// Repository Format record in the same transaction. Compatibility validation
-// remains the Repository owner's responsibility.
+// Initialize creates the v1 SQLite schema for a new database and persists the
+// supplied Repository Format record in the same transaction.
 func (s *Store) Initialize(ctx context.Context, repoFormat repositoryformat.Format) error {
 	if err := s.CheckMigrations(ctx); err == nil {
 		_, found, err := s.RepositoryFormat(ctx)
@@ -92,7 +91,7 @@ func (s *Store) Initialize(ctx context.Context, repoFormat repositoryformat.Form
 		if !found {
 			return ErrRepositoryFormatMissing
 		}
-		return s.Migrate(ctx)
+		return nil
 	} else if !errors.Is(err, ErrMigrationsUninitialized) {
 		return err
 	}
@@ -106,39 +105,21 @@ func (s *Store) Initialize(ctx context.Context, repoFormat repositoryformat.Form
 	}
 	tx, err := s.beginTx(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to begin schema migration: %w", err)
+		return fmt.Errorf("failed to begin v1 schema initialization: %w", err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, MigrationV1); err != nil {
-		return fmt.Errorf("failed to apply SQLite schema migration 1: %w", err)
+	if _, err := tx.ExecContext(ctx, V1Schema); err != nil {
+		return fmt.Errorf("failed to create SQLite v1 schema: %w", err)
 	}
 	now := metadata.TimestampFromTime(time.Now().UTC())
-	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?)", int64(now)); err != nil {
-		return fmt.Errorf("failed to record SQLite schema migration: %w", err)
-	}
 	if err := insertRoot(ctx, tx, now); err != nil {
 		return err
 	}
 	if err := writeRepositoryFormat(ctx, tx, repoFormat); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, MigrationV2); err != nil {
-		return fmt.Errorf("failed to apply SQLite schema migration 2: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?)", int64(now)); err != nil {
-		return fmt.Errorf("failed to record SQLite schema migration 2: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, MigrationV3); err != nil {
-		return fmt.Errorf("failed to apply SQLite schema migration 3: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)", int64(now)); err != nil {
-		return fmt.Errorf("failed to record SQLite schema migration 3: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, MigrationV4); err != nil {
-		return fmt.Errorf("failed to apply schema migration 4: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (4, ?)", int64(now)); err != nil {
-		return fmt.Errorf("failed to record schema migration 4: %w", err)
+	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)", CurrentSchemaVersion, int64(now)); err != nil {
+		return fmt.Errorf("failed to record SQLite schema baseline: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit SQLite schema migration: %w", err)
@@ -157,7 +138,7 @@ func writeRepositoryFormat(ctx context.Context, tx *sql.Tx, repoFormat repositor
 }
 
 func insertRoot(ctx context.Context, tx *sql.Tx, now metadata.Timestamp) error {
-	// Root creation is part of the initial schema migration.
+	// Root creation is part of the initial v1 schema transaction.
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO entries (
 			entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at
@@ -186,8 +167,8 @@ func (s *Store) RepositoryFormat(ctx context.Context) (repositoryformat.Format, 
 	return result, true, nil
 }
 
-// CheckMigrations validates the SQLite migration ledger. It accepts supported
-// older histories so Initialize/Migrate can apply additive migrations.
+// CheckMigrations accepts only the formal v1 baseline. Pre-v1 schema histories
+// are rejected without attempting an in-place migration.
 func (s *Store) CheckMigrations(ctx context.Context) error {
 	var ledgerExists int
 	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'").Scan(&ledgerExists); err != nil {
@@ -207,64 +188,15 @@ func (s *Store) CheckMigrations(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, "SELECT count(*), coalesce(min(version), 0), coalesce(max(version), 0) FROM schema_migrations").Scan(&count, &minVersion, &maxVersion); err != nil {
 		return fmt.Errorf("failed to read SQLite migration ledger: %w", err)
 	}
-	if minVersion != 1 || maxVersion > CurrentSchemaVersion || count < maxVersion-1 || count > maxVersion {
-		return fmt.Errorf("%w: found %d migrations from version %d through %d; supported history is 1 through %d", ErrMigrationsUnsupported, count, minVersion, maxVersion, CurrentSchemaVersion)
+	if count != 1 || minVersion != CurrentSchemaVersion || maxVersion != CurrentSchemaVersion {
+		return fmt.Errorf("%w: found %d migration records from version %d through %d; this release accepts only the v1 baseline (version %d)", ErrMigrationsUnsupported, count, minVersion, maxVersion, CurrentSchemaVersion)
 	}
-	return nil
-}
-
-// Migrate applies additive migrations to an initialized repository. Callers
-// must validate Repository Format before invoking it.
-func (s *Store) Migrate(ctx context.Context) error {
-	if err := s.CheckMigrations(ctx); err != nil {
-		return err
+	var tables int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil {
+		return fmt.Errorf("inspect SQLite schema baseline: %w", err)
 	}
-	var current int
-	if err := s.db.QueryRowContext(ctx, "SELECT coalesce(max(version), 0) FROM schema_migrations").Scan(&current); err != nil {
-		return err
-	}
-	if current >= CurrentSchemaVersion {
-		return nil
-	}
-	tx, err := s.beginTx(ctx)
-	if err != nil {
-		return fmt.Errorf("begin SQLite migration: %w", err)
-	}
-	defer tx.Rollback()
-	now := int64(metadata.TimestampFromTime(time.Now().UTC()))
-	for version := current + 1; version <= CurrentSchemaVersion; version++ {
-		if version == 4 {
-			var invalid, conflicts int
-			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM entries WHERE object_id IS NOT NULL AND (object_md5 IS NULL OR length(object_md5) != 16)`).Scan(&invalid); err != nil {
-				return fmt.Errorf("validate historical Content ID MD5 metadata: %w", err)
-			}
-			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM (SELECT object_id FROM entries WHERE object_id IS NOT NULL GROUP BY object_id HAVING count(DISTINCT hex(object_md5)) > 1)`).Scan(&conflicts); err != nil {
-				return fmt.Errorf("check historical Content ID MD5 consistency: %w", err)
-			}
-			if invalid != 0 || conflicts != 0 {
-				return fmt.Errorf("cannot migrate incomplete or conflicting Content ID MD5 metadata (incomplete=%d conflicts=%d)", invalid, conflicts)
-			}
-		}
-		var migration string
-		switch version {
-		case 2:
-			migration = MigrationV2
-		case 3:
-			migration = MigrationV3
-		case 4:
-			migration = MigrationV4
-		default:
-			return fmt.Errorf("%w: no migration implementation for version %d", ErrMigrationsUnsupported, version)
-		}
-		if _, err := tx.ExecContext(ctx, migration); err != nil {
-			return fmt.Errorf("apply SQLite schema migration %d: %w", version, err)
-		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)", version, now); err != nil {
-			return fmt.Errorf("record SQLite schema migration %d: %w", version, err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit SQLite migrations: %w", err)
+	if tables != 5 { // entries, repository_format, schema_migrations, transfer_queue, content_metadata
+		return fmt.Errorf("%w: v1 schema has %d application tables, expected 5", ErrMigrationsUnsupported, tables)
 	}
 	return nil
 }

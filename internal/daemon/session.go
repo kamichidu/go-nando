@@ -961,11 +961,6 @@ func (m *sessionManager) loadRecoveries() error {
 			}
 			continue
 		}
-		if record.FollowEntryID && record.ObservedObjectID == "" {
-			if err := m.restoreLegacyObservedObjectID(&record); err != nil {
-				log.Printf("retain legacy Resource recovery %s without weakening its CAS: %v", record.SessionID, err)
-			}
-		}
 		if record.FailureReason == "" {
 			if err := m.preserve(&record, "daemon stopped before session completed"); err != nil {
 				log.Printf("record interrupted Resource session %s for recovery: %v", record.SessionID, err)
@@ -973,35 +968,6 @@ func (m *sessionManager) loadRecoveries() error {
 		}
 		m.recoveries[record.SessionID] = &record
 	}
-	return nil
-}
-
-// restoreLegacyObservedObjectID upgrades manifests written before Object IDs
-// were represented as canonical strings. It only repairs records whose exact
-// observed revision and every serialized field still match current metadata.
-func (m *sessionManager) restoreLegacyObservedObjectID(record *recoveryRecord) error {
-	observed := record.ObservedEntry
-	if observed.ID == "" || observed.Revision == 0 || record.Expectation.EntryID != observed.ID || record.Expectation.Revision != observed.Revision {
-		return errors.New("legacy recovery record lacks a matching original Entry revision")
-	}
-	current, _, err := m.app.ResolveEntry(context.Background(), observed.ID)
-	if err != nil {
-		return fmt.Errorf("resolve observed Entry: %w", err)
-	}
-	if current.Revision != observed.Revision || current.ParentID == nil || observed.ParentID == nil || *current.ParentID != *observed.ParentID ||
-		current.Name != observed.Name || current.Kind != observed.Kind || current.Size != observed.Size || current.Mtime != observed.Mtime ||
-		current.Mode != observed.Mode || current.ContentType != observed.ContentType || current.CreatedAt != observed.CreatedAt || current.ObjectID == nil {
-		return errors.New("current Entry no longer matches the exact legacy recovery snapshot")
-	}
-	updated := *record
-	updated.ObservedEntry = observed
-	updated.ObservedEntry.ObjectID = current.ObjectID
-	updated.ObservedObjectID = current.ObjectID.String()
-	updated.UpdatedAt = time.Now().UTC()
-	if err := m.persistRecord(&updated); err != nil {
-		return fmt.Errorf("persist canonical observed Object ID: %w", err)
-	}
-	*record = updated
 	return nil
 }
 
@@ -1066,12 +1032,6 @@ func (m *sessionManager) resolveManifestStage(record *recoveryRecord) error {
 		if filepath.IsAbs(record.StagingPath) || record.StagingPath != m.relativeStagePath(record.SessionID) {
 			return errors.New("version 2 staging path is not the canonical Repository-relative session path")
 		}
-	case 1:
-		old := record.StagingPath
-		if !filepath.IsAbs(old) || filepath.Clean(old) != old || filepath.Base(old) != record.SessionID+".stage" ||
-			filepath.Base(filepath.Dir(old)) != "rpc-sessions" || filepath.Base(filepath.Dir(filepath.Dir(old))) != "temp" {
-			return errors.New("version 1 staging path is not an unambiguous legacy session path")
-		}
 	default:
 		return fmt.Errorf("unsupported Recovery manifest version %d", record.Version)
 	}
@@ -1081,15 +1041,7 @@ func (m *sessionManager) resolveManifestStage(record *recoveryRecord) error {
 	if err := m.validateRuntimeStage(record.SessionID, stagePath, allowMissing); err != nil {
 		return err
 	}
-	if record.Version == 1 {
-		record.Version = 2
-		record.StagingPath = stagePath
-		if err := m.persistRecord(record); err != nil {
-			return fmt.Errorf("persist migrated Recovery manifest: %w", err)
-		}
-	} else {
-		record.StagingPath = stagePath
-	}
+	record.StagingPath = stagePath
 	return nil
 }
 

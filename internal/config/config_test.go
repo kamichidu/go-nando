@@ -131,15 +131,13 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
+func TestLoadConfigDaemonSectionAndRejectsLegacyKeys(t *testing.T) {
 	tests := []struct {
 		name string
 		text string
 		want DaemonConfig
 	}{
 		{"nested token sources", "[daemon]\nlisten = \"tcp://host:7443\"\ntoken = \"literal\"\nca_cert = \"ca.pem\"\ntls_cert = \"cert.pem\"\ntls_key = \"key.pem\"\n", DaemonConfig{Listen: "tcp://host:7443", Token: "literal", CACert: "ca.pem", TLSCert: "cert.pem", TLSKey: "key.pem"}},
-		{"nested file alias", "[daemon]\ntoken_file = \"token\"\n", DaemonConfig{TokenFromFile: "token", TokenFile: "token"}},
-		{"legacy token and TLS keys", "daemon_token_file = \"token\"\ndaemon_ca_cert = \"ca.pem\"\ndaemon_tls_cert = \"cert.pem\"\ndaemon_tls_key = \"key.pem\"\n", DaemonConfig{TokenFromFile: "token", TokenFile: "token", CACert: "ca.pem", TLSCert: "cert.pem", TLSKey: "key.pem"}},
 		{"mixed distinct fields", "[daemon]\nlisten = \"tcp://host:7443\"\ntoken_from_file = \"token\"\n", DaemonConfig{Listen: "tcp://host:7443", TokenFromFile: "token"}},
 	}
 	for _, test := range tests {
@@ -166,22 +164,13 @@ func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
 			t.Fatalf("removed or ambiguous daemon key accepted: %q", text)
 		}
 	}
-	path := filepath.Join(t.TempDir(), "ambiguous.toml")
-	if err := os.WriteFile(path, []byte("daemon_tls_key = \"key.pem\"\n[daemon]\ntls_key = \"\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "both set") {
-		t.Fatalf("duplicate old/new daemon TLS keys accepted: %v", err)
-	}
 	for _, text := range []string{
 		"[daemon]\ntoken = \"secret-value\"\ntoken_from_file = \"path\"\n",
 		"[daemon]\ntoken_from_file = \"path\"\ntoken_from_env = \"SECRET_NAME\"\n",
 		"[daemon]\ntoken = \"secret-value\"\ntoken_from_env = \"SECRET_NAME\"\n",
-		"daemon_token_file = \"legacy-path\"\n[daemon]\ntoken_from_env = \"SECRET_NAME\"\n",
+		"[daemon]\ntoken = \"secret-value\"\ntoken_from_env = \"SECRET_NAME\"\n",
 		"[daemon]\ntoken = \"\"\ntoken_from_env = \"SECRET_NAME\"\n",
 		"[daemon]\ntoken_from_file = \"\"\ntoken_from_env = \"SECRET_NAME\"\n",
-		"[daemon]\ntoken_file = \"\"\ntoken = \"secret-value\"\n",
-		"daemon_token_file = \"\"\n[daemon]\ntoken = \"secret-value\"\n",
 	} {
 		path := filepath.Join(t.TempDir(), "conflicting-token-sources.toml")
 		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
@@ -195,8 +184,6 @@ func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
 		"[daemon]\ntoken = \"\"\n",
 		"[daemon]\ntoken_from_file = \"\"\n",
 		"[daemon]\ntoken_from_env = \"\"\n",
-		"[daemon]\ntoken_file = \"\"\n",
-		"daemon_token_file = \"\"\n",
 	} {
 		path := filepath.Join(t.TempDir(), "empty-token-source.toml")
 		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
@@ -208,12 +195,12 @@ func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
 	}
 }
 
-func TestGCSSchedulerPolicyRequiresExplicitCompletePositiveSettings(t *testing.T) {
-	if _, err := (Config{}).GCSSchedulerPolicy(); err == nil {
+func TestRemoteSchedulerPolicyRequiresExplicitCompletePositiveSettings(t *testing.T) {
+	if _, err := (Config{}).RemoteSchedulerPolicy(); err == nil {
 		t.Fatal("missing scheduler policy was accepted")
 	}
 	cfg := Config{Remote: RemoteConfig{SyncIdleInterval: "250ms", SyncPeriodicInterval: "1s", MaxDeliveryDelay: "5s", SyncParallelism: 3}}
-	got, err := cfg.GCSSchedulerPolicy()
+	got, err := cfg.RemoteSchedulerPolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +208,7 @@ func TestGCSSchedulerPolicyRequiresExplicitCompletePositiveSettings(t *testing.T
 		t.Fatalf("scheduler policy=%+v", got)
 	}
 	cfg.Remote.SyncParallelism = 0
-	if _, err := cfg.GCSSchedulerPolicy(); err == nil {
+	if _, err := cfg.RemoteSchedulerPolicy(); err == nil {
 		t.Fatal("zero parallelism was accepted")
 	}
 }
@@ -299,8 +286,8 @@ func TestLoadConfigRequiresRepositoryAndLoggingTables(t *testing.T) {
 	}
 }
 
-func TestGCSRecoveryDirectoryConfig(t *testing.T) {
-	if got := (Config{}).GCSRecoveryDirectory(); got != "/recyclebin" {
+func TestRemoteRecoveryDirectoryConfig(t *testing.T) {
+	if got := (Config{}).RemoteRecoveryDirectory(); got != "/recyclebin" {
 		t.Fatalf("default recovery directory=%q", got)
 	}
 	path := filepath.Join(t.TempDir(), "config.toml")
@@ -308,7 +295,7 @@ func TestGCSRecoveryDirectoryConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, err := LoadConfig(path)
-	if err != nil || cfg.GCSRecoveryDirectory() != "/lost+found" {
-		t.Fatalf("configured recovery directory=%q err=%v", cfg.GCSRecoveryDirectory(), err)
+	if err != nil || cfg.RemoteRecoveryDirectory() != "/lost+found" {
+		t.Fatalf("configured recovery directory=%q err=%v", cfg.RemoteRecoveryDirectory(), err)
 	}
 }

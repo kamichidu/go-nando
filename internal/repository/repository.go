@@ -42,7 +42,6 @@ func NewRepositoryWithSettings(metaStore metadata.MetadataStore, objStore object
 
 // NewRepositoryWithRemoteObjectStore installs the repository's selected remote backend.
 func NewRepositoryWithRemoteObjectStore(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, remote objectstore.RemoteObjectStore, hasher content.Hasher, coordinator Coordinator, settings Settings) *Repository {
-	settings = settings.Canonical()
 	return &Repository{
 		metaStore:   metaStore,
 		objectStore: objStore,
@@ -51,14 +50,6 @@ func NewRepositoryWithRemoteObjectStore(metaStore metadata.MetadataStore, objSto
 		coordinator: coordinator,
 		settings:    settings,
 	}
-}
-
-// NewRepositoryWithReplica is retained for source compatibility.
-func NewRepositoryWithReplica(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, remote objectstore.ReplicaStore, hasher content.Hasher, coordinator Coordinator, settings Settings) *Repository {
-	if remote == nil {
-		return NewRepositoryWithRemoteObjectStore(metaStore, objStore, nil, hasher, coordinator, settings)
-	}
-	return NewRepositoryWithRemoteObjectStore(metaStore, objStore, legacyReplicaAdapter{remote}, hasher, coordinator, settings)
 }
 
 // ResolvePath traverses the parent-child relationships in MetadataStore to find the entry at repoPath.
@@ -331,29 +322,6 @@ func (r *Repository) GC(ctx context.Context) (int, error) {
 // as their name under /recyclebin because their original names are unknown.
 func (r *Repository) RestoreRemoteOrphans(ctx context.Context) (int, error) {
 	return r.RestoreRemoteOrphansTo(ctx, "/recyclebin")
-}
-
-// RestoreGCSOrphans and RestoreGCSOrphansTo are compatibility aliases.
-func (r *Repository) RestoreGCSOrphans(ctx context.Context) (int, error) {
-	return r.RestoreRemoteOrphans(ctx)
-}
-func (r *Repository) RestoreGCSOrphansTo(ctx context.Context, recoveryDirectory string) (int, error) {
-	return r.RestoreRemoteOrphansTo(ctx, recoveryDirectory)
-}
-
-type legacyReplicaAdapter struct{ objectstore.ReplicaStore }
-
-func (a legacyReplicaAdapter) OpenRemote(ctx context.Context, id content.ID) (io.ReadCloser, error) {
-	return a.OpenReplica(ctx, id)
-}
-func (a legacyReplicaAdapter) RemoteExists(ctx context.Context, id content.ID) (bool, error) {
-	return a.ReplicaExists(ctx, id)
-}
-func (a legacyReplicaAdapter) RemoteAttrs(ctx context.Context, id content.ID) (objectstore.RemoteObjectInfo, error) {
-	return a.ReplicaAttrs(ctx, id)
-}
-func (a legacyReplicaAdapter) ListRemoteObjects(ctx context.Context) ([]objectstore.RemoteObjectInfo, error) {
-	return a.ListReplicas(ctx)
 }
 
 // RestoreRemoteOrphansTo restores missing Entries under the configured logical directory.

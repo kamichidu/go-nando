@@ -50,19 +50,6 @@ type RemoteObjectStore interface {
 	ListRemoteObjects(context.Context) ([]RemoteObjectInfo, error)
 }
 
-// ReplicaInfo remains an alias for callers using the original metadata type.
-type ReplicaInfo = RemoteObjectInfo
-
-// ReplicaStore preserves the original source-level interface. Repository code
-// uses RemoteObjectStore and adapts this legacy interface at the boundary.
-type ReplicaStore interface {
-	Upload(context.Context, content.ID, int64, []byte, io.Reader) (ReplicaInfo, error)
-	OpenReplica(context.Context, content.ID) (io.ReadCloser, error)
-	ReplicaExists(context.Context, content.ID) (bool, error)
-	ReplicaAttrs(context.Context, content.ID) (ReplicaInfo, error)
-	ListReplicas(context.Context) ([]ReplicaInfo, error)
-}
-
 // StagedObject is an immutable backend-owned handle produced by Stage.
 // Repository code must not interpret its representation.
 type StagedObject interface {

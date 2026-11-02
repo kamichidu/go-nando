@@ -23,14 +23,6 @@ func (a *App) RestoreRemoteOrphansTo(ctx context.Context, directory string) (int
 	return a.repo.RestoreRemoteOrphansTo(ctx, directory)
 }
 
-// RestoreGCSOrphans and RestoreGCSOrphansTo are compatibility aliases.
-func (a *App) RestoreGCSOrphans(ctx context.Context) (int, error) {
-	return a.RestoreRemoteOrphans(ctx)
-}
-func (a *App) RestoreGCSOrphansTo(ctx context.Context, directory string) (int, error) {
-	return a.RestoreRemoteOrphansTo(ctx, directory)
-}
-
 // ProcessTransferQueue attempts pending remote deliveries once; failures remain queued.
 func (a *App) ProcessTransferQueue(ctx context.Context) error {
 	return a.repo.ProcessTransferQueue(ctx)

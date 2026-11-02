@@ -216,33 +216,33 @@ func TestAdminRecoverCommandNameAndArguments(t *testing.T) {
 	}
 }
 
-func TestInitAcceptsGenericAndLegacyRemoteFlags(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		args []string
-	}{
-		{"generic", []string{"--delivery-mode", "remote", "--remote-backend", "gcs", "--remote-bucket", "new-bucket"}},
-		{"legacy", []string{"--delivery-mode", "gcs", "--gcs-bucket", "old-bucket"}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			repoDir := filepath.Join(t.TempDir(), "repository")
-			args := append([]string{"--repository", repoDir, "init"}, test.args...)
-			var stdout, stderr bytes.Buffer
-			if code := executeCLI(context.Background(), &stdout, &stderr, args); code != 0 {
-				t.Fatalf("init: code=%d stderr=%q", code, stderr.String())
-			}
-			settings, err := app.LoadRepositorySettings(repoDir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			wantBucket := "new-bucket"
-			if test.name == "legacy" {
-				wantBucket = "old-bucket"
-			}
-			if settings.DeliveryMode != repository.DeliveryModeRemote || settings.RemoteBackend != "gcs" || settings.RemoteBucket != wantBucket {
-				t.Fatalf("repository settings=%+v", settings)
-			}
-		})
+func TestInitAcceptsCurrentRemoteFlags(t *testing.T) {
+	repoDir := filepath.Join(t.TempDir(), "repository")
+	args := []string{"--repository", repoDir, "init", "--delivery-mode", "remote", "--remote-backend", "gcs", "--remote-bucket", "new-bucket"}
+	var stdout, stderr bytes.Buffer
+	if code := executeCLI(context.Background(), &stdout, &stderr, args); code != 0 {
+		t.Fatalf("init: code=%d stderr=%q", code, stderr.String())
+	}
+	settings, err := app.LoadRepositorySettings(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.DeliveryMode != repository.DeliveryModeRemote || settings.RemoteBackend != "gcs" || settings.RemoteBucket != "new-bucket" {
+		t.Fatalf("repository settings=%+v", settings)
+	}
+}
+
+func TestInitRejectsDeprecatedGCSCLIValues(t *testing.T) {
+	for _, args := range [][]string{{"--delivery-mode", "gcs"}, {"--gcs-bucket", "bucket"}} {
+		repoDir := filepath.Join(t.TempDir(), "repository")
+		args = append([]string{"--repository", repoDir, "init"}, args...)
+		var stdout, stderr bytes.Buffer
+		if code := executeCLI(context.Background(), &stdout, &stderr, args); code == 0 {
+			t.Fatalf("deprecated args accepted: %v", args)
+		}
+		if _, err := os.Stat(filepath.Join(repoDir, "metadata.sqlite")); !os.IsNotExist(err) {
+			t.Fatalf("rejected CLI input initialized repository: args=%v err=%v", args, err)
+		}
 	}
 }
 
@@ -338,7 +338,7 @@ func TestTOMLConfigSelectsRepositoryAndSharedDaemonEndpoint(t *testing.T) {
 	}
 }
 
-func TestLegacyDefaultRepositoryRequiresExplicitSelection(t *testing.T) {
+func TestDefaultRepositoryDoesNotProbeOldConfigLocation(t *testing.T) {
 	home := t.TempDir()
 	configHome := filepath.Join(home, ".config")
 	dataHome := filepath.Join(home, ".local", "share")
@@ -352,13 +352,11 @@ func TestLegacyDefaultRepositoryRequiresExplicitSelection(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"stat", "/"}); code == 0 || !strings.Contains(stderr.String(), legacyRepo) {
-		t.Fatalf("legacy repository was not guarded: code=%d stderr=%q", code, stderr.String())
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"stat", "/"}); code == 0 {
+		t.Fatal("uninitialized default repository unexpectedly opened")
 	}
-	stdout.Reset()
-	stderr.Reset()
-	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", legacyRepo, "init"}); code != 0 {
-		t.Fatalf("explicit legacy repository selection failed: code=%d stderr=%q", code, stderr.String())
+	if strings.Contains(stderr.String(), legacyRepo) {
+		t.Fatalf("runtime still probes pre-v1 repository location: stderr=%q", stderr.String())
 	}
 }
 

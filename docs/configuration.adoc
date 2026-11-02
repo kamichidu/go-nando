@@ -30,14 +30,12 @@ starting the daemon. FUSE uses `--fuse-mountpoint` over
 whose default is `127.0.0.1:8080`. WebDAV HTTP bind remains independent of the
 daemon control address.
 
-== Existing repositories
+== v1 compatibility boundary
 
-Older versions used a repository under the user config directory. If nando
-detects an initialized repository there and no repository was explicitly
-selected, it stops rather than silently opening a different data directory.
-Set `[repository].path` in the config file or pass `--repository` to select the old
-repository explicitly. Do not initialize a new repository over data you intend
-to keep.
+The formal first release is v1. Pre-v1 repository/on-disk state and configuration
+spellings are unsupported. Unsupported state is rejected with an error and is
+left untouched. Select a repository explicitly with `[repository].path` or
+`--repository`; the runtime does not probe former config-directory locations.
 
 == Advanced daemon transport
 
@@ -58,14 +56,11 @@ variable's value is the token. Prefer `token_from_env` to avoid storing a
 literal token in TOML. Empty or unset sources leave token authentication
 unconfigured; TCP still requires a nonempty token and TLS. More than one
 configured source is rejected even if one source's value is empty. Conflicting sources
-are rejected without printing token contents. The prior nested `token_file`
-spelling and top-level `daemon_token_file` remain accepted as file-source
-aliases. Existing top-level daemon token and TLS keys remain supported. The former
-`[daemon].endpoint` and top-level `daemon_endpoint` address keys are rejected;
-use `[daemon].listen`. When
-the old and new spelling of the same non-token setting both occur,
-configuration loading fails and names both keys; migrate each setting to the
-new spelling and remove its legacy key.
+are rejected without printing token contents. Pre-v1 nested `token_file` and
+top-level `daemon_token_file`, `daemon_ca_cert`, `daemon_tls_cert`, and
+`daemon_tls_key` keys are rejected. The former `[daemon].endpoint` and top-level
+`daemon_endpoint` address keys are also rejected; use `[daemon].listen`.
+Configuration loading reports unknown keys.
 
 [source,toml]
 ----

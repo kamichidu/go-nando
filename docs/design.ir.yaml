@@ -5,7 +5,7 @@ schema_ref:
 model:
   id: go-nando
   title: go-nando repository design
-  description: Canonical semantic design for repository authority, storage contracts, operation consistency, failure outcomes, and implementation roadmap.
+  description: Canonical semantic design for the formal v1 baseline, repository authority, storage contracts, operation consistency, failure outcomes, and implementation roadmap. No pre-v1 repository, configuration, API, CLI, schema, or recovery compatibility is guaranteed.
   domain: file repository
   profile: repository-system-design
 nodes:
@@ -140,7 +140,7 @@ nodes:
       manifest_staging_path: repository-root-relative
       manifest_staging_path_format: temp/rpc-sessions/<session-id>.stage
       manifest_staging_path_validation: exact-session-match; reject-absolute-and-traversal; reject-symlinks; require-regular-file
-      legacy_manifest_v1: never-open-stored-absolute-path; migrate-only-when-current-root-expected-stage-exists-and-is-regular
+      unsupported_manifest_versions: reject-without-opening-paths-or-modifying-staging
       begin_manifest_reconstruction_anchor: true
       durable_commit_completion_marker: true
       durable_discard_tombstone_before_cleanup: true
@@ -227,6 +227,18 @@ nodes:
       legacy_top_level_keys: rejected
       cli_overrides: supported
       repository_settings_file: repository.json
+    provenance:
+      origin: human-authored
+  - id: REQ-V1-BASELINE
+    level: system_requirement
+    kind: compatibility-boundary
+    statement: The first formal release is v1. Compatibility guarantees begin at v1; pre-v1 repository and on-disk state, repository settings, runtime configuration spellings, APIs, CLI spellings, SQLite schema histories, and Recovery manifest versions are unsupported. Detection of unsupported state MUST fail clearly before mutation and MUST preserve the original data for operator recovery. The current GCS backend and canonical remote_backend=gcs selection remain supported v1 behavior.
+    attributes:
+      formal_release: v1
+      pre_v1_compatibility: none
+      unsupported_state_policy: explicit-error-no-mutation-no-deletion
+      current_gcs_backend: supported
+      current_remote_backend_value: gcs
     provenance:
       origin: human-authored
   - id: REQ-ENTRY-ID
@@ -334,7 +346,7 @@ nodes:
     level: system_design
     kind: user-configuration
     statement: >-
-      Per-user runtime configuration is TOML at $XDG_CONFIG_HOME/nando/config.toml on Linux, macOS, and Windows when XDG_CONFIG_HOME is set; otherwise it is ~/.config/nando/config.toml on Linux/macOS and %USERPROFILE%/.config/nando/config.toml on Windows. All three binaries (nando, nando-fuse, and nando-webdav) MUST load this same file and share configuration parsing and daemon client resolution through a public package in the root module. Do not use os.UserConfigDir, macOS Application Support, Windows AppData, or conf.d for the new config location. Repository data is independent: $XDG_DATA_HOME/nando when set, otherwise ~/.local/share/nando on Linux/macOS and %USERPROFILE%/.local/share/nando on Windows. CLI arguments override TOML values, which override these defaults. A missing implicit config uses defaults; a missing explicit --config/-config or malformed existing TOML is an error. Runtime keys include repository, verbose, nested daemon listen address and transport settings, `[fuse].mountpoint`, and `[webdav].listen`, plus legacy top-level daemon token/TLS spellings. All three binaries MUST accept --config, --repository, --daemon-listen, --daemon-token-file, and --daemon-ca-cert. `[daemon].listen` MUST be used by both the daemon listener and all client connections; `[daemon].endpoint` and top-level `daemon_endpoint` are rejected. Exactly one nonempty daemon token source may be selected using daemon.token, daemon.token_from_file, or daemon.token_from_env. The prior daemon.token_file and daemon_token_file spellings remain file-source aliases. FUSE accepts --fuse-mountpoint and WebDAV accepts --webdav-listen; these override the corresponding TOML settings. WebDAV HTTP bind MUST NOT use `[daemon].listen`. Repository delivery settings remain repository-owned in repository.json. If a previous os.UserConfigDir-based initialized repository exists and the new default data repository does not, require explicit repository selection to prevent silently opening a different repository.
+      Per-user runtime configuration is TOML at $XDG_CONFIG_HOME/nando/config.toml on Linux, macOS, and Windows when XDG_CONFIG_HOME is set; otherwise it is ~/.config/nando/config.toml on Linux/macOS and %USERPROFILE%/.config/nando/config.toml on Windows. All three binaries (nando, nando-fuse, and nando-webdav) MUST load this same file and share configuration parsing and daemon client resolution through a public package in the root module. Do not use os.UserConfigDir, macOS Application Support, Windows AppData, or conf.d for the new config location. Repository data is independent: $XDG_DATA_HOME/nando when set, otherwise ~/.local/share/nando on Linux/macOS and %USERPROFILE%/.local/share/nando on Windows. CLI arguments override TOML values, which override these defaults. A missing implicit config uses defaults; a missing explicit --config/-config or malformed existing TOML is an error. Runtime keys include repository, verbose, nested daemon listen address and transport settings, `[fuse].mountpoint`, and `[webdav].listen`. All three binaries MUST accept --config, --repository, --daemon-listen, --daemon-token-file, and --daemon-ca-cert. `[daemon].listen` MUST be used by both the daemon listener and all client connections; `[daemon].endpoint` and top-level `daemon_endpoint` are rejected. Exactly one nonempty daemon token source may be selected using daemon.token, daemon.token_from_file, or daemon.token_from_env. FUSE accepts --fuse-mountpoint and WebDAV accepts --webdav-listen; these override the corresponding TOML settings. WebDAV HTTP bind MUST NOT use `[daemon].listen`. Repository delivery settings remain repository-owned in repository.json. Unsupported pre-v1 config spellings MUST be rejected as unknown keys. No old repository-location probing is performed.
     attributes:
       format: TOML
       config_filename: config.toml
@@ -346,8 +358,8 @@ nodes:
       implicit_missing_config: defaults
       explicit_missing_config: error
       malformed_config: error
-      migration_guard: require-explicit-selection-when-legacy-repository-detected
-      active_keys: [repository, verbose, daemon.listen, daemon.token, daemon.token_from_file, daemon.token_from_env, daemon.ca_cert, daemon.tls_cert, daemon.tls_key, daemon_token_file, daemon_ca_cert, daemon_tls_cert, daemon_tls_key, fuse.mountpoint, webdav.listen]
+      migration_guard: none
+      active_keys: [repository, verbose, daemon.listen, daemon.token, daemon.token_from_file, daemon.token_from_env, daemon.ca_cert, daemon.tls_cert, daemon.tls_key, fuse.mountpoint, webdav.listen]
       common_cli_flags: [config, repository, daemon-listen, daemon-token-file, daemon-ca-cert]
       adapter_cli_flags: {fuse: fuse-mountpoint, webdav: webdav-listen}
     provenance:
@@ -486,15 +498,16 @@ nodes:
   - id: DES-CONSTRUCTION
     level: system_design
     kind: composition-root
-    statement: The executable composition root reads persisted Repository Format metadata and Repository settings, validates their meaning and compatibility before use, then composes the metadata backend, object backend, digest algorithm, and Repository. Repository settings own Local/Remote delivery mode, the one selected remote backend and its bucket, and capacity policy; they are distinct from per-user runtime TOML configuration, which owns repository selection and client/daemon runtime options only. New settings use generic remote field names; legacy GCS settings remain readable without rewriting existing repository files. The SQLite adapter owns schema migrations and persistence of Repository Format values.
+    statement: The executable composition root reads persisted Repository Format metadata and canonical v1 Repository settings, validates their meaning before use, then composes the metadata backend, object backend, digest algorithm, and Repository. Repository settings own Local/Remote delivery mode, the one selected remote backend and its bucket, and capacity policy; they are distinct from per-user runtime TOML configuration, which owns repository selection and client/daemon runtime options only. Unsupported pre-v1 settings or Repository Format state MUST fail before mutation. The SQLite adapter owns the clean v1 schema baseline and only migrations required for future v1+ compatibility; pre-v1 schema histories MUST be rejected without modification.
     attributes:
       current_backends: [SQLite Metadata Store, Local Object Store, GCS remote object storage]
       remote_backend_selection: exactly-one-per-repository;currently-GCS
       repository_owned_settings: [delivery-mode, remote-backend, remote-bucket, capacity-policy]
       current_settings_file: repository.json
       current_settings_fields: [delivery_mode, remote_backend, remote_bucket, max_local_bytes]
-      legacy_settings_fields_read: [delivery_mode-gcs, gcs_bucket]
-      legacy_repository_without_settings: defaults-to-Local;is-not-reconfigured-by-init
+      legacy_settings_fields_read: []
+      unsupported_settings_policy: reject-without-rewrite
+      sqlite_schema_baseline: v1-current
       settings_scope_limit: capacity-policy-representation-not-yet-implemented
     provenance:
       origin: imported
@@ -875,7 +888,7 @@ nodes:
         - Repository coordination is not held during long input, GCS network, download, or response I/O
         - the daemon maintenance scheduler runs GCS synchronization, Capacity GC, and Orphan/Invalid GC as independent subtasks; failure in one does not prevent the others
         - Local orphan GC rechecks pending content-ID delivery obligations under the content WLock and preserves queued Local sources even after their final Entry is removed
-        - existing Local-only CAS, Get atomic export, Doctor, GC, CLI, and SQLite migration compatibility tests remain covered
+        - existing Local-only CAS, Get atomic export, Doctor, GC, CLI, and v1 SQLite baseline rejection tests remain covered
   - id: DES-PHASE0-SCAFFOLDING
     level: system_design
     kind: roadmap-phase
@@ -1490,7 +1503,7 @@ open_items:
     status: open
     related_refs: [REQ-READ-THROUGH, REQ-DOCTOR-NONDESTRUCTIVE, DES-DOCTOR, DES-GCS-READ-THROUGH, OPEN-READ-REVISION-CHANGE]
   - id: OPEN-DELIVERY-MODE-MIGRATION
-    statement: Existing repositories using delivery_mode=gcs and gcs_bucket remain readable and are interpreted as Remote mode with GCS selected. New repository settings use delivery_mode=remote, remote_backend=gcs, and remote_bucket; this repository-owned backend selection remains distinct from per-user TOML scheduler policy. Canonical TOML scheduler settings are grouped under [remote] as sync_idle_interval, sync_periodic_interval, max_delivery_delay, and sync_parallelism. These are the only supported TOML scheduler keys; legacy top-level remote_sync_* and gcs_sync_* keys are unknown and rejected. Scheduler values configure one Remote policy. CLI --delivery-mode gcs and --gcs-bucket remain aliases. Opening an existing repository does not rewrite its settings or change its backend. Remote-to-Local conversion, bucket changes, rollback across binary versions, and Local-to-Remote prefill are not performed automatically and remain explicit operator decisions.
+    statement: Repository settings use delivery_mode=remote, remote_backend=gcs, and remote_bucket for the current GCS backend; this repository-owned backend selection remains distinct from per-user TOML scheduler policy. Canonical TOML scheduler settings are grouped under [remote] as sync_idle_interval, sync_periodic_interval, max_delivery_delay, and sync_parallelism. These are the only supported TOML scheduler keys; unsupported pre-v1 keys and CLI aliases are rejected. Opening existing settings never rewrites them; unsupported pre-v1 formats fail without mutation. Remote-to-Local conversion, bucket changes, rollback across binary versions, and Local-to-Remote prefill are not performed automatically and remain explicit operator decisions.
     status: resolved
     related_refs: [DES-CONSTRUCTION, DES-DELIVERY-MODES, DES-PHASE1-FORMAT, REQ-REMOTE-BACKEND-SELECTION]
   - id: OPEN-FIRESTORE-COORDINATION-AND-SNAPSHOT
@@ -1498,7 +1511,7 @@ open_items:
     status: open
     related_refs: [REQ-METADATA-PORTABILITY, REQ-PUT-GC-EXCLUSION, REQ-READ-GC-EXCLUSION, DES-METADATA-BACKEND-PORTABILITY, DES-REPOSITORY-BOUNDARIES]
   - id: OPEN-METADATA-BACKUP-PROCEDURE
-    statement: "Resolved by the Phase A operator runbook: quiesce FUSE/WebDAV, normally stop the daemon, and capture every Repository component as one consistent set while all Repository writes have ceased. Preserve SQLite and any sidecars, coordination DB, Local CAS objects, Recovery staging/manifests, repository settings, and pending GCS obligations. Restore the complete set while stopped with owner/mode/configuration checks; do not require GCS queue drain or prescribe a snapshot technology. External credentials and unit/configuration files remain separately managed. Version 2 Recovery manifests store Repository-root-relative staging paths and resolve them under the current root. Version 1 absolute paths are never followed; migration requires the expected current-root stage for the same session ID to exist as a regular file, otherwise startup reports an explicit error."
+    statement: "Resolved by the Phase A operator runbook: quiesce FUSE/WebDAV, normally stop the daemon, and capture every Repository component as one consistent set while all Repository writes have ceased. Preserve SQLite and any sidecars, coordination DB, Local CAS objects, Recovery staging/manifests, repository settings, and pending GCS obligations. Restore the complete set while stopped with owner/mode/configuration checks; do not require GCS queue drain or prescribe a snapshot technology. External credentials and unit/configuration files remain separately managed. Version 2 Recovery manifests store Repository-root-relative staging paths and resolve them under the current root. Unsupported manifest versions, including pre-v1 absolute-path manifests, fail explicitly without opening their stored paths or modifying staging/manifests."
     status: resolved
     related_refs: [REQ-METADATA-BACKUP-RESPONSIBILITY, DES-METADATA-BACKEND-PORTABILITY, DES-REPLICATION-STATE]
   - id: OPEN-ADAPTER-AUTHORIZATION

@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/app"
-	"github.com/kamichidu/go-nando/internal/content"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	"github.com/kamichidu/go-nando/internal/repository"
 )
@@ -238,75 +237,6 @@ func (f *fakeRepositoryUseCases) PutExpectedEntryID(ctx context.Context, input a
 	return f.PutExpected(ctx, input, repository.PutExpectation{EntryID: observed.ID, Revision: observed.Revision})
 }
 
-func TestLegacyStableEntryRecoveryRestoresObjectIDOnlyAtOriginalRevision(t *testing.T) {
-	objectID, err := content.ParseID("sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootID := metadata.EntryID("root")
-	entry := metadata.Entry{
-		ID: "entry-1", ParentID: &rootID, Name: "file", Kind: metadata.EntryKindFile, ObjectID: &objectID,
-		Size: 0, Revision: 4, CreatedAt: 10, UpdatedAt: 20,
-	}
-	for _, tc := range []struct {
-		name            string
-		currentRevision uint64
-		wantRepair      bool
-	}{
-		{name: "unchanged snapshot", currentRevision: 4, wantRepair: true},
-		{name: "changed revision", currentRevision: 5, wantRepair: false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			current := entry
-			current.Revision = tc.currentRevision
-			fake := &fakeRepositoryUseCases{entry: &current}
-			root := t.TempDir()
-			directory := filepath.Join(root, "temp", "rpc-sessions")
-			if err := os.MkdirAll(directory, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			sessionID := "8f557f3d-e540-481f-87a9-5fd974137fba"
-			stage := filepath.Join(directory, sessionID+".stage")
-			if err := os.WriteFile(stage, []byte("recoverable"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			zeroObjectID := content.ID{}
-			legacy := recoveryRecord{
-				Version: 1, SessionID: sessionID, StagingPath: stage, RepositoryPath: "/file",
-				Expectation:   repository.PutExpectation{EntryID: entry.ID, Revision: entry.Revision},
-				FollowEntryID: true, ObservedEntry: entry, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(2, 0),
-			}
-			legacy.ObservedEntry.ObjectID = &zeroObjectID
-			manager := &sessionManager{app: fake, root: root, directory: directory, files: osSessionFiles{}}
-			if err := manager.persistRecord(&legacy); err != nil {
-				t.Fatal(err)
-			}
-			err := manager.restoreLegacyObservedObjectID(&legacy)
-			if tc.wantRepair {
-				if err != nil {
-					t.Fatalf("restore unchanged legacy snapshot: %v", err)
-				}
-				if legacy.ObservedObjectID != objectID.String() || legacy.ObservedEntry.ObjectID == nil || legacy.ObservedEntry.ObjectID.String() != objectID.String() {
-					t.Fatalf("legacy snapshot Object ID not reconstructed: %+v", legacy)
-				}
-				data, err := os.ReadFile(manager.recordPath(legacy.SessionID))
-				if err != nil {
-					t.Fatal(err)
-				}
-				var persisted recoveryRecord
-				if err := json.Unmarshal(data, &persisted); err != nil {
-					t.Fatal(err)
-				}
-				if persisted.ObservedObjectID != objectID.String() {
-					t.Fatalf("canonical Object ID was not persisted: %+v", persisted)
-				}
-			} else if err == nil || legacy.ObservedObjectID != "" {
-				t.Fatalf("changed legacy snapshot was silently repaired: err=%v record=%+v", err, legacy)
-			}
-		})
-	}
-}
-
 func TestResourceSessionsExpireRenewAndPersistRecovery(t *testing.T) {
 	fake := &fakeRepositoryUseCases{}
 	root := t.TempDir()
@@ -482,17 +412,6 @@ func TestRecoveryRetryAfterRepositoryRelocationUsesRootRelativeManifest(t *testi
 		t.Fatalf("manifest did not store canonical relative staging path: %+v", manifest)
 	}
 
-	// Model a backup made by the previous binary: its V1 manifest contains the
-	// old root's absolute path, while the staging file and manifest move together.
-	manifest.Version = 1
-	manifest.StagingPath = stage
-	manifestData, err = json.Marshal(&manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(manifestPath, manifestData, 0o600); err != nil {
-		t.Fatal(err)
-	}
 	movedRoot := filepath.Join(t.TempDir(), "restored-repository")
 	if err := os.Rename(root, movedRoot); err != nil {
 		t.Fatal(err)
@@ -522,7 +441,7 @@ func TestRecoveryRetryAfterRepositoryRelocationUsesRootRelativeManifest(t *testi
 		t.Fatal(err)
 	}
 	if manifest.Version != 2 || manifest.StagingPath != filepath.ToSlash(filepath.Join("temp", "rpc-sessions", begin.SessionID+".stage")) {
-		t.Fatalf("legacy manifest was not migrated before Recovery exposure: %+v", manifest)
+		t.Fatalf("manifest was not canonical before Recovery exposure: %+v", manifest)
 	}
 	if err := restarted.retryRecovery(ctx, begin.SessionID); err != nil {
 		t.Fatalf("retry Recovery after relocation: %v", err)
@@ -548,6 +467,10 @@ func TestRecoveryManifestRejectsUnsafeStagingPathsAndSymlinks(t *testing.T) {
 		}},
 		{name: "session filename mismatch", mutate: func(_ *testing.T, _, _ string, record *recoveryRecord) {
 			record.StagingPath = filepath.ToSlash(filepath.Join("temp", "rpc-sessions", uuid.NewString()+".stage"))
+		}},
+		{name: "unsupported v1 manifest", mutate: func(_ *testing.T, _, stage string, record *recoveryRecord) {
+			record.Version = 1
+			record.StagingPath = stage
 		}},
 		{name: "staging symlink", mutate: func(t *testing.T, _, stage string, _ *recoveryRecord) {
 			if err := os.Remove(stage); err != nil {
@@ -619,7 +542,7 @@ func TestRecoveryRejectsSymlinkedSessionDirectory(t *testing.T) {
 	}
 }
 
-func TestLegacyRecoveryRequiresMatchingStageUnderRestoredRoot(t *testing.T) {
+func TestRecoveryRejectsLegacyManifestWithoutTouchingAbsolutePath(t *testing.T) {
 	root := t.TempDir()
 	manager, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour)
 	if err != nil {
@@ -658,8 +581,8 @@ func TestLegacyRecoveryRequiresMatchingStageUnderRestoredRoot(t *testing.T) {
 	if err := os.WriteFile(manager.recordPath(begin.SessionID), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour); err == nil || !strings.Contains(err.Error(), "inspect Recovery staging") {
-		t.Fatalf("legacy manifest without a matching current-root stage did not fail explicitly: %v", err)
+	if _, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour); err == nil || !strings.Contains(err.Error(), "unsupported Recovery manifest version") {
+		t.Fatalf("legacy manifest was not explicitly rejected: %v", err)
 	}
 	got, err := os.ReadFile(oldStage)
 	if err != nil || string(got) != "must never be opened" {

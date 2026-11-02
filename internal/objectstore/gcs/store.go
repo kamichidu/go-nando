@@ -16,7 +16,6 @@ import (
 
 var (
 	ErrRemoteObjectConflict = errors.New("GCS object does not match requested content ID")
-	ErrReplicaConflict      = ErrRemoteObjectConflict // compatibility alias
 	ErrObjectNotFound       = errors.New("GCS object not found")
 )
 
@@ -44,7 +43,6 @@ type Store struct {
 
 var (
 	_ objectstore.RemoteObjectStore = (*Store)(nil)
-	_ objectstore.ReplicaStore      = (*Store)(nil)
 )
 
 // NewStore constructs a GCS object store around an authenticated Cloud Storage client.
@@ -160,20 +158,6 @@ func (s *Store) ListRemoteObjects(ctx context.Context) ([]objectstore.RemoteObje
 		}
 	}
 	return result, nil
-}
-
-// The original ReplicaStore method names remain available for source compatibility.
-func (s *Store) OpenReplica(ctx context.Context, id content.ID) (io.ReadCloser, error) {
-	return s.OpenRemote(ctx, id)
-}
-func (s *Store) ReplicaExists(ctx context.Context, id content.ID) (bool, error) {
-	return s.RemoteExists(ctx, id)
-}
-func (s *Store) ReplicaAttrs(ctx context.Context, id content.ID) (objectstore.ReplicaInfo, error) {
-	return s.RemoteAttrs(ctx, id)
-}
-func (s *Store) ListReplicas(ctx context.Context) ([]objectstore.ReplicaInfo, error) {
-	return s.ListRemoteObjects(ctx)
 }
 
 type storageAPI struct{ bucket *storage.BucketHandle }

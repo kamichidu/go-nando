@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -25,10 +26,20 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	if err := settings.Validate(); err != nil {
 		return fmt.Errorf("invalid repository settings: %w", err)
 	}
-	settings = settings.Canonical()
 	// 1. Create root directory
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create repository root directory: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "repository.json")); errors.Is(err, os.ErrNotExist) {
+		entries, readErr := os.ReadDir(repoDir)
+		if readErr != nil {
+			return fmt.Errorf("failed to inspect repository directory: %w", readErr)
+		}
+		if len(entries) != 0 {
+			return fmt.Errorf("%w: repository settings are missing; existing data was left unchanged", repositoryformat.ErrUnsupported)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to inspect repository settings path: %w", err)
 	}
 	dbPath := filepath.Join(repoDir, "metadata.sqlite")
 	dbExists := true
@@ -48,11 +59,9 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	if dbExists {
 		persisted, err := LoadRepositorySettings(repoDir)
 		if errors.Is(err, os.ErrNotExist) {
-			if settings != repository.DefaultSettings() {
-				return fmt.Errorf("existing repository without settings is treated as Local; mode migration is not supported")
-			}
+			return fmt.Errorf("unsupported pre-v1 repository: repository.json is missing; existing data was left unchanged")
 		} else if err != nil {
-			return fmt.Errorf("read repository settings: %w", err)
+			return fmt.Errorf("unsupported or invalid repository settings; existing data was left unchanged: %w", err)
 		} else {
 			if settings != repository.DefaultSettings() && settings != persisted {
 				return fmt.Errorf("existing repository settings cannot be changed by init")
@@ -125,20 +134,22 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	return nil
 }
 
-// LoadRepositorySettings reads repository-owned delivery settings. Repositories
-// predating repository.json retain Local behavior for compatibility.
+// LoadRepositorySettings reads canonical v1 repository-owned delivery settings.
 func LoadRepositorySettings(repoDir string) (repository.Settings, error) {
 	file, err := os.Open(filepath.Join(repoDir, "repository.json"))
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return repository.DefaultSettings(), nil
-		}
 		return repository.Settings{}, err
 	}
 	defer file.Close()
 	var settings repository.Settings
-	if err := json.NewDecoder(file).Decode(&settings); err != nil {
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&settings); err != nil {
 		return repository.Settings{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return repository.Settings{}, fmt.Errorf("repository settings contain multiple JSON values")
 	}
 	if err := settings.Validate(); err != nil {
 		return repository.Settings{}, err

@@ -114,7 +114,7 @@ Remaining verification limits: no process-kill E2E is run at every individual ma
 |Implemented for defined Local checks; GCS health policy open
 |===
 
-G2's PASS establishes behavior against `fake-gcs-server:1.52.3`, including daemon-scheduled delivery without maintenance RPC, a directly observed outage, restart retry, and upload-response ambiguity reconciled without retransmitting the payload. It does not establish ADC/IAM, production bucket policy, actual cloud credentials, billing, retention/versioning, or external GCS mutation behavior; the IR explicitly says the emulator is not evidence for those semantics. `OPEN-GCS-GENERATION-AND-BUCKET-POLICY` remains open; the terminology/migration refactor resolves compatibility for existing repository and TOML settings while retaining the GCS API boundary. The Local/Remote transfer mechanics are present; production deployment acceptance needs an explicit real-GCS environment decision/evidence.
+G2's PASS establishes behavior against `fake-gcs-server:1.52.3`, including daemon-scheduled delivery without maintenance RPC, a directly observed outage, restart retry, and upload-response ambiguity reconciled without retransmitting the payload. It does not establish ADC/IAM, production bucket policy, actual cloud credentials, billing, retention/versioning, or external GCS mutation behavior; the IR explicitly says the emulator is not evidence for those semantics. `OPEN-GCS-GENERATION-AND-BUCKET-POLICY` remains open. The Local/Remote transfer mechanics are present; production deployment acceptance needs an explicit real-GCS environment decision/evidence.
 
 `nando sync` is currently a stub returning `ErrNotImplemented` through `internal/app/sync.go`. This is *intentionally deferred*, not a Phase A failure: `DES-PHASE7-SYNC` defers user-directed synchronization between repositories. It must not be confused with the missing Phase A automatic one-way GCS queue scheduler.
 
@@ -125,7 +125,7 @@ G2's PASS establishes behavior against `fake-gcs-server:1.52.3`, including daemo
 |Design references |Code and test trace |Status
 
 |`DES-CLI-BOUNDARY`, `DES-RUNTIME-CONFIGURATION`
-|Repository-facing `put/get/cat/list/stat/mkdir/move/remove/gc/doctor/recovery/maintenance` commands use `controlrpc` (`internal/cli/commands/`). `init` is provisioning; `daemon` is the composition root. TOML/CLI/XDG precedence and legacy-path migration guard are in `internal/config/config.go` and CLI root. Tests are in `commands_test.go` and `config_test.go`.
+|Repository-facing `put/get/cat/list/stat/mkdir/move/remove/gc/doctor/recovery/maintenance` commands use `controlrpc` (`internal/cli/commands/`). `init` is provisioning; `daemon` is the composition root. TOML/CLI/XDG precedence is in `internal/config/config.go` and CLI root. Tests are in `commands_test.go` and `config_test.go`.
 |Implemented; G0 PASS. `nando sync` is Phase 7 deferred as noted above.
 
 |`DES-DEPENDENCY-DIRECTION`, `DES-DAEMON-RUNTIME`, `DES-REPOSITORY-BOUNDARIES`, approved `OPEN-ADAPTER-AUTHORIZATION` Phase A decision
@@ -289,7 +289,7 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |Non-blocker for current IR scope
 
 |PA-09 — *P3 unresolved semantics*
-|`OPEN-DELIVERY-MODE-MIGRATION`, `OPEN-GCS-GENERATION-AND-BUCKET-POLICY`, `OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS`, `OPEN-GCS-SCHEDULER-DEFAULTS`, and `OPEN-READ-REVISION-CHANGE` remain open. Current compatibility defaults to Local and does not silently change repository settings.
+|`OPEN-GCS-GENERATION-AND-BUCKET-POLICY`, `OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS`, `OPEN-GCS-SCHEDULER-DEFAULTS`, and `OPEN-READ-REVISION-CHANGE` remain open. Formal v1 has no pre-v1 compatibility guarantee and does not silently change repository settings.
 |Resolve the operational decisions needed by the selected deployment profile; do not expand this review into Phase B/Firestore or deferred optimization work.
 |Documented conditional scope
 |===

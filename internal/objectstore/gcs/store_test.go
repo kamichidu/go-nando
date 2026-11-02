@@ -93,7 +93,7 @@ func TestUploadRejectsExistingObjectWithIncompatibleAttributes(t *testing.T) {
 	api.attrs = apiAttrs{ID: id, ContentID: id.String(), Size: 4, Generation: 4, MD5: sum[:]}
 	store := NewStoreWithAPI("bucket", api)
 	expected := md5.Sum([]byte("abc"))
-	if _, err := store.Upload(context.Background(), id, 3, expected[:], strings.NewReader("abc")); !errors.Is(err, ErrReplicaConflict) {
+	if _, err := store.Upload(context.Background(), id, 3, expected[:], strings.NewReader("abc")); !errors.Is(err, ErrRemoteObjectConflict) {
 		t.Fatalf("incompatible existing object was accepted: %v", err)
 	}
 }
@@ -108,7 +108,7 @@ func TestUploadRejectsMismatchedMD5(t *testing.T) {
 	api.attrs = apiAttrs{ID: id, ContentID: id.String(), Size: 3, Generation: 1, MD5: wrong[:]}
 	store := NewStoreWithAPI("bucket", api)
 	sum := md5.Sum([]byte("abc"))
-	if _, err := store.Upload(context.Background(), id, 3, sum[:], strings.NewReader("abc")); !errors.Is(err, ErrReplicaConflict) {
+	if _, err := store.Upload(context.Background(), id, 3, sum[:], strings.NewReader("abc")); !errors.Is(err, ErrRemoteObjectConflict) {
 		t.Fatalf("MD5 mismatch accepted: %v", err)
 	}
 }

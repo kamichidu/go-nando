@@ -177,12 +177,12 @@ asynchronously to exactly one selected backend. GCS is the only implemented
 remote backend. Multiple backends, fanout, failover, and tiering are
 unsupported and not planned.
 
-Existing repositories with `delivery_mode: "gcs"` and `gcs_bucket` remain
-readable and are not rewritten when opened. TOML scheduler settings are
-supported only under `[remote]` with the four keys shown above; legacy
-top-level scheduler keys are rejected as unknown. CLI flags
-(`--delivery-mode gcs`, `--gcs-bucket`) remain accepted aliases. New
-repositories and examples use generic names. Reinitializing an existing
+The current GCS backend is selected with `delivery_mode: "remote"`,
+`remote_backend: "gcs"`, and `remote_bucket`. Pre-v1 repository settings,
+configuration spellings, CLI aliases, schema histories, and recovery manifests
+are unsupported. The program rejects unsupported state without modifying its
+data. TOML scheduler settings are supported only under `[remote]` with the four
+keys shown above; other spellings are rejected. Reinitializing an existing
 repository does not change its selected backend or bucket.
 
 The daemon runs remote delivery processing, Capacity GC, and Orphan/Invalid GC

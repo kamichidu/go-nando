@@ -29,30 +29,22 @@ func TestInitRepositoryPersistsDeliverySettingsAndDoesNotReconfigure(t *testing.
 	}
 }
 
-func TestLoadRepositorySettingsDefaultsLegacyRepositoryToLocal(t *testing.T) {
+func TestLoadRepositorySettingsRejectsMissingSettings(t *testing.T) {
 	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "objects"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	got, err := LoadRepositorySettings(root)
-	if err != nil || got != repository.DefaultSettings() {
-		t.Fatalf("legacy default: got=%+v err=%v", got, err)
+	if _, err := LoadRepositorySettings(root); err == nil {
+		t.Fatal("missing pre-v1 repository settings were accepted")
 	}
 }
 
-func TestLoadLegacyGCSRepositorySettingsWithoutRewriting(t *testing.T) {
+func TestLoadRepositorySettingsRejectsLegacySettingsWithoutRewriting(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "repository.json")
 	legacy := `{"delivery_mode":"gcs","gcs_bucket":"existing-bucket"}`
 	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := LoadRepositorySettings(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.DeliveryMode != repository.DeliveryModeRemote || got.RemoteBackend != "gcs" || got.RemoteBucket != "existing-bucket" {
-		t.Fatalf("legacy repository settings=%+v", got)
+	if _, err := LoadRepositorySettings(root); err == nil {
+		t.Fatal("legacy repository settings were accepted")
 	}
 	bytes, err := os.ReadFile(path)
 	if err != nil || string(bytes) != legacy {
