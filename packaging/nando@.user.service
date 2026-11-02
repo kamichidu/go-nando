@@ -5,7 +5,7 @@ After=default.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/nando --config %E/nando/%i.toml daemon
+ExecStart=/opt/nando/bin/nando --config %E/nando/%i.toml daemon
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
