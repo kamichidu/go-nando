@@ -112,10 +112,11 @@ if ! run_gate G2 "host-native real FUSE with fake GCS outage/retry/idempotency" 
   "$5" --repository "$3" init --delivery-mode remote --remote-backend gcs --remote-bucket nando-e2e
   scheduler_config="$7/gcs-scheduler.toml"
   cat >"$scheduler_config" <<EOF
-remote_sync_idle_interval = "250ms"
-remote_sync_periodic_interval = "1s"
-remote_max_delivery_delay = "2s"
-remote_sync_parallelism = 2
+[remote]
+sync_idle_interval = "250ms"
+sync_periodic_interval = "1s"
+max_delivery_delay = "2s"
+sync_parallelism = 2
 EOF
   python3 "$6/e2e/runner.py" g2-init
   daemon="" proxy=""

@@ -11,10 +11,11 @@ verbose = false
 # Remote delivery scheduler policy. These are examples, not defaults.
 # Remote repositories require all four values. Durations must be positive.
 # Local repositories can also use these values to schedule maintenance.
-# remote_sync_idle_interval = "30s"
-# remote_sync_periodic_interval = "5m"
-# remote_max_delivery_delay = "30m"
-# remote_sync_parallelism = 2
+[remote]
+# sync_idle_interval = "30s"
+# sync_periodic_interval = "5m"
+# max_delivery_delay = "30m"
+# sync_parallelism = 2
 
 # Daemon transport and credentials. Empty or omitted endpoint uses the
 # repository's local Unix socket. TCP listeners require TLS and bearer auth.

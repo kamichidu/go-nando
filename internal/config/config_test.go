@@ -73,14 +73,14 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 			t.Errorf("sample is missing active config key %q", key)
 		}
 	}
-	for _, key := range []string{"endpoint", "token", "token_from_file", "token_from_env", "ca_cert", "tls_cert", "tls_key", "remote_sync_idle_interval", "remote_sync_periodic_interval", "remote_max_delivery_delay", "remote_sync_parallelism", "directory"} {
+	for _, key := range []string{"endpoint", "token", "token_from_file", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory"} {
 		if !strings.Contains(string(sampleBytes), "# "+key+" =") {
 			t.Errorf("sample is missing commented supported config key %q", key)
 		}
 	}
-	for _, key := range []string{"remote_sync_idle_interval", "remote_sync_periodic_interval", "remote_max_delivery_delay", "remote_sync_parallelism"} {
-		if strings.Index(string(sampleBytes), "# "+key+" =") > strings.Index(string(sampleBytes), "[daemon]") {
-			t.Errorf("top-level key %q must appear before TOML tables", key)
+	for _, key := range []string{"sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism"} {
+		if strings.Index(string(sampleBytes), "# "+key+" =") < strings.Index(string(sampleBytes), "[remote]") || strings.Index(string(sampleBytes), "# "+key+" =") > strings.Index(string(sampleBytes), "[daemon]") {
+			t.Errorf("remote key %q must appear inside [remote] before [daemon]", key)
 		}
 	}
 	if runtime.GOOS == "windows" {
@@ -171,7 +171,7 @@ func TestGCSSchedulerPolicyRequiresExplicitCompletePositiveSettings(t *testing.T
 	if _, err := (Config{}).GCSSchedulerPolicy(); err == nil {
 		t.Fatal("missing scheduler policy was accepted")
 	}
-	cfg := Config{GCSSyncIdleInterval: "250ms", GCSSyncPeriodicInterval: "1s", GCSMaxDeliveryDelay: "5s", GCSSyncParallelism: 3}
+	cfg := Config{Remote: RemoteConfig{SyncIdleInterval: "250ms", SyncPeriodicInterval: "1s", MaxDeliveryDelay: "5s", SyncParallelism: 3}}
 	got, err := cfg.GCSSchedulerPolicy()
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestGCSSchedulerPolicyRequiresExplicitCompletePositiveSettings(t *testing.T
 	if got.IdleInterval != 250*time.Millisecond || got.PeriodicInterval != time.Second || got.MaxDeliveryDelay != 5*time.Second || got.Parallelism != 3 {
 		t.Fatalf("scheduler policy=%+v", got)
 	}
-	cfg.GCSSyncParallelism = 0
+	cfg.Remote.SyncParallelism = 0
 	if _, err := cfg.GCSSchedulerPolicy(); err == nil {
 		t.Fatal("zero parallelism was accepted")
 	}
@@ -190,7 +190,8 @@ func TestRemoteSchedulerConfigReadsCanonicalAndLegacyKeys(t *testing.T) {
 		name string
 		text string
 	}{
-		{"generic", "remote_sync_idle_interval = \"250ms\"\nremote_sync_periodic_interval = \"1s\"\nremote_max_delivery_delay = \"5s\"\nremote_sync_parallelism = 3\n"},
+		{"canonical", "[remote]\nsync_idle_interval = \"250ms\"\nsync_periodic_interval = \"1s\"\nmax_delivery_delay = \"5s\"\nsync_parallelism = 3\n"},
+		{"remote aliases", "remote_sync_idle_interval = \"250ms\"\nremote_sync_periodic_interval = \"1s\"\nremote_max_delivery_delay = \"5s\"\nremote_sync_parallelism = 3\n"},
 		{"legacy", "gcs_sync_idle_interval = \"250ms\"\ngcs_sync_periodic_interval = \"1s\"\ngcs_max_delivery_delay = \"5s\"\ngcs_sync_parallelism = 3\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -202,6 +203,12 @@ func TestRemoteSchedulerConfigReadsCanonicalAndLegacyKeys(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if cfg.Remote.SyncIdleInterval != "250ms" || cfg.Remote.SyncPeriodicInterval != "1s" || cfg.Remote.MaxDeliveryDelay != "5s" || cfg.Remote.SyncParallelism != 3 {
+				t.Fatalf("normalized remote config=%+v", cfg.Remote)
+			}
+			if cfg.LegacyRemoteSyncIdle != "" || cfg.LegacyRemoteSyncPeriodic != "" || cfg.LegacyRemoteMaxDelay != "" || cfg.LegacyRemoteParallelism != 0 || cfg.GCSSyncIdleInterval != "" || cfg.GCSSyncPeriodicInterval != "" || cfg.GCSMaxDeliveryDelay != "" || cfg.GCSSyncParallelism != 0 {
+				t.Fatalf("legacy config was not normalized away: %+v", cfg)
+			}
 			policy, err := cfg.RemoteSchedulerPolicy()
 			if err != nil || policy.Parallelism != 3 || policy.MaxDeliveryDelay != 5*time.Second {
 				t.Fatalf("remote policy=%+v err=%v", policy, err)
@@ -212,12 +219,17 @@ func TestRemoteSchedulerConfigReadsCanonicalAndLegacyKeys(t *testing.T) {
 
 func TestRemoteSchedulerConfigRejectsConflictingAliases(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	contents := "remote_sync_idle_interval = \"250ms\"\ngcs_sync_idle_interval = \"500ms\"\n"
-	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadConfig(path); err == nil {
-		t.Fatal("conflicting generic and legacy scheduler keys were accepted")
+	for _, contents := range []string{
+		"[remote]\nsync_idle_interval = \"250ms\"\nremote_sync_idle_interval = \"250ms\"\n",
+		"remote_sync_idle_interval = \"250ms\"\ngcs_sync_idle_interval = \"250ms\"\n",
+		"[remote]\nsync_parallelism = 2\nremote_sync_parallelism = 2\n",
+	} {
+		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(path); err == nil {
+			t.Fatalf("duplicate scheduler spellings accepted: %s", contents)
+		}
 	}
 }
 

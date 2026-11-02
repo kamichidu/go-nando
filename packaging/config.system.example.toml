@@ -1,12 +1,17 @@
 # Copy to /etc/nando/<instance>.toml. The instance must be initialized as
 # the packaged nando account before starting nando@<instance>.service.
 repository = "/var/lib/nando/<instance>"
+
+# For remote repositories, provide all four scheduler settings explicitly.
+# No package or unit defaults are supplied.
+[remote]
+# sync_idle_interval = "..."
+# sync_periodic_interval = "..."
+# max_delivery_delay = "..."
+# sync_parallelism = 1
+
 [daemon]
 endpoint = "unix:///run/nando-<instance>/control.sock"
 
-# For repositories using remote object storage, provide all four scheduler settings explicitly.
-# No package or unit defaults are supplied.
-# remote_sync_idle_interval = "..."
-# remote_sync_periodic_interval = "..."
-# remote_max_delivery_delay = "..."
-# remote_sync_parallelism = 1
+[recovery]
+# directory = "/recyclebin"

@@ -15,23 +15,33 @@ import (
 // Config represents per-user runtime configuration. Repository delivery
 // settings remain in the repository-owned repository.json file.
 type Config struct {
-	Repository                 string         `toml:"repository"`
-	Verbose                    bool           `toml:"verbose"`
-	Daemon                     DaemonConfig   `toml:"daemon"`
-	LegacyDaemonEndpoint       string         `toml:"daemon_endpoint"`
-	LegacyDaemonTokenFile      string         `toml:"daemon_token_file"`
-	LegacyDaemonCACert         string         `toml:"daemon_ca_cert"`
-	LegacyDaemonTLSCert        string         `toml:"daemon_tls_cert"`
-	LegacyDaemonTLSKey         string         `toml:"daemon_tls_key"`
-	RemoteSyncIdleInterval     string         `toml:"remote_sync_idle_interval"`
-	RemoteSyncPeriodicInterval string         `toml:"remote_sync_periodic_interval"`
-	RemoteMaxDeliveryDelay     string         `toml:"remote_max_delivery_delay"`
-	RemoteSyncParallelism      int            `toml:"remote_sync_parallelism"`
-	GCSSyncIdleInterval        string         `toml:"gcs_sync_idle_interval"`
-	GCSSyncPeriodicInterval    string         `toml:"gcs_sync_periodic_interval"`
-	GCSMaxDeliveryDelay        string         `toml:"gcs_max_delivery_delay"`
-	GCSSyncParallelism         int            `toml:"gcs_sync_parallelism"`
-	Recovery                   RecoveryConfig `toml:"recovery"`
+	Repository               string         `toml:"repository"`
+	Verbose                  bool           `toml:"verbose"`
+	Daemon                   DaemonConfig   `toml:"daemon"`
+	LegacyDaemonEndpoint     string         `toml:"daemon_endpoint"`
+	LegacyDaemonTokenFile    string         `toml:"daemon_token_file"`
+	LegacyDaemonCACert       string         `toml:"daemon_ca_cert"`
+	LegacyDaemonTLSCert      string         `toml:"daemon_tls_cert"`
+	LegacyDaemonTLSKey       string         `toml:"daemon_tls_key"`
+	Remote                   RemoteConfig   `toml:"remote"`
+	LegacyRemoteSyncIdle     string         `toml:"remote_sync_idle_interval"`
+	LegacyRemoteSyncPeriodic string         `toml:"remote_sync_periodic_interval"`
+	LegacyRemoteMaxDelay     string         `toml:"remote_max_delivery_delay"`
+	LegacyRemoteParallelism  int            `toml:"remote_sync_parallelism"`
+	GCSSyncIdleInterval      string         `toml:"gcs_sync_idle_interval"`
+	GCSSyncPeriodicInterval  string         `toml:"gcs_sync_periodic_interval"`
+	GCSMaxDeliveryDelay      string         `toml:"gcs_max_delivery_delay"`
+	GCSSyncParallelism       int            `toml:"gcs_sync_parallelism"`
+	Recovery                 RecoveryConfig `toml:"recovery"`
+}
+
+// RemoteConfig contains user-selected scheduling policy for remote delivery.
+// Repository backend selection is persisted separately in repository settings.
+type RemoteConfig struct {
+	SyncIdleInterval     string `toml:"sync_idle_interval"`
+	SyncPeriodicInterval string `toml:"sync_periodic_interval"`
+	MaxDeliveryDelay     string `toml:"max_delivery_delay"`
+	SyncParallelism      int    `toml:"sync_parallelism"`
 }
 
 // DaemonConfig contains daemon listener and client transport settings.
@@ -75,33 +85,7 @@ type RemoteSchedulerSettings struct {
 type GCSSchedulerSettings = RemoteSchedulerSettings
 
 func (c Config) remoteValues() (string, string, string, int) {
-	idle, periodic, maximum, parallelism := c.RemoteSyncIdleInterval, c.RemoteSyncPeriodicInterval, c.RemoteMaxDeliveryDelay, c.RemoteSyncParallelism
-	if idle == "" {
-		idle = c.GCSSyncIdleInterval
-	}
-	if periodic == "" {
-		periodic = c.GCSSyncPeriodicInterval
-	}
-	if maximum == "" {
-		maximum = c.GCSMaxDeliveryDelay
-	}
-	if parallelism == 0 {
-		parallelism = c.GCSSyncParallelism
-	}
-	return idle, periodic, maximum, parallelism
-}
-
-func (c Config) validateRemoteAliases() error {
-	pairs := [][2]string{{c.RemoteSyncIdleInterval, c.GCSSyncIdleInterval}, {c.RemoteSyncPeriodicInterval, c.GCSSyncPeriodicInterval}, {c.RemoteMaxDeliveryDelay, c.GCSMaxDeliveryDelay}}
-	for _, pair := range pairs {
-		if pair[0] != "" && pair[1] != "" && pair[0] != pair[1] {
-			return fmt.Errorf("generic remote scheduler setting conflicts with its legacy GCS alias")
-		}
-	}
-	if c.RemoteSyncParallelism != 0 && c.GCSSyncParallelism != 0 && c.RemoteSyncParallelism != c.GCSSyncParallelism {
-		return fmt.Errorf("remote_sync_parallelism conflicts with legacy gcs_sync_parallelism")
-	}
-	return nil
+	return c.Remote.SyncIdleInterval, c.Remote.SyncPeriodicInterval, c.Remote.MaxDeliveryDelay, c.Remote.SyncParallelism
 }
 
 func (c Config) HasRemoteSchedulerSettings() bool {
@@ -114,9 +98,6 @@ func (c Config) HasGCSSchedulerSettings() bool { return c.HasRemoteSchedulerSett
 // RemoteSchedulerPolicy resolves and validates every required policy value. No
 // operational defaults are implied by this configuration API.
 func (c Config) RemoteSchedulerPolicy() (RemoteSchedulerSettings, error) {
-	if err := c.validateRemoteAliases(); err != nil {
-		return RemoteSchedulerSettings{}, err
-	}
 	idleValue, periodicValue, maximumValue, parallelism := c.remoteValues()
 	parse := func(name, value string) (time.Duration, error) {
 		if value == "" {
@@ -159,9 +140,75 @@ func LoadConfig(path string) (*Config, error) {
 	if unknown := metadata.Undecoded(); len(unknown) != 0 {
 		return nil, fmt.Errorf("unknown configuration keys: %s", strings.Join(keysToStrings(unknown), ", "))
 	}
-	if err := cfg.validateRemoteAliases(); err != nil {
-		return nil, err
+	// A field may be written using exactly one spelling. Check TOML presence so
+	// equal values and explicitly empty values cannot hide duplicate sources.
+	remoteAliases := []struct {
+		field, canonical, remoteAlias, gcsAlias string
+		remoteValue, gcsValue                   string
+	}{
+		{"idle", "sync_idle_interval", "remote_sync_idle_interval", "gcs_sync_idle_interval", cfg.LegacyRemoteSyncIdle, cfg.GCSSyncIdleInterval},
+		{"periodic", "sync_periodic_interval", "remote_sync_periodic_interval", "gcs_sync_periodic_interval", cfg.LegacyRemoteSyncPeriodic, cfg.GCSSyncPeriodicInterval},
+		{"maximum", "max_delivery_delay", "remote_max_delivery_delay", "gcs_max_delivery_delay", cfg.LegacyRemoteMaxDelay, cfg.GCSMaxDeliveryDelay},
 	}
+	for _, item := range remoteAliases {
+		present := 0
+		if metadata.IsDefined("remote", item.canonical) {
+			present++
+		}
+		if metadata.IsDefined(item.remoteAlias) {
+			present++
+		}
+		if metadata.IsDefined(item.gcsAlias) {
+			present++
+		}
+		if present > 1 {
+			return nil, fmt.Errorf("remote scheduler setting %q has duplicate spellings", item.canonical)
+		}
+		var value string
+		legacyDefined := false
+		if metadata.IsDefined(item.remoteAlias) {
+			value = item.remoteValue
+			legacyDefined = true
+		}
+		if metadata.IsDefined(item.gcsAlias) {
+			value = item.gcsValue
+			legacyDefined = true
+		}
+		if legacyDefined {
+			switch item.field {
+			case "idle":
+				cfg.Remote.SyncIdleInterval = value
+			case "periodic":
+				cfg.Remote.SyncPeriodicInterval = value
+			case "maximum":
+				cfg.Remote.MaxDeliveryDelay = value
+			}
+		}
+	}
+	parallelSpellings := 0
+	for _, key := range []struct{ table, name string }{{"remote", "sync_parallelism"}, {"", "remote_sync_parallelism"}, {"", "gcs_sync_parallelism"}} {
+		if key.table == "" && metadata.IsDefined(key.name) || key.table != "" && metadata.IsDefined(key.table, key.name) {
+			parallelSpellings++
+		}
+	}
+	if parallelSpellings > 1 {
+		return nil, fmt.Errorf("remote scheduler setting %q has duplicate spellings", "sync_parallelism")
+	}
+	if metadata.IsDefined("remote_sync_parallelism") {
+		cfg.Remote.SyncParallelism = cfg.LegacyRemoteParallelism
+	}
+	if metadata.IsDefined("gcs_sync_parallelism") {
+		cfg.Remote.SyncParallelism = cfg.GCSSyncParallelism
+	}
+	// Keep the returned runtime configuration in one canonical representation.
+	cfg.LegacyRemoteSyncIdle = ""
+	cfg.LegacyRemoteSyncPeriodic = ""
+	cfg.LegacyRemoteMaxDelay = ""
+	cfg.LegacyRemoteParallelism = 0
+	cfg.GCSSyncIdleInterval = ""
+	cfg.GCSSyncPeriodicInterval = ""
+	cfg.GCSMaxDeliveryDelay = ""
+	cfg.GCSSyncParallelism = 0
 	legacy := []struct {
 		name, old string
 		new       *string
