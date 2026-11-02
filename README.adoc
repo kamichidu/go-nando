@@ -101,7 +101,7 @@ sync_parallelism = 2
 
 Repositories use either `local` delivery or `remote` delivery. Remote mode keeps complete content in Local durable staging/cache and delivers it asynchronously to exactly one selected backend. GCS is the only implemented remote backend. Multiple backends, fanout, failover, and tiering are unsupported and not planned.
 
-Existing repositories with `delivery_mode: "gcs"` and `gcs_bucket` remain readable and are not rewritten when opened. Existing top-level TOML scheduler aliases (`remote_sync_idle_interval`, `remote_sync_periodic_interval`, `remote_max_delivery_delay`, `remote_sync_parallelism`, and the corresponding `gcs_*` keys) remain accepted. Duplicate spellings are rejected. CLI flags (`--delivery-mode gcs`, `--gcs-bucket`) remain accepted aliases. New repositories and examples use generic names. Reinitializing an existing repository does not change its selected backend or bucket.
+Existing repositories with `delivery_mode: "gcs"` and `gcs_bucket` remain readable and are not rewritten when opened. TOML scheduler settings are supported only under `[remote]` with the four keys shown above; legacy top-level scheduler keys are rejected as unknown. CLI flags (`--delivery-mode gcs`, `--gcs-bucket`) remain accepted aliases. New repositories and examples use generic names. Reinitializing an existing repository does not change its selected backend or bucket.
 
 The daemon runs remote delivery processing, Capacity GC, and Orphan/Invalid GC as independent tasks. Remote delivery queue rows retain durable enqueue timestamps so maximum-delay eligibility survives daemon restart. See the link:samples/config.toml[configuration example] and link:packaging/README.md[Debian service guide] for setup details.
 

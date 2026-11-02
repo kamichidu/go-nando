@@ -185,50 +185,42 @@ func TestGCSSchedulerPolicyRequiresExplicitCompletePositiveSettings(t *testing.T
 	}
 }
 
-func TestRemoteSchedulerConfigReadsCanonicalAndLegacyKeys(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		text string
-	}{
-		{"canonical", "[remote]\nsync_idle_interval = \"250ms\"\nsync_periodic_interval = \"1s\"\nmax_delivery_delay = \"5s\"\nsync_parallelism = 3\n"},
-		{"remote aliases", "remote_sync_idle_interval = \"250ms\"\nremote_sync_periodic_interval = \"1s\"\nremote_max_delivery_delay = \"5s\"\nremote_sync_parallelism = 3\n"},
-		{"legacy", "gcs_sync_idle_interval = \"250ms\"\ngcs_sync_periodic_interval = \"1s\"\ngcs_max_delivery_delay = \"5s\"\ngcs_sync_parallelism = 3\n"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "config.toml")
-			if err := os.WriteFile(path, []byte(test.text), 0600); err != nil {
-				t.Fatal(err)
-			}
-			cfg, err := LoadConfig(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if cfg.Remote.SyncIdleInterval != "250ms" || cfg.Remote.SyncPeriodicInterval != "1s" || cfg.Remote.MaxDeliveryDelay != "5s" || cfg.Remote.SyncParallelism != 3 {
-				t.Fatalf("normalized remote config=%+v", cfg.Remote)
-			}
-			if cfg.LegacyRemoteSyncIdle != "" || cfg.LegacyRemoteSyncPeriodic != "" || cfg.LegacyRemoteMaxDelay != "" || cfg.LegacyRemoteParallelism != 0 || cfg.GCSSyncIdleInterval != "" || cfg.GCSSyncPeriodicInterval != "" || cfg.GCSMaxDeliveryDelay != "" || cfg.GCSSyncParallelism != 0 {
-				t.Fatalf("legacy config was not normalized away: %+v", cfg)
-			}
-			policy, err := cfg.RemoteSchedulerPolicy()
-			if err != nil || policy.Parallelism != 3 || policy.MaxDeliveryDelay != 5*time.Second {
-				t.Fatalf("remote policy=%+v err=%v", policy, err)
-			}
-		})
+func TestRemoteSchedulerConfigReadsCanonicalKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	contents := "[remote]\nsync_idle_interval = \"250ms\"\nsync_periodic_interval = \"1s\"\nmax_delivery_delay = \"5s\"\nsync_parallelism = 3\n"
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Remote.SyncIdleInterval != "250ms" || cfg.Remote.SyncPeriodicInterval != "1s" || cfg.Remote.MaxDeliveryDelay != "5s" || cfg.Remote.SyncParallelism != 3 {
+		t.Fatalf("remote config=%+v", cfg.Remote)
+	}
+	policy, err := cfg.RemoteSchedulerPolicy()
+	if err != nil || policy.Parallelism != 3 || policy.MaxDeliveryDelay != 5*time.Second {
+		t.Fatalf("remote policy=%+v err=%v", policy, err)
 	}
 }
 
-func TestRemoteSchedulerConfigRejectsConflictingAliases(t *testing.T) {
+func TestRemoteSchedulerConfigRejectsLegacyKeys(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	for _, contents := range []string{
-		"[remote]\nsync_idle_interval = \"250ms\"\nremote_sync_idle_interval = \"250ms\"\n",
-		"remote_sync_idle_interval = \"250ms\"\ngcs_sync_idle_interval = \"250ms\"\n",
-		"[remote]\nsync_parallelism = 2\nremote_sync_parallelism = 2\n",
+		"remote_sync_idle_interval = \"250ms\"\n",
+		"remote_sync_periodic_interval = \"1s\"\n",
+		"remote_max_delivery_delay = \"5s\"\n",
+		"remote_sync_parallelism = 2\n",
+		"gcs_sync_idle_interval = \"250ms\"\n",
+		"gcs_sync_periodic_interval = \"1s\"\n",
+		"gcs_max_delivery_delay = \"5s\"\n",
+		"gcs_sync_parallelism = 2\n",
 	} {
 		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := LoadConfig(path); err == nil {
-			t.Fatalf("duplicate scheduler spellings accepted: %s", contents)
+		if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "unknown configuration keys") {
+			t.Errorf("legacy scheduler key accepted: %s err=%v", contents, err)
 		}
 	}
 }

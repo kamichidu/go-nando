@@ -58,7 +58,7 @@ file sources avoid placing the token value in the TOML file.
 
 == Remote delivery scheduler
 
-Remote delivery to the currently supported GCS backend requires all four scheduler settings in the daemon's TOML file. The canonical scheduler settings are grouped under `[remote]`. Existing top-level `remote_sync_idle_interval`, `remote_sync_periodic_interval`, `remote_max_delivery_delay`, and `remote_sync_parallelism` spellings and the `gcs_sync_idle_interval`, `gcs_sync_periodic_interval`, `gcs_max_delivery_delay`, and `gcs_sync_parallelism` aliases remain supported for compatibility. If more than one spelling of a setting is present, loading fails even when the values are equal.
+Remote delivery to the currently supported GCS backend requires all four scheduler settings in the daemon's TOML file. The only supported scheduler keys are grouped under `[remote]`: `sync_idle_interval`, `sync_periodic_interval`, `max_delivery_delay`, and `sync_parallelism`. Other scheduler key spellings are unknown configuration keys and are rejected.
 
 [source,toml]
 ----
