@@ -24,6 +24,8 @@ type Config struct {
 	LegacyDaemonTLSKey    string           `toml:"daemon_tls_key"`
 	Remote                RemoteConfig     `toml:"remote"`
 	Recovery              RecoveryConfig   `toml:"recovery"`
+	Fuse                  FuseConfig       `toml:"fuse"`
+	WebDAV                WebDAVConfig     `toml:"webdav"`
 }
 
 // RepositoryConfig contains the configured repository data path.
@@ -60,6 +62,13 @@ type DaemonConfig struct {
 // RecoveryConfig configures the logical destination for restored remote objects.
 type RecoveryConfig struct {
 	Directory string `toml:"directory"`
+}
+
+type FuseConfig struct {
+	Mountpoint string `toml:"mountpoint"`
+}
+type WebDAVConfig struct {
+	Listen string `toml:"listen"`
 }
 
 // RemoteRecoveryDirectory returns the configured logical directory or its default.

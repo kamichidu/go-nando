@@ -15,10 +15,14 @@ if [ -z "$PACKAGE" ]; then
 fi
 
 CONTENTS=$(dpkg-deb --contents "$PACKAGE")
-for binary in nando nando-fuse nando-webdav; do
-	printf '%s\n' "$CONTENTS" | grep -Eq "^-rwxr-xr-x .*\./opt/nando/bin/$binary$"
-	printf '%s\n' "$CONTENTS" | grep -Fq "./usr/bin/$binary -> /opt/nando/bin/$binary"
-done
+printf '%s\n' "$CONTENTS" | grep -Eq '^-rwxr-xr-x .*\./opt/nando/bin/nando$'
+printf '%s\n' "$CONTENTS" | grep -Eq '^-rwxr-xr-x .*\./opt/nando/libexec/nando-fuse$'
+printf '%s\n' "$CONTENTS" | grep -Eq '^-rwxr-xr-x .*\./opt/nando/libexec/nando-webdav$'
+printf '%s\n' "$CONTENTS" | grep -Fq './usr/bin/nando -> /opt/nando/bin/nando'
+if printf '%s\n' "$CONTENTS" | grep -Eq '\./usr/bin/nando-(fuse|webdav)'; then
+	echo "package unexpectedly exposes adapter symlinks in /usr/bin" >&2
+	exit 1
+fi
 
 if printf '%s\n' "$CONTENTS" | grep -Eq '\./etc/nando/|\./var/lib/nando/'; then
 	echo "package unexpectedly contains configuration or persistent state" >&2

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -67,7 +68,7 @@ func (c *RootCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) c
 	fs.Alias("config", "c")
 	fs.Var(trackedBoolFlag{value: &c.flags.Verbose, wasSet: &c.flags.VerboseSet}, "verbose", "enable or disable verbose output")
 	fs.Alias("verbose", "v")
-	fs.StringVar(&c.flags.DaemonEndpoint, "daemon-endpoint", "", "daemon control endpoint (unix:///path or tcp://host:port)")
+	fs.StringVar(&c.flags.DaemonEndpoint, "daemon-listen", "", "daemon control listen address (unix:///path or tcp://host:port)")
 	fs.StringVar(&c.flags.DaemonTokenFile, "daemon-token-file", "", "private bearer-token file for TCP daemon access")
 	fs.StringVar(&c.flags.DaemonCACertFile, "daemon-ca-cert", "", "CA certificate PEM for TCP daemon TLS")
 
@@ -106,6 +107,102 @@ func (c *RootCommand) Run(ctx context.Context, args []string) error {
 	return flag.ErrHelp
 }
 
+// IsExternalSubcommand reports whether args begin with an unknown command.
+func (c *RootCommand) IsExternalSubcommand(args []string) bool {
+	index := externalCommandIndex(args)
+	if index < 0 {
+		return false
+	}
+	for _, child := range c.children {
+		if child.Name() == args[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func externalCommandIndex(args []string) int {
+	valueFlags := map[string]bool{"--repository": true, "-repository": true, "-r": true, "--config": true, "-config": true, "-c": true, "--daemon-listen": true, "-daemon-listen": true, "--daemon-token-file": true, "-daemon-token-file": true, "--daemon-ca-cert": true, "-daemon-ca-cert": true}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if valueFlags[arg] {
+			if i+1 >= len(args) {
+				return -1
+			}
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "--") && strings.Contains(arg, "=") {
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			return -1
+		}
+		return i
+	}
+	return -1
+}
+
+// runExternalSubcommand resolves adapters only beside the installed executable,
+// or in an explicit directory supplied for development and integration tests.
+func RunExternalSubcommand(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing external subcommand")
+	}
+	index := externalCommandIndex(args)
+	if index < 0 {
+		return fmt.Errorf("external subcommand is missing")
+	}
+	name := args[index]
+	if name == "" || strings.ContainsAny(name, `/\\`) || name == "." || name == ".." {
+		return fmt.Errorf("invalid external subcommand %q", name)
+	}
+	dir := os.Getenv("NANDO_LIBEXEC_DIR")
+	if dir == "" {
+		path, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve nando executable: %w", err)
+		}
+		path, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("resolve nando executable symlink: %w", err)
+		}
+		dir = filepath.Join(filepath.Dir(path), "..", "libexec")
+	}
+	path := filepath.Join(dir, "nando-"+name)
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("unknown command %q (adapter %q not found in %s)", name, filepath.Base(path), dir)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
+		return fmt.Errorf("adapter %q is not an executable regular file", path)
+	}
+	forwarded := append(append([]string(nil), args[:index]...), args[index+1:]...)
+	cmd := exec.Command(path, forwarded...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			return externalExitError{code: exit.ExitCode()}
+		}
+		return fmt.Errorf("run adapter %q: %w", path, err)
+	}
+	return nil
+}
+
+type externalExitError struct{ code int }
+
+func (e externalExitError) Error() string {
+	return fmt.Sprintf("adapter exited with status %d", e.code)
+}
+
+func ExternalExitCode(err error) (int, bool) {
+	var external externalExitError
+	if errors.As(err, &external) {
+		return external.code, true
+	}
+	return 0, false
+}
+
 type trackedBoolFlag struct {
 	value  *bool
 	wasSet *bool
@@ -128,7 +225,6 @@ func (c *RootCommand) MapError(err error) int {
 	if err == nil {
 		return 0
 	}
-
 	if errors.Is(err, ErrInvalidArguments) {
 		return 2
 	}

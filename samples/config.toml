@@ -27,7 +27,7 @@
 # listening address and the address all client commands connect to, including
 # FUSE and WebDAV. If omitted, both use the repository-specific local Unix
 # socket. The values below are illustrative.
-# WebDAV's -listen flag remains its separate HTTP bind address.
+# WebDAV's [webdav].listen / --webdav-listen remain its separate HTTP bind address.
 # TCP listeners require TLS and bearer auth; configure the matching client
 # token source and CA certificate where needed.
 [daemon]
@@ -45,6 +45,13 @@
 # Server certificate and private key read by `nando daemon` for TCP TLS.
 # tls_cert = "/etc/nando/server.pem"
 # tls_key = "/etc/nando/server-key.pem"
+
+# Adapter settings. CLI options override these values.
+[fuse]
+# mountpoint = "/mnt/nando"
+
+[webdav]
+# listen = "127.0.0.1:8080"
 
 # Logical directory inside nando for `nando admin recover` when restoring
 # unreferenced GCS objects. Actual default: /recyclebin. This is not the local

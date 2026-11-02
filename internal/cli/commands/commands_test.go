@@ -320,7 +320,7 @@ func TestTOMLConfigSelectsRepositoryAndSharedDaemonEndpoint(t *testing.T) {
 	overrideEndpoint := "unix://" + filepath.Join(t.TempDir(), "cli-override.sock")
 	stdout.Reset()
 	stderr.Reset()
-	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--config", configPath, "--daemon-endpoint", overrideEndpoint, "stat", "/configured.txt"}); code == 0 || !strings.Contains(stderr.String(), strings.TrimPrefix(overrideEndpoint, "unix://")) {
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--config", configPath, "--daemon-listen", overrideEndpoint, "stat", "/configured.txt"}); code == 0 || !strings.Contains(stderr.String(), strings.TrimPrefix(overrideEndpoint, "unix://")) {
 		t.Fatalf("CLI endpoint did not override TOML endpoint: code=%d stderr=%q", code, stderr.String())
 	}
 

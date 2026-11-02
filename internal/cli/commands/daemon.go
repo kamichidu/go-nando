@@ -15,7 +15,6 @@ import (
 
 // DaemonCommand runs the single Repository-owning daemon process.
 type DaemonCommand struct {
-	listen    string
 	tlsCert   string
 	tlsKey    string
 	tokenFile string
@@ -24,7 +23,6 @@ type DaemonCommand struct {
 func (c *DaemonCommand) Name() string { return "daemon" }
 
 func (c *DaemonCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) context.Context {
-	fs.StringVar(&c.listen, "listen", "", "control endpoint (unix:///path or tcp://host:port)")
 	fs.StringVar(&c.tlsCert, "tls-cert", "", "TLS certificate for TCP control transport")
 	fs.StringVar(&c.tlsKey, "tls-key", "", "TLS private key for TCP control transport")
 	fs.StringVar(&c.tokenFile, "token-file", "", "private bearer-token file for TCP control transport")
@@ -44,7 +42,7 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 		return err
 	}
 	globalFlags := flagshim.MustFlagFromContext[cli.GlobalFlags](ctx)
-	endpoint, err := runtimeconfig.ResolveEndpoint(cfg, repoDir, firstNonEmpty(c.listen, globalFlags.DaemonEndpoint))
+	endpoint, err := runtimeconfig.ResolveEndpoint(cfg, repoDir, globalFlags.DaemonEndpoint)
 	if err != nil {
 		return err
 	}

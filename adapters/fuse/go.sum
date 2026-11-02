@@ -2,6 +2,8 @@ github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/hanwen/go-fuse/v2 v2.8.0 h1:wV8rG7rmCz8XHSOwBZhG5YcVqcYjkzivjmbaMafPlAs=
 github.com/hanwen/go-fuse/v2 v2.8.0/go.mod h1:yE6D2PqWwm3CbYRxFXV9xUd8Md5d6NG0WBs5spCswmI=
+github.com/kamichidu/go-flagshim v0.0.0-20260706215804-c7cec50d3e31 h1:zWowMaUNTbaUbeWaa8FjVhO7RM+LTZnm4PKRPj1+Uhg=
+github.com/kamichidu/go-flagshim v0.0.0-20260706215804-c7cec50d3e31/go.mod h1:oq07MYY4Z6VM3/KZD/jZuX+oXNL0xyyLng9ZA1GBq2U=
 github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0SNc=
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/moby/sys/mountinfo v0.7.2 h1:1shs6aH5s4o5H2zQLn796ADW1wMrIwHsyJ2v9KouLrg=

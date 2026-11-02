@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -13,44 +12,49 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/adapters/webdav/internal/adapter"
 	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/runtimeconfig"
 )
 
-func main() {
-	if err := run(os.Args[1:]); err != nil {
-		log.Fatal(err)
-	}
-}
+type flags struct{ Config, Repository, DaemonListen, DaemonTokenFile, DaemonCACert, Listen string }
+type command struct{ options flags }
 
-func run(args []string) error {
-	var endpoint, repoDir, address, tokenFile, caFile, configFile string
-	fs := flag.NewFlagSet("nando-webdav", flag.ContinueOnError)
-	fs.StringVar(&endpoint, "endpoint", "", "daemon control endpoint")
-	fs.StringVar(&repoDir, "repository", "", "repository path used to derive the default daemon endpoint")
-	fs.StringVar(&address, "listen", "127.0.0.1:8080", "HTTP listen address (loopback only in Phase A)")
-	fs.StringVar(&tokenFile, "token-file", "", "optional daemon bearer token file")
-	fs.StringVar(&caFile, "ca-file", "", "optional daemon CA certificate PEM for TCP")
-	fs.StringVar(&configFile, "config", "", "configuration file path")
-	if err := fs.Parse(args); err != nil {
-		return err
+func (*command) Name() string { return "nando-webdav" }
+func (c *command) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) context.Context {
+	fs.StringVar(&c.options.Config, "config", "", "configuration file path")
+	fs.StringVar(&c.options.Repository, "repository", "", "repository directory")
+	fs.StringVar(&c.options.DaemonListen, "daemon-listen", "", "daemon control listen address")
+	fs.StringVar(&c.options.DaemonTokenFile, "daemon-token-file", "", "private bearer-token file")
+	fs.StringVar(&c.options.DaemonCACert, "daemon-ca-cert", "", "CA certificate PEM for daemon TLS")
+	fs.StringVar(&c.options.Listen, "webdav-listen", "", "loopback HTTP listen address")
+	return ctx
+}
+func (c *command) Run(_ context.Context, args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("nando-webdav accepts no positional arguments")
 	}
-	cfg, _, err := runtimeconfig.Load(configFile)
+	o := c.options
+	cfg, _, err := runtimeconfig.Load(o.Config)
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
-	repoDir, err = runtimeconfig.ResolveRepositoryPath(cfg, repoDir)
+	repoDir, err := runtimeconfig.ResolveRepositoryPath(cfg, o.Repository)
 	if err != nil {
 		return err
 	}
+	address := o.Listen
 	if address == "" {
-		return fmt.Errorf("-listen is required")
+		address = cfg.WebDAV.Listen
+	}
+	if address == "" {
+		address = "127.0.0.1:8080"
 	}
 	if err := validateLoopbackAddress(address); err != nil {
 		return err
 	}
-	clientConfig, err := runtimeconfig.ResolveClientConfig(cfg, repoDir, runtimeconfig.ClientOptions{Endpoint: endpoint, TokenFile: tokenFile, CACert: caFile})
+	clientConfig, err := runtimeconfig.ResolveClientConfig(cfg, repoDir, runtimeconfig.ClientOptions{Endpoint: o.DaemonListen, TokenFile: o.DaemonTokenFile, CACert: o.DaemonCACert})
 	if err != nil {
 		return err
 	}
@@ -74,6 +78,9 @@ func run(args []string) error {
 		return err
 	}
 	return nil
+}
+func main() {
+	os.Exit(flagshim.Run(context.Background(), os.Stdin, os.Stdout, os.Stderr, &command{}, os.Args))
 }
 
 func validateLoopbackAddress(address string) error {

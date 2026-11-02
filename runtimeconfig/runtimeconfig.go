@@ -23,6 +23,8 @@ type Config struct {
 	Daemon                DaemonConfig     `toml:"daemon"`
 	Remote                RemoteConfig     `toml:"remote"`
 	Recovery              RecoveryConfig   `toml:"recovery"`
+	Fuse                  FuseConfig       `toml:"fuse"`
+	WebDAV                WebDAVConfig     `toml:"webdav"`
 	LegacyDaemonTokenFile string           `toml:"daemon_token_file"`
 	LegacyDaemonCACert    string           `toml:"daemon_ca_cert"`
 	LegacyDaemonTLSCert   string           `toml:"daemon_tls_cert"`
@@ -52,6 +54,12 @@ type RemoteConfig struct {
 }
 type RecoveryConfig struct {
 	Directory string `toml:"directory"`
+}
+type FuseConfig struct {
+	Mountpoint string `toml:"mountpoint"`
+}
+type WebDAVConfig struct {
+	Listen string `toml:"listen"`
 }
 type RemoteSchedulerSettings struct {
 	IdleInterval, PeriodicInterval, MaxDeliveryDelay time.Duration

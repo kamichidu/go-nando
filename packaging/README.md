@@ -1,8 +1,8 @@
 # Debian package and systemd instances
 
-The `go-nando` deb installs the `nando`, `nando-fuse`, and `nando-webdav`
-executables under `/opt/nando/bin/`. Debian package-managed symlinks in
-`/usr/bin/` point to those binaries. It also contains two
+The `go-nando` deb installs `nando` in `/opt/nando/bin` and the adapter
+executables in `/opt/nando/libexec`. Only `/usr/bin/nando` is exposed; use
+`nando fuse` and `nando webdav` to launch adapters. It also contains two
 independent `nando@.service` templates: one for the system manager and one for
 each user's manager. The user service is the supported Phase A deployment.
 The system service is experimental, is not a Phase A completion gate, and has
@@ -15,9 +15,10 @@ VERSION=1.2.3 packaging/build-deb.sh
 ```
 
 Run `packaging/check-deb.sh` to build a temporary package and check its binary,
-symlink, and service-unit paths. The package owns both the `/opt/nando/bin/`
-executables and `/usr/bin/` symlinks through dpkg metadata; maintainer scripts
-do not create unmanaged command links.
+symlink, and service-unit paths. The package owns both adapter files in
+`/opt/nando/libexec`, `nando` in `/opt/nando/bin`, and the `/usr/bin/nando`
+symlink through dpkg metadata; maintainer scripts do not create unmanaged
+command links.
 
 The package creates and retains a non-login `nando` system account for the
 experimental system template. Install/upgrade do not enable, start, or restart

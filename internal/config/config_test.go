@@ -68,7 +68,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, section := range []string{"[repository]", "[logging]", "[remote]", "[daemon]", "[recovery]"} {
+	for _, section := range []string{"[repository]", "[logging]", "[remote]", "[daemon]", "[recovery]", "[fuse]", "[webdav]"} {
 		if !strings.Contains(string(sampleBytes), section) {
 			t.Errorf("sample is missing config section %q", section)
 		}
@@ -78,16 +78,19 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 			t.Errorf("sample is missing active config key %q", key)
 		}
 	}
-	for _, key := range []string{"path", "verbose", "listen", "token", "token_from_file", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory"} {
+	for _, key := range []string{"path", "verbose", "listen", "token", "token_from_file", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory", "mountpoint"} {
 		if !strings.Contains(string(sampleBytes), "# "+key+" =") {
 			t.Errorf("sample is missing commented supported config key %q", key)
 		}
+	}
+	if !strings.Contains(string(sampleBytes), "# listen = \"127.0.0.1:8080\"") {
+		t.Error("sample is missing the commented WebDAV listen setting")
 	}
 	// Enable every sample value that can be used together. Token sources are
 	// mutually exclusive, so choose token_from_env and leave the other examples
 	// commented. This checks the documented options decode in their shown tables.
 	enabledSample := string(sampleBytes)
-	for _, key := range []string{"path", "verbose", "listen", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory"} {
+	for _, key := range []string{"path", "verbose", "listen", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory", "mountpoint"} {
 		enabledSample = strings.ReplaceAll(enabledSample, "# "+key+" =", key+" =")
 	}
 	enabledPath := filepath.Join(t.TempDir(), "enabled-config.toml")

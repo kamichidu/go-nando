@@ -1,52 +1,53 @@
 package main
 
 import (
-	"flag"
+	"context"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/kamichidu/go-flagshim"
 	fusefs "github.com/kamichidu/go-nando/adapters/fuse"
 	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/runtimeconfig"
 )
 
-func main() {
-	if err := run(os.Args[1:]); err != nil {
-		log.Fatal(err)
-	}
+type flags struct{ Config, Repository, DaemonListen, DaemonTokenFile, DaemonCACert, Mountpoint string }
+type command struct{ options flags }
+
+func (*command) Name() string { return "nando-fuse" }
+func (c *command) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) context.Context {
+	fs.StringVar(&c.options.Config, "config", "", "configuration file path")
+	fs.StringVar(&c.options.Repository, "repository", "", "repository directory")
+	fs.StringVar(&c.options.DaemonListen, "daemon-listen", "", "daemon control listen address")
+	fs.StringVar(&c.options.DaemonTokenFile, "daemon-token-file", "", "private bearer-token file")
+	fs.StringVar(&c.options.DaemonCACert, "daemon-ca-cert", "", "CA certificate PEM for daemon TLS")
+	fs.StringVar(&c.options.Mountpoint, "fuse-mountpoint", "", "directory to mount")
+	return ctx
 }
-
-func run(args []string) error { return runWithOutput(args, os.Stderr) }
-
-func runWithOutput(args []string, output io.Writer) error {
-	var endpoint, repoDir, mountpoint, tokenFile, caFile, configFile string
-	fs := flag.NewFlagSet("nando-fuse", flag.ContinueOnError)
-	fs.SetOutput(output)
-	fs.StringVar(&endpoint, "endpoint", "", "daemon control endpoint")
-	fs.StringVar(&repoDir, "repository", "", "repository path used to derive the default daemon endpoint")
-	fs.StringVar(&mountpoint, "mountpoint", "", "directory to mount")
-	fs.StringVar(&tokenFile, "token-file", "", "optional bearer token file")
-	fs.StringVar(&caFile, "ca-file", "", "optional daemon CA certificate PEM for TCP")
-	fs.StringVar(&configFile, "config", "", "configuration file path")
-	if err := fs.Parse(args); err != nil {
-		return err
+func (c *command) Run(ctx context.Context, args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("nando-fuse accepts no positional arguments")
 	}
-	if mountpoint == "" {
-		return fmt.Errorf("-mountpoint is required")
-	}
-	cfg, _, err := runtimeconfig.Load(configFile)
+	o := c.options
+	cfg, _, err := runtimeconfig.Load(o.Config)
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
-	repoDir, err = runtimeconfig.ResolveRepositoryPath(cfg, repoDir)
+	repoDir, err := runtimeconfig.ResolveRepositoryPath(cfg, o.Repository)
 	if err != nil {
 		return err
 	}
-	clientConfig, err := runtimeconfig.ResolveClientConfig(cfg, repoDir, runtimeconfig.ClientOptions{Endpoint: endpoint, TokenFile: tokenFile, CACert: caFile})
+	mountpoint := o.Mountpoint
+	if mountpoint == "" {
+		mountpoint = cfg.Fuse.Mountpoint
+	}
+	if mountpoint == "" {
+		return fmt.Errorf("--fuse-mountpoint is required (or set [fuse].mountpoint)")
+	}
+	clientConfig, err := runtimeconfig.ResolveClientConfig(cfg, repoDir, runtimeconfig.ClientOptions{Endpoint: o.DaemonListen, TokenFile: o.DaemonTokenFile, CACert: o.DaemonCACert})
 	if err != nil {
 		return err
 	}
@@ -54,8 +55,7 @@ func runWithOutput(args []string, output io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("create daemon client: %w", err)
 	}
-	filesystem := fusefs.New(client)
-	server, err := filesystem.Mount(mountpoint, nil)
+	server, err := fusefs.New(client).Mount(mountpoint, nil)
 	if err != nil {
 		return fmt.Errorf("mount FUSE filesystem: %w", err)
 	}
@@ -68,6 +68,9 @@ func runWithOutput(args []string, output io.Writer) error {
 		}
 	}()
 	server.Wait()
-	fmt.Fprintln(output, "FUSE filesystem unmounted")
+	fmt.Fprintln(flagshim.MustStdoutFromContext(ctx), "FUSE filesystem unmounted")
 	return nil
+}
+func main() {
+	os.Exit(flagshim.Run(context.Background(), os.Stdin, os.Stdout, os.Stderr, &command{}, os.Args))
 }

@@ -104,7 +104,7 @@ def rpc_call(method: str, params: dict | None = None, timeout: float = 20.0):
 
 def rpc_cli(args: list[str], *, timeout: float = 30.0, check: bool = True) -> subprocess.CompletedProcess:
     process = subprocess.Popen(
-        [NANDO_BIN, "--repository", REPOSITORY, "--daemon-endpoint", ENDPOINT, *args],
+        [NANDO_BIN, "--repository", REPOSITORY, "--daemon-listen", ENDPOINT, *args],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
@@ -124,7 +124,7 @@ def rpc_cli(args: list[str], *, timeout: float = 30.0, check: bool = True) -> su
 
 
 def nando(*args: str, timeout: float = 20.0, check: bool = True) -> subprocess.CompletedProcess:
-    argv = [NANDO_BIN, "--repository", REPOSITORY, "--daemon-endpoint", ENDPOINT, *args]
+    argv = [NANDO_BIN, "--repository", REPOSITORY, "--daemon-listen", ENDPOINT, *args]
     process = subprocess.Popen(
         argv,
         stdout=subprocess.PIPE,
@@ -403,7 +403,7 @@ def fuse_mount(label: str):
     log_path = ARTIFACTS / f"nando-fuse-{label}.log"
     log_file = log_path.open("ab", buffering=0)
     process = subprocess.Popen(
-        [FUSE_BIN, "-endpoint", ENDPOINT, "-mountpoint", mountpoint],
+        [FUSE_BIN, "--daemon-listen", ENDPOINT, "--fuse-mountpoint", mountpoint],
         stdin=subprocess.DEVNULL,
         stdout=log_file,
         stderr=subprocess.STDOUT,
@@ -904,7 +904,7 @@ def g3_start_uncommitted() -> None:
         raise GateFailure("crash-test mountpoint was already mounted")
     log_file = (ARTIFACTS / "nando-fuse-g3-crash.log").open("ab", buffering=0)
     fuse = subprocess.Popen(
-        [FUSE_BIN, "-endpoint", ENDPOINT, "-mountpoint", mountpoint],
+        [FUSE_BIN, "--daemon-listen", ENDPOINT, "--fuse-mountpoint", mountpoint],
         stdin=subprocess.DEVNULL,
         stdout=log_file,
         stderr=subprocess.STDOUT,
@@ -1063,7 +1063,7 @@ def g3_verify_recovery() -> None:
         conflict_path = ARTIFACTS / "recovery-winner.bin"
         conflict_path.write_bytes(winner)
         put_winner = subprocess.run(
-            [NANDO_BIN, "--repository", REPOSITORY, "--daemon-endpoint", ENDPOINT, "put", str(conflict_path), "/recovery-conflict"],
+            [NANDO_BIN, "--repository", REPOSITORY, "--daemon-listen", ENDPOINT, "put", str(conflict_path), "/recovery-conflict"],
             text=True,
             capture_output=True,
             timeout=30,

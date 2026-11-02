@@ -21,9 +21,14 @@ error. Unknown TOML keys are rejected. The former top-level
 `[logging].verbose` respectively. CLI `--repository` and `--verbose` remain
 available and override their TOML settings. `[repository].path`, `[daemon].listen`,
 and daemon token/CA settings are resolved consistently by all three binaries.
-FUSE retains `-mountpoint`. WebDAV's `-listen` is its own loopback HTTP bind
-address; it is independent of `[daemon].listen`, which selects the daemon
-control endpoint.
+The common flags are `--config`, `--repository`, `--daemon-listen`,
+`--daemon-token-file`, and `--daemon-ca-cert` on all three binaries.
+`--daemon-listen` and `[daemon].listen` select the control address consistently
+for the daemon and every client. Pass `--daemon-listen` before `daemon` when
+starting the daemon. FUSE uses `--fuse-mountpoint` over
+`[fuse].mountpoint`; WebDAV uses `--webdav-listen` over `[webdav].listen`,
+whose default is `127.0.0.1:8080`. WebDAV HTTP bind remains independent of the
+daemon control address.
 
 == Existing repositories
 

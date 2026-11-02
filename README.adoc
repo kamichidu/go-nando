@@ -33,7 +33,7 @@ Using a prebuilt release requires a supported operating system and architecture 
 
 == Installation
 
-Install the latest published Go module version with:
+Install the three independent Go modules with:
 
 [source,bash]
 ----
@@ -43,6 +43,12 @@ go install github.com/kamichidu/go-nando/adapters/webdav/cmd/nando-webdav@latest
 ----
 
 Ensure the Go binary directory is on `PATH`. To build from a checkout instead, run `go build ./cmd/nando` from the repository root. For Debian packages and the systemd user service, see the link:packaging/README.md[package and service guide].
+
+The Debian package exposes only `nando` in `/usr/bin`; run the optional
+adapters as `nando fuse` and `nando webdav`. Those subcommands resolve
+`nando-fuse` and `nando-webdav` from the package's sibling `../libexec`
+directory. Source builds can set `NANDO_LIBEXEC_DIR` to an explicit adapter
+directory for development and tests.
 
 == Quick Start
 
@@ -81,6 +87,11 @@ Optional `[daemon].listen` sets the daemon's listening address and the address
 CLI commands use to connect. If omitted, both use the repository-specific local
 Unix socket. The old `[daemon].endpoint` and top-level `daemon_endpoint` keys are
 rejected.
+
+The common `--daemon-listen` flag overrides `[daemon].listen` for all three
+binaries. Pass it before `daemon` when setting a listener on the command line.
+FUSE and WebDAV settings use `[fuse].mountpoint` / `--fuse-mountpoint` and
+`[webdav].listen` / `--webdav-listen` respectively.
 
 A minimal configuration file is:
 
