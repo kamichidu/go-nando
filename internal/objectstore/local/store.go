@@ -27,10 +27,10 @@ type Store struct {
 // ObjectInfo describes a committed Local object for capacity accounting.
 // NewStore initializes a new local ObjectStore.
 func NewStore(objectsDir, tempDir string, hasher content.Hasher) (*Store, error) {
-	if err := os.MkdirAll(objectsDir, 0755); err != nil {
+	if err := os.MkdirAll(objectsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create objects directory %q: %w", objectsDir, err)
 	}
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
+	if err := os.MkdirAll(tempDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create temp directory %q: %w", tempDir, err)
 	}
 	return &Store{

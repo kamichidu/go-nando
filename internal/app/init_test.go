@@ -31,7 +31,7 @@ func TestInitRepositoryPersistsDeliverySettingsAndDoesNotReconfigure(t *testing.
 
 func TestLoadRepositorySettingsDefaultsLegacyRepositoryToLocal(t *testing.T) {
 	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "objects"), 0755); err != nil {
+	if err := os.Mkdir(filepath.Join(root, "objects"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	got, err := LoadRepositorySettings(root)
@@ -44,7 +44,7 @@ func TestLoadLegacyGCSRepositorySettingsWithoutRewriting(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "repository.json")
 	legacy := `{"delivery_mode":"gcs","gcs_bucket":"existing-bucket"}`
-	if err := os.WriteFile(path, []byte(legacy), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got, err := LoadRepositorySettings(root)

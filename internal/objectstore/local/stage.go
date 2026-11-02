@@ -46,7 +46,7 @@ func (s *Store) BeginStage(ctx context.Context, operationID string) (objectstore
 		return nil, err
 	}
 	tempPath := s.operationStagePath(operationID)
-	file, err := os.OpenFile(tempPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+	file, err := os.OpenFile(tempPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("create operation staging file: %w", err)
 	}

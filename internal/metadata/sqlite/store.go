@@ -162,9 +162,9 @@ func insertRoot(ctx context.Context, tx *sql.Tx, now metadata.Timestamp) error {
 		INSERT INTO entries (
 			entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at
 		) VALUES (
-			'root', NULL, '', 'directory', NULL, 0, ?, 0755, '', 1, ?, ?
+			'root', NULL, '', 'directory', NULL, 0, ?, ?, '', 1, ?, ?
 		)
-	`, int64(now), int64(now), int64(now))
+	`, int64(now), 493, int64(now), int64(now))
 	if err != nil {
 		return fmt.Errorf("failed to create root entry: %w", err)
 	}

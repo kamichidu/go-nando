@@ -14,7 +14,7 @@ import (
 func TestExternalSubcommandUsesExplicitDirectoryAndReturnsStatus(t *testing.T) {
 	dir := t.TempDir()
 	adapter := filepath.Join(dir, "nando-demo")
-	if err := os.WriteFile(adapter, []byte("#!/bin/sh\nprintf '%s' \"$1\"\nexit 7\n"), 0700); err != nil {
+	if err := os.WriteFile(adapter, []byte("#!/bin/sh\nprintf '%s' \"$1\"\nexit 7\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("NANDO_LIBEXEC_DIR", dir)
@@ -48,7 +48,7 @@ func TestExternalSubcommandUsesExplicitDirectoryAndReturnsStatus(t *testing.T) {
 func TestExternalSubcommandFindsSiblingAdapterForGoInstallLayout(t *testing.T) {
 	binDir := t.TempDir()
 	adapter := filepath.Join(binDir, "nando-demo")
-	if err := os.WriteFile(adapter, []byte("#!/bin/sh\nprintf sibling\n"), 0700); err != nil {
+	if err := os.WriteFile(adapter, []byte("#!/bin/sh\nprintf sibling\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	var output strings.Builder
@@ -64,13 +64,13 @@ func TestExternalSubcommandFindsDebianLibexecLayout(t *testing.T) {
 	root := t.TempDir()
 	binDir := filepath.Join(root, "bin")
 	libexecDir := filepath.Join(root, "libexec")
-	if err := os.MkdirAll(binDir, 0700); err != nil {
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(libexecDir, 0700); err != nil {
+	if err := os.MkdirAll(libexecDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(libexecDir, "nando-demo"), []byte("#!/bin/sh\nprintf deb\n"), 0700); err != nil {
+	if err := os.WriteFile(filepath.Join(libexecDir, "nando-demo"), []byte("#!/bin/sh\nprintf deb\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	var output strings.Builder
@@ -87,7 +87,7 @@ func TestExternalSubcommandRejectsPathAndDoesNotUsePathSearch(t *testing.T) {
 		t.Fatal("path-like command accepted")
 	}
 	pathDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(pathDir, "nando-demo"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+	if err := os.WriteFile(filepath.Join(pathDir, "nando-demo"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", pathDir)

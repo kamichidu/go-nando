@@ -27,7 +27,7 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	}
 	settings = settings.Canonical()
 	// 1. Create root directory
-	if err := os.MkdirAll(repoDir, 0755); err != nil {
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create repository root directory: %w", err)
 	}
 	dbPath := filepath.Join(repoDir, "metadata.sqlite")
@@ -92,11 +92,11 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	}
 	// 3. Create object and staging directories after format acceptance.
 	objectsDir := filepath.Join(repoDir, "objects")
-	if err := os.MkdirAll(objectsDir, 0755); err != nil {
+	if err := os.MkdirAll(objectsDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create objects directory: %w", err)
 	}
 	tempDir := filepath.Join(repoDir, "temp")
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
+	if err := os.MkdirAll(tempDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
@@ -112,7 +112,7 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	}
 
 	if !dbExists {
-		file, err := os.OpenFile(settingsPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		file, err := os.OpenFile(settingsPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
 			return fmt.Errorf("create repository settings: %w", err)
 		}

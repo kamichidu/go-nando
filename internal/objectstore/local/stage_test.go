@@ -241,7 +241,7 @@ func TestCleanupCanRemoveCrossProcessStageWithoutRecreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	cleanupErr := store.CleanupStaging(context.Background(), operationID)
-	if err := os.WriteFile(releasePath, []byte("continue"), 0600); err != nil {
+	if err := os.WriteFile(releasePath, []byte("continue"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := command.Wait(); err != nil {
@@ -269,7 +269,7 @@ type signalStageReader struct {
 }
 
 func (r signalStageReader) Read(data []byte) (int, error) {
-	if err := os.WriteFile(r.readyPath, []byte("writing"), 0600); err != nil {
+	if err := os.WriteFile(r.readyPath, []byte("writing"), 0o600); err != nil {
 		return 0, err
 	}
 	deadline := time.Now().Add(5 * time.Second)

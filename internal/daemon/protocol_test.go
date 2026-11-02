@@ -44,8 +44,8 @@ func TestUnixJSONRPCClientRequiresBearerTokenWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertPermissionMode(t, parent, 0700)
-	assertPermissionMode(t, socketPath, 0600)
+	assertPermissionMode(t, parent, 0o700)
+	assertPermissionMode(t, socketPath, 0o600)
 	server := &http.Server{Handler: newHandler(echoAPI{}, "secret")}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
@@ -80,10 +80,10 @@ func TestUnixJSONRPCClientRequiresBearerTokenWhenConfigured(t *testing.T) {
 
 func TestUnixListenerRejectsSharedParentDirectory(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "shared")
-	if err := os.Mkdir(parent, 0755); err != nil {
+	if err := os.Mkdir(parent, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(parent, 0755); err != nil {
+	if err := os.Chmod(parent, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := listen(ListenConfig{Endpoint: "unix://" + filepath.Join(parent, "nando.sock")}); err == nil || !strings.Contains(err.Error(), "must be private") {
@@ -98,10 +98,10 @@ func TestDefaultEndpointRoundTripsThroughListenerAndClient(t *testing.T) {
 	runtimeDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	appDir := filepath.Join(runtimeDir, "nando")
-	if err := os.Mkdir(appDir, 0755); err != nil {
+	if err := os.Mkdir(appDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(appDir, 0755); err != nil {
+	if err := os.Chmod(appDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	endpoint, err := controlrpc.DefaultEndpoint(filepath.Join(t.TempDir(), "repo with spaces"))
@@ -111,7 +111,7 @@ func TestDefaultEndpointRoundTripsThroughListenerAndClient(t *testing.T) {
 	if !strings.HasPrefix(endpoint, "unix:") {
 		t.Fatalf("default endpoint is not a Unix URI: %q", endpoint)
 	}
-	assertPermissionMode(t, appDir, 0700)
+	assertPermissionMode(t, appDir, 0o700)
 	listener, err := listen(ListenConfig{Endpoint: endpoint})
 	if err != nil {
 		t.Fatalf("listen on DefaultEndpoint result %q: %v", endpoint, err)
@@ -124,7 +124,7 @@ func TestDefaultEndpointRoundTripsThroughListenerAndClient(t *testing.T) {
 	if socketPath == "" {
 		socketPath = parsed.Path
 	}
-	assertPermissionMode(t, socketPath, 0600)
+	assertPermissionMode(t, socketPath, 0o600)
 	server := &http.Server{Handler: newHandler(echoAPI{}, "")}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
@@ -221,10 +221,10 @@ func writeTestCertificate(t *testing.T) ([]byte, string, string) {
 	certPath, keyPath := filepath.Join(dir, "server.pem"), filepath.Join(dir, "server-key.pem")
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER})
-	if err := os.WriteFile(certPath, certPEM, 0600); err != nil {
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return certPEM, certPath, keyPath

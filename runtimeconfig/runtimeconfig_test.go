@@ -24,11 +24,11 @@ func TestLoadUsesSharedXDGPathAndExplicitMissingIsError(t *testing.T) {
 func TestResolveClientConfigPrecedenceTokenAndCA(t *testing.T) {
 	t.Setenv("RUNTIME_CONFIG_TEST_TOKEN", "from-env")
 	tokenFile := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenFile, []byte("from-file\n"), 0600); err != nil {
+	if err := os.WriteFile(tokenFile, []byte("from-file\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	caFile := filepath.Join(t.TempDir(), "ca.pem")
-	if err := os.WriteFile(caFile, []byte("ca-bytes"), 0600); err != nil {
+	if err := os.WriteFile(caFile, []byte("ca-bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct {

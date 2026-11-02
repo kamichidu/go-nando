@@ -17,7 +17,7 @@ import (
 
 func TestPropfindDoesNotAdvertiseUnsupportedLocks(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "file"), []byte("content"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "file"), []byte("content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	handler := &Handler{dav: &webdav.Handler{FileSystem: webdav.Dir(root), LockSystem: webdav.NewMemLS()}}

@@ -46,7 +46,7 @@ func TestLoadOptionalConfigMissingExplicitMalformedAndDefault(t *testing.T) {
 		t.Fatal("missing explicit config was accepted")
 	}
 	bad := filepath.Join(t.TempDir(), "bad.toml")
-	if err := os.WriteFile(bad, []byte("[repository]\npath = ["), 0600); err != nil {
+	if err := os.WriteFile(bad, []byte("[repository]\npath = ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := LoadOptionalConfig(bad); err == nil {
@@ -94,7 +94,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 		enabledSample = strings.ReplaceAll(enabledSample, "# "+key+" =", key+" =")
 	}
 	enabledPath := filepath.Join(t.TempDir(), "enabled-config.toml")
-	if err := os.WriteFile(enabledPath, []byte(enabledSample), 0600); err != nil {
+	if err := os.WriteFile(enabledPath, []byte(enabledSample), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	enabled, err := LoadConfig(enabledPath)
@@ -145,7 +145,7 @@ func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.toml")
-			if err := os.WriteFile(path, []byte(test.text), 0600); err != nil {
+			if err := os.WriteFile(path, []byte(test.text), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			cfg, err := LoadConfig(path)
@@ -159,7 +159,7 @@ func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
 		"[daemon]\nendpoint = \"tcp://host:7443\"\n",
 	} {
 		path := filepath.Join(t.TempDir(), "ambiguous.toml")
-		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "unknown configuration keys") {
@@ -167,7 +167,7 @@ func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
 		}
 	}
 	path := filepath.Join(t.TempDir(), "ambiguous.toml")
-	if err := os.WriteFile(path, []byte("daemon_tls_key = \"key.pem\"\n[daemon]\ntls_key = \"\"\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("daemon_tls_key = \"key.pem\"\n[daemon]\ntls_key = \"\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "both set") {
@@ -184,7 +184,7 @@ func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
 		"daemon_token_file = \"\"\n[daemon]\ntoken = \"secret-value\"\n",
 	} {
 		path := filepath.Join(t.TempDir(), "conflicting-token-sources.toml")
-		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := LoadConfig(path); err == nil || strings.Contains(err.Error(), "secret-value") || !strings.Contains(err.Error(), "mutually exclusive") {
@@ -199,7 +199,7 @@ func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
 		"daemon_token_file = \"\"\n",
 	} {
 		path := filepath.Join(t.TempDir(), "empty-token-source.toml")
-		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := LoadConfig(path); err != nil {
@@ -229,7 +229,7 @@ func TestGCSSchedulerPolicyRequiresExplicitCompletePositiveSettings(t *testing.T
 func TestRemoteSchedulerConfigReadsCanonicalKeys(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	contents := "[remote]\nsync_idle_interval = \"250ms\"\nsync_periodic_interval = \"1s\"\nmax_delivery_delay = \"5s\"\nsync_parallelism = 3\n"
-	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadConfig(path)
@@ -257,7 +257,7 @@ func TestRemoteSchedulerConfigRejectsLegacyKeys(t *testing.T) {
 		"gcs_max_delivery_delay = \"5s\"\n",
 		"gcs_sync_parallelism = 2\n",
 	} {
-		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := LoadConfig(path); err == nil || (!strings.Contains(err.Error(), "unknown configuration keys") && !strings.Contains(err.Error(), "type mismatch")) {
@@ -268,7 +268,7 @@ func TestRemoteSchedulerConfigRejectsLegacyKeys(t *testing.T) {
 
 func TestLoadConfigRejectsUnknownKeys(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "unknown.toml")
-	if err := os.WriteFile(path, []byte("[logging]\nverbose = true\ninert_key = 1\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("[logging]\nverbose = true\ninert_key = 1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "inert_key") {
@@ -283,14 +283,14 @@ func TestLoadConfigRequiresRepositoryAndLoggingTables(t *testing.T) {
 		"verbose = true\n",
 		"repository = \"/old/path\"\nverbose = true\n",
 	} {
-		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := LoadConfig(path); err == nil || (!strings.Contains(err.Error(), "unknown configuration keys") && !strings.Contains(err.Error(), "type mismatch")) {
 			t.Errorf("old top-level config keys accepted: %q err=%v", contents, err)
 		}
 	}
-	if err := os.WriteFile(path, []byte("[repository]\npath = \"/new/path\"\n[logging]\nverbose = true\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("[repository]\npath = \"/new/path\"\n[logging]\nverbose = true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadConfig(path)
@@ -304,7 +304,7 @@ func TestGCSRecoveryDirectoryConfig(t *testing.T) {
 		t.Fatalf("default recovery directory=%q", got)
 	}
 	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte("[recovery]\ndirectory = \"/lost+found\"\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("[recovery]\ndirectory = \"/lost+found\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadConfig(path)

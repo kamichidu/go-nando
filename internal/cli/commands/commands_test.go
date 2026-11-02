@@ -109,7 +109,7 @@ func TestPutUsesDaemonResourceSession(t *testing.T) {
 	}
 
 	source := filepath.Join(t.TempDir(), "source.txt")
-	if err := os.WriteFile(source, []byte("CLI daemon client payload"), 0600); err != nil {
+	if err := os.WriteFile(source, []byte("CLI daemon client payload"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	stdout.Reset()
@@ -148,11 +148,11 @@ func TestPutUsesDaemonResourceSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(staleURL.Path, []byte("stale recoverable edit"), 0600); err != nil {
+	if err := os.WriteFile(staleURL.Path, []byte("stale recoverable edit"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	winner := filepath.Join(t.TempDir(), "winner")
-	if err := os.WriteFile(winner, []byte("new committed revision"), 0600); err != nil {
+	if err := os.WriteFile(winner, []byte("new committed revision"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "put", winner, "/from-cli.txt"}); code != 0 {
@@ -249,14 +249,14 @@ func TestInitAcceptsGenericAndLegacyRemoteFlags(t *testing.T) {
 func TestTOMLConfigSelectsRepositoryAndSharedDaemonEndpoint(t *testing.T) {
 	repoDir := filepath.Join(t.TempDir(), "configured-repository")
 	socketDir := filepath.Join(t.TempDir(), "socket")
-	if err := os.Mkdir(socketDir, 0700); err != nil {
+	if err := os.Mkdir(socketDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	// Use a test-owned absolute socket path as the configured endpoint.
 	endpoint := "unix://" + filepath.Join(socketDir, "configured.sock")
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	configText := fmt.Sprintf("[repository]\npath = %q\n[logging]\nverbose = true\n[daemon]\nlisten = %q\n", repoDir, endpoint)
-	if err := os.WriteFile(configPath, []byte(configText), 0600); err != nil {
+	if err := os.WriteFile(configPath, []byte(configText), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
@@ -305,7 +305,7 @@ func TestTOMLConfigSelectsRepositoryAndSharedDaemonEndpoint(t *testing.T) {
 		t.Fatalf("daemon did not listen on TOML endpoint %q: %v", endpoint, err)
 	}
 	source := filepath.Join(t.TempDir(), "input.txt")
-	if err := os.WriteFile(source, []byte("TOML config integration"), 0600); err != nil {
+	if err := os.WriteFile(source, []byte("TOML config integration"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	stdout.Reset()
@@ -376,7 +376,7 @@ func TestTOMLConfigTCPAuthenticationAndTLS(t *testing.T) {
 	}
 	configPath := filepath.Join(t.TempDir(), "tcp-config.toml")
 	configText := fmt.Sprintf("[repository]\npath = %q\n[logging]\nverbose = false\n[daemon]\nlisten = %q\ntoken_from_env = \"NANDO_TEST_DAEMON_TOKEN\"\nca_cert = %q\ntls_cert = %q\ntls_key = %q\n", repoDir, endpoint, certPath, certPath, keyPath)
-	if err := os.WriteFile(configPath, []byte(configText), 0600); err != nil {
+	if err := os.WriteFile(configPath, []byte(configText), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
@@ -398,7 +398,7 @@ func TestTOMLConfigTCPAuthenticationAndTLS(t *testing.T) {
 		}
 	}()
 	source := filepath.Join(t.TempDir(), "input")
-	if err := os.WriteFile(source, []byte("TLS configured Resource"), 0600); err != nil {
+	if err := os.WriteFile(source, []byte("TLS configured Resource"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -443,10 +443,10 @@ func writeCommandTestCertificate(t *testing.T) ([]byte, string, string) {
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	dir := t.TempDir()
 	certPath, keyPath := filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key")
-	if err := os.WriteFile(certPath, certPEM, 0600); err != nil {
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return certPEM, certPath, keyPath

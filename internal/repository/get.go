@@ -40,7 +40,7 @@ func (r *Repository) get(ctx context.Context, repoPath string, localPath string)
 
 func (r *Repository) getWithEntry(ctx context.Context, operationID string, entry metadata.Entry, localPath string) (retErr error) {
 	parentDir := filepath.Dir(localPath)
-	if err := os.MkdirAll(parentDir, 0755); err != nil {
+	if err := os.MkdirAll(parentDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create local destination directory %q: %w", parentDir, err)
 	}
 	destinationExists, err := validateDestination(localPath)

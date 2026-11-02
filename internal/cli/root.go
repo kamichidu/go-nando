@@ -187,7 +187,7 @@ func runExternalSubcommandInDirs(args, dirs []string, stdout io.Writer) error {
 		if err != nil {
 			continue
 		}
-		if !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
+		if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
 			return fmt.Errorf("adapter %q is not an executable regular file", candidate)
 		}
 		path = candidate

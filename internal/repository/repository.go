@@ -172,7 +172,7 @@ func (r *Repository) resolveOrCreateParentDirectories(ctx context.Context, repoP
 					ObjectID:    nil,
 					Size:        0,
 					Mtime:       now,
-					Mode:        0755,
+					Mode:        0o755,
 					ContentType: "",
 					Revision:    1,
 					CreatedAt:   now,
@@ -445,7 +445,7 @@ func (r *Repository) restoreRemoteOrphan(ctx context.Context, remoteObject objec
 	_, err = r.metaStore.Create(leaseCtx, metadata.Entry{
 		ID: metadata.EntryID(uuid.NewString()), ParentID: &parent.ID, Name: name,
 		Kind: metadata.EntryKindFile, ObjectID: &objectID, MD5: append([]byte(nil), remoteObject.MD5...),
-		Size: remoteObject.Size, Mtime: now, Mode: 0644, ContentType: "application/octet-stream",
+		Size: remoteObject.Size, Mtime: now, Mode: 0o644, ContentType: "application/octet-stream",
 		Revision: 1, CreatedAt: now, UpdatedAt: now,
 	})
 	if errors.Is(err, metadata.ErrEntryConflict) {
@@ -477,7 +477,7 @@ func (r *Repository) ensureRecoveryDirectory(ctx context.Context, directory stri
 		if !errors.Is(err, metadata.ErrEntryNotFound) {
 			return metadata.Entry{}, err
 		}
-		if err := r.Mkdir(ctx, logical, 0755); err != nil && !errors.Is(err, metadata.ErrEntryConflict) {
+		if err := r.Mkdir(ctx, logical, 0o755); err != nil && !errors.Is(err, metadata.ErrEntryConflict) {
 			return metadata.Entry{}, fmt.Errorf("create %s: %w", logical, err)
 		}
 		entry, err = r.ResolvePath(ctx, logical)
@@ -506,7 +506,7 @@ func (r *Repository) ensureRecyclebin(ctx context.Context) (metadata.Entry, erro
 	if !errors.Is(err, metadata.ErrEntryNotFound) {
 		return metadata.Entry{}, err
 	}
-	if err := r.Mkdir(ctx, "/recyclebin", 0755); err != nil && !errors.Is(err, metadata.ErrEntryConflict) {
+	if err := r.Mkdir(ctx, "/recyclebin", 0o755); err != nil && !errors.Is(err, metadata.ErrEntryConflict) {
 		return metadata.Entry{}, fmt.Errorf("create /recyclebin: %w", err)
 	}
 	entry, err = r.metaStore.GetChild(ctx, root.ID, "recyclebin")

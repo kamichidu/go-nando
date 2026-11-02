@@ -262,12 +262,12 @@ func TestLegacyStableEntryRecoveryRestoresObjectIDOnlyAtOriginalRevision(t *test
 			fake := &fakeRepositoryUseCases{entry: &current}
 			root := t.TempDir()
 			directory := filepath.Join(root, "temp", "rpc-sessions")
-			if err := os.MkdirAll(directory, 0700); err != nil {
+			if err := os.MkdirAll(directory, 0o700); err != nil {
 				t.Fatal(err)
 			}
 			sessionID := "8f557f3d-e540-481f-87a9-5fd974137fba"
 			stage := filepath.Join(directory, sessionID+".stage")
-			if err := os.WriteFile(stage, []byte("recoverable"), 0600); err != nil {
+			if err := os.WriteFile(stage, []byte("recoverable"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			zeroObjectID := content.ID{}
@@ -325,7 +325,7 @@ func TestResourceSessionsExpireRenewAndPersistRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := resourcePathFromURI(t, begin.ResourceURI)
-	if err := os.WriteFile(stage, []byte("durable recovery bytes"), 0600); err != nil {
+	if err := os.WriteFile(stage, []byte("durable recovery bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	firstRenew, err := sessions.renew(begin.SessionID)
@@ -387,7 +387,7 @@ func TestResourceSessionsExpireRenewAndPersistRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	revokedStage := resourcePathFromURI(t, begin.ResourceURI)
-	if err := os.WriteFile(revokedStage, []byte("revoked but retained"), 0600); err != nil {
+	if err := os.WriteFile(revokedStage, []byte("revoked but retained"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := restartedService.Call(context.Background(), controlrpc.MethodRevoke, marshalTestJSON(t, map[string]string{"session_id": begin.SessionID})); err != nil {
@@ -412,7 +412,7 @@ func TestDaemonRestartPromotesActiveStagingToRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	stagePath := resourcePathFromURI(t, result.ResourceURI)
-	if err := os.WriteFile(stagePath, []byte("survive daemon crash"), 0600); err != nil {
+	if err := os.WriteFile(stagePath, []byte("survive daemon crash"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// Stop only the in-memory expiry loop to model process loss before its
@@ -463,7 +463,7 @@ func TestRecoveryRetryAfterRepositoryRelocationUsesRootRelativeManifest(t *testi
 	}
 	stage := resourcePathFromURI(t, begin.ResourceURI)
 	want := []byte("recovery bytes survive a root move")
-	if err := os.WriteFile(stage, want, 0600); err != nil {
+	if err := os.WriteFile(stage, want, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := first.close(); err != nil {
@@ -490,7 +490,7 @@ func TestRecoveryRetryAfterRepositoryRelocationUsesRootRelativeManifest(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(manifestPath, manifestData, 0600); err != nil {
+	if err := os.WriteFile(manifestPath, manifestData, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	movedRoot := filepath.Join(t.TempDir(), "restored-repository")
@@ -554,7 +554,7 @@ func TestRecoveryManifestRejectsUnsafeStagingPathsAndSymlinks(t *testing.T) {
 				t.Fatal(err)
 			}
 			outside := filepath.Join(t.TempDir(), "outside")
-			if err := os.WriteFile(outside, []byte("do not read"), 0600); err != nil {
+			if err := os.WriteFile(outside, []byte("do not read"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.Symlink(outside, stage); err != nil {
@@ -565,7 +565,7 @@ func TestRecoveryManifestRejectsUnsafeStagingPathsAndSymlinks(t *testing.T) {
 			if err := os.Remove(stage); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.Mkdir(stage, 0700); err != nil {
+			if err := os.Mkdir(stage, 0o700); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -581,7 +581,7 @@ func TestRecoveryManifestRejectsUnsafeStagingPathsAndSymlinks(t *testing.T) {
 				t.Fatal(err)
 			}
 			stage := resourcePathFromURI(t, begin.ResourceURI)
-			if err := os.WriteFile(stage, []byte("data"), 0600); err != nil {
+			if err := os.WriteFile(stage, []byte("data"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			manager.mu.Lock()
@@ -595,7 +595,7 @@ func TestRecoveryManifestRejectsUnsafeStagingPathsAndSymlinks(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(manager.recordPath(begin.SessionID), recordData, 0600); err != nil {
+			if err := os.WriteFile(manager.recordPath(begin.SessionID), recordData, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour); err == nil {
@@ -607,7 +607,7 @@ func TestRecoveryManifestRejectsUnsafeStagingPathsAndSymlinks(t *testing.T) {
 
 func TestRecoveryRejectsSymlinkedSessionDirectory(t *testing.T) {
 	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "temp"), 0700); err != nil {
+	if err := os.Mkdir(filepath.Join(root, "temp"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	outside := t.TempDir()
@@ -630,7 +630,7 @@ func TestLegacyRecoveryRequiresMatchingStageUnderRestoredRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := resourcePathFromURI(t, begin.ResourceURI)
-	if err := os.WriteFile(stage, []byte("current root bytes"), 0600); err != nil {
+	if err := os.WriteFile(stage, []byte("current root bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	manager.mu.Lock()
@@ -643,10 +643,10 @@ func TestLegacyRecoveryRequiresMatchingStageUnderRestoredRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldStage := filepath.Join(t.TempDir(), "old-root", "temp", "rpc-sessions", begin.SessionID+".stage")
-	if err := os.MkdirAll(filepath.Dir(oldStage), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(oldStage), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(oldStage, []byte("must never be opened"), 0600); err != nil {
+	if err := os.WriteFile(oldStage, []byte("must never be opened"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	record.Version = 1
@@ -655,7 +655,7 @@ func TestLegacyRecoveryRequiresMatchingStageUnderRestoredRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(manager.recordPath(begin.SessionID), data, 0600); err != nil {
+	if err := os.WriteFile(manager.recordPath(begin.SessionID), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour); err == nil || !strings.Contains(err.Error(), "inspect Recovery staging") {
@@ -678,7 +678,7 @@ func TestRestartCleansStagingWhoseCommitWasDurablyRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	stagePath := resourcePathFromURI(t, result.ResourceURI)
-	if err := os.WriteFile(stagePath, []byte("already committed"), 0600); err != nil {
+	if err := os.WriteFile(stagePath, []byte("already committed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	first.mu.Lock()
@@ -809,7 +809,7 @@ func TestRecoveryPreservationFailuresKeepBeginManifestAndStaging(t *testing.T) {
 				t.Fatal(err)
 			}
 			stage := resourcePathFromURI(t, result.ResourceURI)
-			if err := os.WriteFile(stage, []byte("recoverable payload"), 0600); err != nil {
+			if err := os.WriteFile(stage, []byte("recoverable payload"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			sessions.files = test.files
@@ -872,7 +872,7 @@ func TestExpiredSessionRetryReconcilesBeforeRepositoryPut(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := resourcePathFromURI(t, result.ResourceURI)
-	if err := os.WriteFile(stage, []byte("reconcile before retry"), 0600); err != nil {
+	if err := os.WriteFile(stage, []byte("reconcile before retry"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	sessions.files = failingSessionFiles{writeErr: errors.New("injected recovery rename failure"), writePhase: "rename"}
@@ -930,7 +930,7 @@ func TestDiscardTombstonePrecedesCleanupAndRestartFinishesPartialRemoval(t *test
 		t.Fatal(err)
 	}
 	stage := resourcePathFromURI(t, result.ResourceURI)
-	if err := os.WriteFile(stage, []byte("discard me"), 0600); err != nil {
+	if err := os.WriteFile(stage, []byte("discard me"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := sessions.commit(context.Background(), result.SessionID); !errors.Is(err, metadata.ErrEntryConflict) {
@@ -1006,7 +1006,7 @@ func TestAbortPersistenceFailureLeavesOriginalStateForRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := resourcePathFromURI(t, result.ResourceURI)
-	if err := os.WriteFile(stage, []byte("keep until abort intent is durable"), 0600); err != nil {
+	if err := os.WriteFile(stage, []byte("keep until abort intent is durable"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	sessions.files = failingSessionFiles{writeErr: errors.New("injected rename failure"), writePhase: "rename"}
@@ -1039,7 +1039,7 @@ func TestCloseRetriesDiscardCleanupWithoutAdvertisingRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := resourcePathFromURI(t, result.ResourceURI)
-	if err := os.WriteFile(stage, []byte("explicitly discarded"), 0600); err != nil {
+	if err := os.WriteFile(stage, []byte("explicitly discarded"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	sessions.mu.Lock()
@@ -1091,7 +1091,7 @@ func TestUncommittedReleasePreservesInsteadOfCommitting(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := resourcePathFromURI(t, result.ResourceURI)
-	if err := os.WriteFile(stage, []byte("uncommitted close"), 0600); err != nil {
+	if err := os.WriteFile(stage, []byte("uncommitted close"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := sessions.release(result.SessionID); err != nil {
@@ -1126,7 +1126,7 @@ func TestUnlinkedWriteResourceIsDiscardedInsteadOfRecovered(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := resourcePathFromURI(t, begin.ResourceURI)
-	if err := os.WriteFile(stage, []byte("private dirty bytes"), 0600); err != nil {
+	if err := os.WriteFile(stage, []byte("private dirty bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	params := marshalTestJSON(t, map[string]string{"session_id": begin.SessionID})
@@ -1139,7 +1139,7 @@ func TestUnlinkedWriteResourceIsDiscardedInsteadOfRecovered(t *testing.T) {
 	if err := sessions.commit(context.Background(), begin.SessionID); !errors.Is(err, errSessionClosed) {
 		t.Fatalf("unlinked write was commit eligible: %v", err)
 	}
-	if err := os.WriteFile(stage, []byte("post-unlink write remains private"), 0600); err != nil {
+	if err := os.WriteFile(stage, []byte("post-unlink write remains private"), 0o600); err != nil {
 		t.Fatalf("open unlinked handle could not continue private I/O: %v", err)
 	}
 	if records := sessions.listRecoveries(); len(records) != 0 {
@@ -1168,7 +1168,7 @@ func TestUnlinkedIntentSurvivesDaemonRestartWithoutRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := resourcePathFromURI(t, begin.ResourceURI)
-	if err := os.WriteFile(stage, []byte("unlinked private data"), 0600); err != nil {
+	if err := os.WriteFile(stage, []byte("unlinked private data"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := sessions.markUnlinked(begin.SessionID); err != nil {
@@ -1204,7 +1204,7 @@ func TestUnlinkRemovalFailureRetainsTombstoneForRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := resourcePathFromURI(t, begin.ResourceURI)
-	if err := os.WriteFile(stage, []byte("private"), 0600); err != nil {
+	if err := os.WriteFile(stage, []byte("private"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := sessions.markUnlinked(begin.SessionID); err != nil {
@@ -1264,7 +1264,7 @@ func TestCommitAndExpirySerializeAndCommitFailureIsRecoverable(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := resourcePathFromURI(t, begin.ResourceURI)
-	if err := os.WriteFile(stage, []byte("commit wins"), 0600); err != nil {
+	if err := os.WriteFile(stage, []byte("commit wins"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	commitDone := make(chan error, 1)
@@ -1299,7 +1299,7 @@ func TestCommitAndExpirySerializeAndCommitFailureIsRecoverable(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage = resourcePathFromURI(t, begin.ResourceURI)
-	if err := os.WriteFile(stage, []byte("stale edit"), 0600); err != nil {
+	if err := os.WriteFile(stage, []byte("stale edit"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	fake.mu.Lock()
@@ -1360,7 +1360,7 @@ func TestWriteResourceSessionCommitsAndReleasesViaControlMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	resourcePath := resourcePathFromURI(t, begin.ResourceURI)
-	if err := os.WriteFile(resourcePath, []byte("session payload"), 0600); err != nil {
+	if err := os.WriteFile(resourcePath, []byte("session payload"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	sessionParams := marshalTestJSON(t, map[string]string{"session_id": begin.SessionID})
@@ -1406,7 +1406,7 @@ func TestWriteResourceSessionUsesRevisionCAS(t *testing.T) {
 		t.Fatal(err)
 	}
 	resourcePath := resourcePathFromURI(t, begin.ResourceURI)
-	if err := os.WriteFile(resourcePath, []byte("new"), 0600); err != nil {
+	if err := os.WriteFile(resourcePath, []byte("new"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	fake.mu.Lock()

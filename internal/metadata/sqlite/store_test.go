@@ -56,6 +56,9 @@ func TestSQLiteStore(t *testing.T) {
 		if root.Kind != metadata.EntryKindDirectory {
 			t.Errorf("expected root kind 'directory', got %q", root.Kind)
 		}
+		if root.Mode != 0o755 {
+			t.Errorf("expected root mode 0o755 (%d), got %d", 0o755, root.Mode)
+		}
 	})
 
 	t.Run("Create and Get child successfully", func(t *testing.T) {
@@ -78,7 +81,7 @@ func TestSQLiteStore(t *testing.T) {
 			ObjectID:    &oid,
 			Size:        100,
 			Mtime:       now,
-			Mode:        0644,
+			Mode:        0o644,
 			ContentType: "application/pdf",
 			Revision:    1,
 			CreatedAt:   now,
@@ -1672,7 +1675,7 @@ func TestSQLiteStore(t *testing.T) {
 			ObjectID:    &oid,
 			Size:        12345,
 			Mtime:       now,
-			Mode:        0644,
+			Mode:        0o644,
 			ContentType: "text/plain",
 			Revision:    1,
 			CreatedAt:   now,
@@ -2442,7 +2445,7 @@ func TestSQLiteStore(t *testing.T) {
 			Kind:        metadata.EntryKindFile,
 			Size:        10,
 			Mtime:       tsNow,
-			Mode:        0644,
+			Mode:        0o644,
 			ContentType: "text/plain",
 			Revision:    1,
 			CreatedAt:   tsNow,
@@ -2591,7 +2594,7 @@ func TestMetadataV1MigrationPreservesCommittedEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Create(ctx, metadata.Entry{ID: "existing", ParentID: &root.ID, Name: "kept", Kind: metadata.EntryKindDirectory, Revision: 1, Mode: 0755}); err != nil {
+	if _, err := store.Create(ctx, metadata.Entry{ID: "existing", ParentID: &root.ID, Name: "kept", Kind: metadata.EntryKindDirectory, Revision: 1, Mode: 0o755}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.ExecContext(ctx, "DROP TABLE transfer_queue; DELETE FROM schema_migrations WHERE version=2"); err != nil {

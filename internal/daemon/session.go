@@ -135,7 +135,7 @@ func newSessionManagerWithTTL(application repositoryUseCases, repoDir string, tt
 		return nil, fmt.Errorf("resolve Repository root symlinks: %w", err)
 	}
 	directory := filepath.Join(root, "temp", "rpc-sessions")
-	if err := os.MkdirAll(directory, 0700); err != nil {
+	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, fmt.Errorf("create daemon Resource session directory: %w", err)
 	}
 	if err := validateSessionDirectories(root, directory); err != nil {
@@ -219,7 +219,7 @@ func (m *sessionManager) beginWriteEntry(ctx context.Context, entryID metadata.E
 func (m *sessionManager) createWriteSession(normalized string, expectation repository.PutExpectation, observedEntry metadata.Entry, followID bool) (controlrpc.BeginWriteResult, error) {
 	id := uuid.NewString()
 	resourcePath := filepath.Join(m.directory, id+".stage")
-	file, err := os.OpenFile(resourcePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+	file, err := os.OpenFile(resourcePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		return controlrpc.BeginWriteResult{}, fmt.Errorf("create mutable Resource: %w", err)
 	}

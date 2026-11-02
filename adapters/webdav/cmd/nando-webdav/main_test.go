@@ -19,7 +19,7 @@ func TestRunRepositoryFlagOverridesConfiguredRepository(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	configFile := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(configFile, []byte("[repository]\npath = \"/configured/repository\"\n[daemon]\nlisten = \"unix:/configured/socket\"\n"), 0600); err != nil {
+	if err := os.WriteFile(configFile, []byte("[repository]\npath = \"/configured/repository\"\n[daemon]\nlisten = \"unix:/configured/socket\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	c := &command{options: flags{Config: configFile, Repository: t.TempDir(), Listen: "invalid"}}

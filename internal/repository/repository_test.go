@@ -107,7 +107,7 @@ func TestResourceLeasesProtectPutAndReadsFromGC(t *testing.T) {
 	putRepo := openRepositoryInstance(t, tempDir, putMetaStore, baseObjects, hasher)
 	gcRepo := openRepositoryInstance(t, tempDir, openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx), baseObjects, hasher)
 	sourcePath := filepath.Join(tempDir, "new.txt")
-	if err := os.WriteFile(sourcePath, []byte("new object"), 0600); err != nil {
+	if err := os.WriteFile(sourcePath, []byte("new object"), 0o600); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
 
@@ -196,7 +196,7 @@ func TestGCDeletesInvalidLocalObjectNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	invalidPath := filepath.Join(objectsDir, "partial-upload")
-	if err := os.WriteFile(invalidPath, []byte("incomplete"), 0600); err != nil {
+	if err := os.WriteFile(invalidPath, []byte("incomplete"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	repo := openRepositoryInstance(t, root, metaStore, objects, hasher)
@@ -325,7 +325,7 @@ func TestGCSOrphanRecoveryPreservesConflictingRecyclebinPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: 3, Generation: 41}}}, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBucket: "test"})
-	if err := repo.Mkdir(ctx, "/recyclebin", 0755); err != nil {
+	if err := repo.Mkdir(ctx, "/recyclebin", 0o755); err != nil {
 		t.Fatal(err)
 	}
 	parent, err := repo.ResolvePath(ctx, "/recyclebin")
@@ -419,7 +419,7 @@ func TestGCSOrphanRecoverySerializesWithPutAndRechecksReferences(t *testing.T) {
 	recoveryRepo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBucket: "test"})
 	putRepo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBucket: "test"})
 	file := filepath.Join(root, "input")
-	if err := os.WriteFile(file, []byte("racing content"), 0600); err != nil {
+	if err := os.WriteFile(file, []byte("racing content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	start := make(chan struct{})
@@ -533,7 +533,7 @@ func TestGCSModePutAtomicallyEnqueuesContentID(t *testing.T) {
 	remote := &fakeRemoteObjectStore{fail: true}
 	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(store), objects, remote, hasher, coordinator, settings)
 	source := filepath.Join(root, "input")
-	if err := os.WriteFile(source, []byte("queued gcs content"), 0600); err != nil {
+	if err := os.WriteFile(source, []byte("queued gcs content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Put(ctx, source, "/item"); err != nil {
@@ -609,7 +609,7 @@ func TestGCSReadThroughPublishesOnlyHashVerifiedLocalObject(t *testing.T) {
 	}
 	localRepo := openRepositoryInstance(t, root, metaStore, objects, hasher)
 	source := filepath.Join(root, "source")
-	if err := os.WriteFile(source, []byte("read-through bytes"), 0600); err != nil {
+	if err := os.WriteFile(source, []byte("read-through bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := localRepo.Put(ctx, source, "/file"); err != nil {
@@ -647,7 +647,7 @@ func TestGCSReadThroughPublishesOnlyHashVerifiedLocalObject(t *testing.T) {
 	}
 	remote.stored[id] = []byte("wrong content")
 	destination := filepath.Join(root, "export")
-	if err := os.WriteFile(destination, []byte("keep old file"), 0600); err != nil {
+	if err := os.WriteFile(destination, []byte("keep old file"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Get(ctx, "/file", destination); !errors.Is(err, objectstore.ErrHashMismatch) {
@@ -674,7 +674,7 @@ func TestCapacityGCOnlyEvictsConfirmedReferencedLocalCache(t *testing.T) {
 	localRepo := openRepositoryInstance(t, root, store, objects, hasher)
 	source := filepath.Join(root, "source")
 	data := []byte("cache bytes")
-	if err := os.WriteFile(source, data, 0600); err != nil {
+	if err := os.WriteFile(source, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := localRepo.Put(ctx, source, "/cached"); err != nil {
@@ -728,7 +728,7 @@ func TestCapacityGCPreservesCacheWhenGCSMD5IsMissingOrDifferent(t *testing.T) {
 			repoLocal := openRepositoryInstance(t, root, store, objects, hasher)
 			source := filepath.Join(root, "source")
 			data := []byte("md5 protected cache")
-			if err := os.WriteFile(source, data, 0600); err != nil {
+			if err := os.WriteFile(source, data, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			if err := repoLocal.Put(ctx, source, "/cached"); err != nil {
@@ -787,7 +787,7 @@ func TestCapacityGCPreservesUntransferredContent(t *testing.T) {
 	settings := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBucket: "bucket", MaxLocalBytes: 1}
 	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(store), objects, remote, hasher, coordinator, settings)
 	source := filepath.Join(root, "source")
-	if err := os.WriteFile(source, []byte("not transferred"), 0600); err != nil {
+	if err := os.WriteFile(source, []byte("not transferred"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Put(ctx, source, "/pending"); err != nil {
@@ -895,7 +895,7 @@ func TestPutStageRunsOutsideRepositoryWideExclusion(t *testing.T) {
 	}, hasher)
 	gcRepo := openRepositoryInstance(t, tempDir, openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx), baseObjects, hasher)
 	source := filepath.Join(tempDir, "stage-outside-lock.txt")
-	if err := os.WriteFile(source, []byte("stage does not hold repository lock"), 0600); err != nil {
+	if err := os.WriteFile(source, []byte("stage does not hold repository lock"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	putDone := make(chan error, 1)
@@ -1155,7 +1155,7 @@ func TestPutReplacementMetadataFailurePreservesOldEntryUntilGC(t *testing.T) {
 	}
 	workingRepo := openRepositoryInstance(t, tempDir, metaStore, objects, hasher)
 	oldPath := filepath.Join(tempDir, "old.txt")
-	if err := os.WriteFile(oldPath, []byte("old committed content"), 0600); err != nil {
+	if err := os.WriteFile(oldPath, []byte("old committed content"), 0o600); err != nil {
 		t.Fatalf("write old source: %v", err)
 	}
 	if err := workingRepo.Put(ctx, oldPath, "/item.txt"); err != nil {
@@ -1168,7 +1168,7 @@ func TestPutReplacementMetadataFailurePreservesOldEntryUntilGC(t *testing.T) {
 	oldID := *oldEntry.ObjectID
 
 	newPath := filepath.Join(tempDir, "new.txt")
-	if err := os.WriteFile(newPath, []byte("replacement content"), 0600); err != nil {
+	if err := os.WriteFile(newPath, []byte("replacement content"), 0o600); err != nil {
 		t.Fatalf("write replacement source: %v", err)
 	}
 	updateErr := errors.New("injected metadata update failure")
@@ -1318,7 +1318,7 @@ func TestRepository(t *testing.T) {
 		// Create a local file to put
 		localFile := filepath.Join(tempDir, "hello.txt")
 		contentBytes := []byte("hello nando integration test")
-		if err := os.WriteFile(localFile, contentBytes, 0600); err != nil {
+		if err := os.WriteFile(localFile, contentBytes, 0o600); err != nil {
 			t.Fatalf("failed to write test file: %v", err)
 		}
 
@@ -1347,7 +1347,7 @@ func TestRepository(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to stat restored file: %v", err)
 		}
-		if restoredStat.Mode().Perm() != 0600 {
+		if restoredStat.Mode().Perm() != 0o600 {
 			t.Errorf("expected mode 0600, got %o", restoredStat.Mode().Perm())
 		}
 	})
@@ -1357,11 +1357,11 @@ func TestRepository(t *testing.T) {
 
 		file1 := filepath.Join(tempDir, "file1.txt")
 		file2 := filepath.Join(tempDir, "file2.txt")
-		err := os.WriteFile(file1, []byte("shared content"), 0644)
+		err := os.WriteFile(file1, []byte("shared content"), 0o644)
 		if err != nil {
 			t.Fatalf("failed to write file1: %v", err)
 		}
-		err = os.WriteFile(file2, []byte("shared content"), 0644)
+		err = os.WriteFile(file2, []byte("shared content"), 0o644)
 		if err != nil {
 			t.Fatalf("failed to write file2: %v", err)
 		}
@@ -1402,7 +1402,7 @@ func TestRepository(t *testing.T) {
 		repo, tempDir, _ := setupRepo(t)
 
 		file := filepath.Join(tempDir, "source.txt")
-		err := os.WriteFile(file, []byte("rename test content"), 0644)
+		err := os.WriteFile(file, []byte("rename test content"), 0o644)
 		if err != nil {
 			t.Fatalf("failed to write test file: %v", err)
 		}
@@ -1440,7 +1440,7 @@ func TestRepository(t *testing.T) {
 		repo, tempDir, _ := setupRepo(t)
 
 		file := filepath.Join(tempDir, "delete_test.txt")
-		err := os.WriteFile(file, []byte("to be deleted"), 0644)
+		err := os.WriteFile(file, []byte("to be deleted"), 0o644)
 		if err != nil {
 			t.Fatalf("failed to write test file: %v", err)
 		}
@@ -1509,7 +1509,7 @@ func TestRepository(t *testing.T) {
 		repo := repository.NewRepository(metaStore, objStore, hasher, coordinator)
 
 		helloFile := filepath.Join(tempDir, "hello.txt")
-		err = os.WriteFile(helloFile, []byte("hello nando\n"), 0644)
+		err = os.WriteFile(helloFile, []byte("hello nando\n"), 0o644)
 		if err != nil {
 			t.Fatalf("failed to write local file: %v", err)
 		}
@@ -1551,7 +1551,7 @@ func TestRepository(t *testing.T) {
 
 		// 3. Replace file content /documents/hello.txt
 		sb.WriteString("OP: replace file content /documents/hello.txt\n")
-		err = os.WriteFile(helloFile, []byte(""), 0644)
+		err = os.WriteFile(helloFile, []byte(""), 0o644)
 		if err != nil {
 			t.Fatalf("failed to write empty file: %v", err)
 		}
