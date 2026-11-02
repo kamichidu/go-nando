@@ -3,36 +3,147 @@ version: '3'
 vars:
   BIN_DIR: .local/bin
   REPO_DIR: .local/lib/nando/repo
+  GO_VERSION:
+    sh: cat .go-version
+  GOLANGCI_LINT_VERSION: 2.15.0
 
 tasks:
-  default:
+  init:
+    desc: Initialize the local development environment and pinned tools
     cmds:
-      - task: vet
-      - task: test
-      - task: build
+      - |
+        set -eu
+        module_go_version="$(sed -n 's/^go //p' go.mod | head -n 1)"
+        if [ "$module_go_version" != "{{.GO_VERSION}}" ]; then
+          echo "error: .go-version ({{.GO_VERSION}}) does not match go.mod ($module_go_version)" >&2
+          exit 1
+        fi
+        if ! command -v anyenv >/dev/null 2>&1; then
+          echo "error: anyenv is required; install and initialize anyenv before running task init" >&2
+          exit 1
+        fi
+        if [ ! -f .envrc ]; then
+          if [ -f envrc.sample ]; then
+            cp envrc.sample .envrc
+          elif [ -f .envrc.sample ]; then
+            cp .envrc.sample .envrc
+          else
+            echo "error: neither envrc.sample nor .envrc.sample exists" >&2
+            exit 1
+          fi
+        fi
+        anyenv_root="$(anyenv root)"
+        if [ ! -x "$anyenv_root/envs/goenv/bin/goenv" ]; then
+          anyenv install goenv
+        fi
+        export PATH="$anyenv_root/envs/goenv/bin:$anyenv_root/envs/goenv/shims:$PATH"
+        export GOENV_ROOT="$anyenv_root/envs/goenv"
+        if ! goenv versions --bare | grep -Fxq '{{.GO_VERSION}}'; then
+          goenv install '{{.GO_VERSION}}'
+        fi
+        goenv local '{{.GO_VERSION}}'
+        export PATH="$(goenv root)/shims:$(goenv root)/bin:$PATH"
+        export PATH="$(pwd)/{{.BIN_DIR}}:$PATH"
+        if [ "$(go version | awk '{print $3}')" != "go{{.GO_VERSION}}" ]; then
+          echo "error: goenv did not select Go {{.GO_VERSION}}" >&2
+          exit 1
+        fi
+        mkdir -p '{{.BIN_DIR}}'
+        export GOBIN="$(pwd)/{{.BIN_DIR}}"
+        go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.3
+        installed_lint="$(command -v golangci-lint || true)"
+        if [ -n "$installed_lint" ] && golangci-lint version --short | grep -Eq '^{{.GOLANGCI_LINT_VERSION}}([+.-]|$)'; then
+          echo "Using golangci-lint $(golangci-lint version --short)"
+          if [ "$installed_lint" != "$(pwd)/{{.BIN_DIR}}/golangci-lint" ]; then
+            install -m 0755 "$installed_lint" "{{.BIN_DIR}}/golangci-lint"
+          fi
+        else
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) ;;
+            Linux-aarch64|Linux-arm64) ;;
+            Darwin-x86_64) ;;
+            Darwin-arm64) ;;
+            *) echo "error: no pinned golangci-lint binary for $(uname -s)/$(uname -m)" >&2; exit 1 ;;
+          esac
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+          installer="$temp_dir/install.sh"
+          curl --fail --location --silent --show-error "https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh" -o "$installer"
+          [ -s "$installer" ] || { echo "error: downloaded golangci-lint installer is empty" >&2; exit 1; }
+          sh "$installer" -b "$temp_dir/bin" "v{{.GOLANGCI_LINT_VERSION}}"
+          "$temp_dir/bin/golangci-lint" version --short | grep -Eq '^{{.GOLANGCI_LINT_VERSION}}([+.-]|$)' || { echo "error: golangci-lint version verification failed" >&2; exit 1; }
+          install -m 0755 "$temp_dir/bin/golangci-lint" "{{.BIN_DIR}}/golangci-lint"
+        fi
+        if ! grep -Fq 'anyenv root' .envrc || ! grep -Fq 'GOENV_ROOT' .envrc || ! grep -Fq '.local/bin' .envrc; then
+          echo "error: .envrc must load anyenv/goenv and add .local/bin to PATH; preserve your file and add the equivalent setup" >&2
+          exit 1
+        fi
+        echo "Development environment ready with Go {{.GO_VERSION}}. Run 'direnv allow' if direnv requests approval."
 
   build:
     desc: Build the nando CLI executable
+    deps: [init]
     cmds:
-      - go build -o {{.BIN_DIR}}/nando cmd/nando/main.go
-
-  init:
-    desc: Initialize local development environment
-    cmds:
-      - cp -nv envrc.sample .envrc
+      - mkdir -p {{.BIN_DIR}}
+      - |
+        set -eu
+        anyenv_root="$(anyenv root)"
+        export GOENV_ROOT="$anyenv_root/envs/goenv"
+        export PATH="$(pwd)/{{.BIN_DIR}}:$GOENV_ROOT/shims:$GOENV_ROOT/bin:$PATH"
+        test "$(go version | awk '{print $3}')" = "go{{.GO_VERSION}}" || { echo "error: project Go version is not selected" >&2; exit 1; }
+        go build -o {{.BIN_DIR}}/nando ./cmd/nando
 
   test:
     desc: Run unit and integration tests
+    deps: [init]
     cmds:
-      - go test ./...
+      - |
+        set -eu
+        anyenv_root="$(anyenv root)"
+        export GOENV_ROOT="$anyenv_root/envs/goenv"
+        export PATH="$(pwd)/{{.BIN_DIR}}:$GOENV_ROOT/shims:$GOENV_ROOT/bin:$PATH"
+        test "$(go version | awk '{print $3}')" = "go{{.GO_VERSION}}" || { echo "error: project Go version is not selected" >&2; exit 1; }
+        go test ./...
 
-  vet:
-    desc: Run static analysis checks (go vet)
+  lint:
+    desc: Run the repository-configured Go linter
+    deps: [init]
     cmds:
-      - go vet ./...
+      - .local/bin/golangci-lint config verify
+      - |
+        set -eu
+        anyenv_root="$(anyenv root)"
+        export GOENV_ROOT="$anyenv_root/envs/goenv"
+        export PATH="$(pwd)/{{.BIN_DIR}}:$GOENV_ROOT/shims:$GOENV_ROOT/bin:$PATH"
+        test "$(go version | awk '{print $3}')" = "go{{.GO_VERSION}}" || { echo "error: project Go version is not selected" >&2; exit 1; }
+        .local/bin/golangci-lint run ./...
+
+  check:
+    desc: Run tests and lint
+    cmds:
+      - task: test
+      - task: lint
+
+  e2e:
+    desc: Run the canonical host end-to-end gate
+    deps: [init]
+    cmds:
+      - PATH="$(pwd)/{{.BIN_DIR}}:$PATH" ./e2e/run.sh
+
+  package:
+    desc: Build a local Debian package with nfpm
+    deps: [init]
+    cmds:
+      - |
+        set -eu
+        export PATH="$(pwd)/{{.BIN_DIR}}:$PATH"
+        command -v nfpm >/dev/null 2>&1 || { echo "error: nfpm is required to build the Debian package" >&2; exit 1; }
+        command -v dpkg >/dev/null 2>&1 || { echo "error: dpkg is required to build the Debian package" >&2; exit 1; }
+      - packaging/build-deb.sh
 
   clean:
-    desc: Remove built binaries and output files
+    desc: Remove local build outputs and the development repository
     cmds:
       - rm -rf {{.BIN_DIR}}/
       - rm -rf {{.REPO_DIR}}/
+      - rm -rf .build/

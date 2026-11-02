@@ -11,6 +11,21 @@ e2e/run.sh
 
 Run the optional bounded writer stress profile with `e2e/run.sh --stress`.
 
+The Taskfile's `e2e` task delegates directly to `e2e/run.sh`; the runner remains
+the canonical owner of host prerequisite checks, PASS/FAIL/SKIP results, and
+cleanup evidence. `task init` requires a preinstalled anyenv,
+installs goenv and the Go version declared in `go.mod` when missing. It reuses
+a matching golangci-lint version or installs the pinned official binary; it
+does not build golangci-lint from source. The generated `.envrc` is never
+overwritten by initialization. `.go-version` pins goenv to the same version as
+the `go` directive in `go.mod`; init fails if they disagree. Init installs
+the pinned nfpm Go tool into `.local/bin` for local Debian package builds.
+
+The public Taskfile commands are `init`, `build`, `test`, `lint`, `check`,
+`e2e`, `package`, and `clean`. `check` runs tests and lint. `package` builds a
+local Debian package using `packaging/build-deb.sh` and requires `nfpm` and
+`dpkg`. Release and deployment remain owned by GitHub Actions.
+
 == Requirements and lifecycle
 
 The host needs Go 1.25.1, Python 3, curl, Docker Compose v2, `golangci-lint`, `fusermount3`, and a readable/writable `/dev/fuse` that permits a real host mount. The validator checkout must be at commit `455ed318b7bc409d3e1da320620ef92d457042b9`; set `DESIGN_IR_REPO` to its path if it is not `../design-ir`.

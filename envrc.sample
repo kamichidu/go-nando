@@ -1,3 +1,17 @@
 #!/bin/bash
 
-export PATH="${PATH}:$(pwd)/.local/bin"
+if ! command -v anyenv >/dev/null 2>&1; then
+	echo "anyenv is required for this project's Go toolchain" >&2
+	return 1
+fi
+
+export PATH="$(anyenv root)/bin:${PATH}"
+export PATH="$(anyenv root)/envs/goenv/bin:${PATH}"
+export GOENV_ROOT="$(anyenv root)/envs/goenv"
+export PATH="${GOENV_ROOT}/shims:${GOENV_ROOT}/bin:${PATH}"
+
+if [ -f .go-version ]; then
+	eval "$(goenv init -)"
+fi
+
+export PATH="$(pwd)/.local/bin:${PATH}"
