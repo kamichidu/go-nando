@@ -321,8 +321,17 @@ func (r *Repository) GC(ctx context.Context) (int, error) {
 // their names and bytes are never changed. Restored Entries use the Content ID
 // as their name under /recyclebin because their original names are unknown.
 func (r *Repository) RestoreGCSOrphans(ctx context.Context) (int, error) {
+	return r.RestoreGCSOrphansTo(ctx, "/recyclebin")
+}
+
+// RestoreGCSOrphansTo restores missing Entries under the configured logical directory.
+func (r *Repository) RestoreGCSOrphansTo(ctx context.Context, recoveryDirectory string) (int, error) {
 	if r.replica == nil {
 		return 0, errors.New("GCS orphan recovery requires a replica store")
+	}
+	normalized, err := paths.NormalizeLogicalPath(recoveryDirectory)
+	if err != nil || normalized == "/" {
+		return 0, fmt.Errorf("invalid GCS recovery directory %q", recoveryDirectory)
 	}
 	refs, err := r.metaStore.ReferencedObjectIDs(ctx)
 	if err != nil {
@@ -336,7 +345,7 @@ func (r *Repository) RestoreGCSOrphans(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("list GCS objects: %w", err)
 	}
-	parent, err := r.ensureRecyclebin(ctx)
+	parent, err := r.ensureRecoveryDirectory(ctx, normalized)
 	if err != nil {
 		return 0, err
 	}
@@ -354,7 +363,7 @@ func (r *Repository) RestoreGCSOrphans(ctx context.Context) (int, error) {
 			if existing.Kind == metadata.EntryKindFile && existing.ObjectID != nil && *existing.ObjectID == replica.ID {
 				continue
 			}
-			return recovered, fmt.Errorf("recyclebin path /recyclebin/%s is occupied by another Entry", name)
+			return recovered, fmt.Errorf("recovery path %s is occupied by another Entry", path.Join(normalized, name))
 		}
 		if !errors.Is(err, metadata.ErrEntryNotFound) {
 			return recovered, fmt.Errorf("check recyclebin path for %s: %w", name, err)
@@ -378,11 +387,42 @@ func (r *Repository) RestoreGCSOrphans(ctx context.Context) (int, error) {
 			}
 		}
 		if err != nil {
-			return recovered, fmt.Errorf("restore GCS object %s into /recyclebin: %w", name, err)
+			return recovered, fmt.Errorf("restore GCS object %s into %s: %w", name, normalized, err)
 		}
 		recovered++
 	}
 	return recovered, nil
+}
+
+func (r *Repository) ensureRecoveryDirectory(ctx context.Context, directory string) (metadata.Entry, error) {
+	current := ""
+	var entry metadata.Entry
+	for _, component := range strings.Split(strings.TrimPrefix(directory, "/"), "/") {
+		current = path.Join(current, component)
+		logical := "/" + current
+		var err error
+		entry, err = r.ResolvePath(ctx, logical)
+		if err == nil {
+			if entry.Kind != metadata.EntryKindDirectory {
+				return metadata.Entry{}, fmt.Errorf("%s exists and is not a directory", logical)
+			}
+			continue
+		}
+		if !errors.Is(err, metadata.ErrEntryNotFound) {
+			return metadata.Entry{}, err
+		}
+		if err := r.Mkdir(ctx, logical, 0755); err != nil && !errors.Is(err, metadata.ErrEntryConflict) {
+			return metadata.Entry{}, fmt.Errorf("create %s: %w", logical, err)
+		}
+		entry, err = r.ResolvePath(ctx, logical)
+		if err != nil || entry.Kind != metadata.EntryKindDirectory {
+			if err != nil {
+				return metadata.Entry{}, err
+			}
+			return metadata.Entry{}, fmt.Errorf("%s exists and is not a directory", logical)
+		}
+	}
+	return entry, nil
 }
 
 func (r *Repository) ensureRecyclebin(ctx context.Context) (metadata.Entry, error) {

@@ -19,3 +19,7 @@ daemon_token_file = ""
 daemon_ca_cert = ""
 daemon_tls_cert = ""
 daemon_tls_key = ""
+
+[recovery]
+# Logical destination for GCS orphan metadata recovery.
+directory = "/recyclebin"

@@ -203,6 +203,17 @@ func TestPutUsesDaemonResourceSession(t *testing.T) {
 	}
 }
 
+func TestAdminRecoverCommandNameAndArguments(t *testing.T) {
+	command := &commands.GCSOrphansCommand{}
+	if command.Name() != "admin" {
+		t.Fatalf("command name=%q", command.Name())
+	}
+	var stdout, stderr bytes.Buffer
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"admin", "unknown"}); code == 0 || !strings.Contains(stderr.String(), "nando admin recover") {
+		t.Fatalf("invalid admin command: code=%d stderr=%q", code, stderr.String())
+	}
+}
+
 func TestTOMLConfigSelectsRepositoryAndSharedDaemonEndpoint(t *testing.T) {
 	repoDir := filepath.Join(t.TempDir(), "configured-repository")
 	socketDir := filepath.Join(t.TempDir(), "socket")

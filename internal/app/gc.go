@@ -18,6 +18,11 @@ func (a *App) RestoreGCSOrphans(ctx context.Context) (int, error) {
 	return a.repo.RestoreGCSOrphans(ctx)
 }
 
+// RestoreGCSOrphansTo restores missing Entries under a configured logical directory.
+func (a *App) RestoreGCSOrphansTo(ctx context.Context, directory string) (int, error) {
+	return a.repo.RestoreGCSOrphansTo(ctx, directory)
+}
+
 // ProcessTransferQueue attempts pending GCS transfers once; failures remain queued.
 func (a *App) ProcessTransferQueue(ctx context.Context) error {
 	return a.repo.ProcessTransferQueue(ctx)

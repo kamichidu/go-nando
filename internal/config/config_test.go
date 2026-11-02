@@ -60,7 +60,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{}
+	want := Config{Recovery: RecoveryConfig{Directory: "/recyclebin"}}
 	if *cfg != want {
 		t.Fatalf("sample config=%+v, want documented effective defaults %+v", *cfg, want)
 	}
@@ -112,5 +112,19 @@ func TestLoadConfigRejectsUnknownKeys(t *testing.T) {
 	}
 	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "inert_key") {
 		t.Fatalf("unknown/inert setting was not rejected: %v", err)
+	}
+}
+
+func TestGCSRecoveryDirectoryConfig(t *testing.T) {
+	if got := (Config{}).GCSRecoveryDirectory(); got != "/recyclebin" {
+		t.Fatalf("default recovery directory=%q", got)
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[recovery]\ndirectory = \"/lost+found\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil || cfg.GCSRecoveryDirectory() != "/lost+found" {
+		t.Fatalf("configured recovery directory=%q err=%v", cfg.GCSRecoveryDirectory(), err)
 	}
 }

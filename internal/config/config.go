@@ -15,17 +15,31 @@ import (
 // Config represents per-user runtime configuration. Repository delivery
 // settings remain in the repository-owned repository.json file.
 type Config struct {
-	Repository              string `toml:"repository"`
-	Verbose                 bool   `toml:"verbose"`
-	DaemonEndpoint          string `toml:"daemon_endpoint"`
-	DaemonTokenFile         string `toml:"daemon_token_file"`
-	DaemonCACert            string `toml:"daemon_ca_cert"`
-	DaemonTLSCert           string `toml:"daemon_tls_cert"`
-	DaemonTLSKey            string `toml:"daemon_tls_key"`
-	GCSSyncIdleInterval     string `toml:"gcs_sync_idle_interval"`
-	GCSSyncPeriodicInterval string `toml:"gcs_sync_periodic_interval"`
-	GCSMaxDeliveryDelay     string `toml:"gcs_max_delivery_delay"`
-	GCSSyncParallelism      int    `toml:"gcs_sync_parallelism"`
+	Repository              string         `toml:"repository"`
+	Verbose                 bool           `toml:"verbose"`
+	DaemonEndpoint          string         `toml:"daemon_endpoint"`
+	DaemonTokenFile         string         `toml:"daemon_token_file"`
+	DaemonCACert            string         `toml:"daemon_ca_cert"`
+	DaemonTLSCert           string         `toml:"daemon_tls_cert"`
+	DaemonTLSKey            string         `toml:"daemon_tls_key"`
+	GCSSyncIdleInterval     string         `toml:"gcs_sync_idle_interval"`
+	GCSSyncPeriodicInterval string         `toml:"gcs_sync_periodic_interval"`
+	GCSMaxDeliveryDelay     string         `toml:"gcs_max_delivery_delay"`
+	GCSSyncParallelism      int            `toml:"gcs_sync_parallelism"`
+	Recovery                RecoveryConfig `toml:"recovery"`
+}
+
+// RecoveryConfig configures the logical destination for restored GCS metadata.
+type RecoveryConfig struct {
+	Directory string `toml:"directory"`
+}
+
+// GCSRecoveryDirectory returns the configured logical directory or its default.
+func (c Config) GCSRecoveryDirectory() string {
+	if c.Recovery.Directory == "" {
+		return "/recyclebin"
+	}
+	return c.Recovery.Directory
 }
 
 // GCSSchedulerSettings contains explicit daemon scheduler policy. Durations
