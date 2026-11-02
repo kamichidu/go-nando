@@ -1,0 +1,59 @@
+= Configuration
+
+nando reads an optional per-user TOML file. The default path is
+`${XDG_CONFIG_HOME:-~/.config}/nando/config.toml`; the default data directory
+is `${XDG_DATA_HOME:-~/.local/share}/nando`. On Windows, `USERPROFILE` supplies
+the home directory when the XDG variables are unset. Set both XDG variables to
+use them without a home directory.
+
+Copy `samples/config.toml` to the default config path to begin. Its empty
+`repository` value selects the default data directory. Set `repository` to
+select another repository. Command-line options take precedence over TOML
+values. An absent default config file is allowed; a missing file named with
+`--config` is an error. Unknown TOML keys are rejected.
+
+== Existing repositories
+
+Older versions used a repository under the user config directory. If nando
+detects an initialized repository there and no repository was explicitly
+selected, it stops rather than silently opening a different data directory.
+Set `repository` in the config file or pass `--repository` to select the old
+repository explicitly. Do not initialize a new repository over data you intend
+to keep.
+
+== Advanced daemon transport
+
+The standard local endpoint is a repository-specific Unix socket selected
+automatically. `samples/config-advanced.toml` lists the supported TCP transport
+keys. TCP requires server TLS and bearer authentication; clients also need the
+token file and, when using a private CA, the CA certificate. The TLS certificate
+and key are read by `nando daemon`; the token and CA settings are used by client
+commands.
+
+== GCS scheduler
+
+GCS delivery requires all four scheduler settings in the daemon's TOML file:
+
+[source,toml]
+----
+gcs_sync_idle_interval = "30s"
+gcs_sync_periodic_interval = "5m"
+gcs_max_delivery_delay = "30m"
+gcs_sync_parallelism = 2
+----
+
+These values are examples, not operational defaults. Select them for the
+deployment. Intervals must be positive Go durations and parallelism must be
+positive. A Local repository may also run scheduled maintenance when these
+settings are provided.
+
+== Recovery directory
+
+For GCS orphan recovery, the logical destination defaults to `/recyclebin`.
+Override it with:
+
+[source,toml]
+----
+[recovery]
+directory = "/another-directory"
+----

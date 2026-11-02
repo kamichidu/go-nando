@@ -53,3 +53,7 @@ The system service template is experimental and is not a Phase A acceptance gate
 == Backup and restore
 
 Backup and restore are operator-managed. Preserve the entire stopped Repository as one consistent set, including SQLite and any sidecars, CAS objects, Recovery staging/manifests, coordination state, repository settings, and pending GCS delivery obligations. The operator chooses the snapshot or copy mechanism; no particular storage technology is required. See link:docs/backup-restore.adoc[Repository Backup and Restore] for the static point, restore checks, and current Recovery path constraint.
+
+== User configuration
+
+Copy link:samples/config.toml[the beginner configuration sample] to the default config path. For path selection, existing repository migration guidance, GCS scheduling, recovery directory settings, and advanced TCP/TLS transport, see link:docs/configuration.adoc[Configuration].

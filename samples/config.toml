@@ -1,25 +1,8 @@
-# Copy to the per-user config path:
-#   Linux/macOS: ${XDG_CONFIG_HOME:-~/.config}/nando/config.toml
-#   Windows:     ${XDG_CONFIG_HOME:-%USERPROFILE%\.config}\nando\config.toml
-#
-# Empty path values select the active defaults. The repository data directory
-# is separate from this config directory:
-#   Linux/macOS: ${XDG_DATA_HOME:-~/.local/share}/nando
-#   Windows:     ${XDG_DATA_HOME:-%USERPROFILE%\.local\share}\nando
-# If an older initialized repository is detected at the previous user-config
-# location, select it explicitly here or with --repository before using nando.
-
+# Optional: set your repository directory here.
+# Leave empty to use the default data directory.
 repository = ""
+
+# Show more detail in command output.
 verbose = false
 
-# Empty endpoint uses the repository-specific local UDS endpoint. A TCP
-# endpoint requires daemon_tls_cert, daemon_tls_key, and daemon_token_file.
-daemon_endpoint = ""
-daemon_token_file = ""
-daemon_ca_cert = ""
-daemon_tls_cert = ""
-daemon_tls_key = ""
-
-[recovery]
-# Logical destination for GCS orphan metadata recovery.
-directory = "/recyclebin"
+# GCS delivery also needs explicit scheduler settings; see the README.

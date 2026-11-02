@@ -60,17 +60,34 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{Recovery: RecoveryConfig{Directory: "/recyclebin"}}
+	want := Config{}
 	if *cfg != want {
-		t.Fatalf("sample config=%+v, want documented effective defaults %+v", *cfg, want)
+		t.Fatalf("sample config=%+v, want empty configuration defaults %+v", *cfg, want)
 	}
 	sampleBytes, err := os.ReadFile(samplePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"repository", "verbose", "daemon_endpoint", "daemon_token_file", "daemon_ca_cert", "daemon_tls_cert", "daemon_tls_key"} {
+	for _, key := range []string{"repository", "verbose"} {
 		if !strings.Contains(string(sampleBytes), key+" =") {
 			t.Errorf("sample is missing active config key %q", key)
+		}
+	}
+	advancedPath := filepath.Join("..", "..", "samples", "config-advanced.toml")
+	advanced, err := LoadConfig(advancedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *advanced != (Config{}) {
+		t.Fatalf("advanced sample=%+v, want empty transport defaults", advanced)
+	}
+	advancedBytes, err := os.ReadFile(advancedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"daemon_endpoint", "daemon_token_file", "daemon_ca_cert", "daemon_tls_cert", "daemon_tls_key"} {
+		if !strings.Contains(string(advancedBytes), key+" =") {
+			t.Errorf("advanced sample is missing supported config key %q", key)
 		}
 	}
 	if runtime.GOOS == "windows" {
