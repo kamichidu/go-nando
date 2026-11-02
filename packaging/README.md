@@ -14,6 +14,11 @@ Build with nfpm installed:
 VERSION=1.2.3 packaging/build-deb.sh
 ```
 
+GitHub Releases publish Linux amd64 and arm64 archives and an amd64 Debian
+package, plus macOS and Windows amd64 and arm64 archives. CI cross-compiles the
+macOS and Windows executables on Linux; it does not run them on those operating
+systems. Their runtime behavior is therefore not covered by release CI.
+
 Run `packaging/check-deb.sh` to build a temporary package and check its binary,
 symlink, and service-unit paths. The package owns both adapter files in
 `/opt/nando/libexec`, `nando` in `/opt/nando/bin`, and the `/usr/bin/nando`

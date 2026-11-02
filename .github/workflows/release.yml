@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-and-build:
+    name: Validate and build release assets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .go-version
+          cache: false
+      - name: Install Debian package tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dpkg-dev
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.3
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Run tests
+        run: |
+          set -euo pipefail
+          go test ./...
+          go test -race ./...
+          (cd adapters/fuse && go test ./...)
+          (cd adapters/fuse && go test -race ./...)
+          (cd adapters/webdav && go test ./...)
+          (cd adapters/webdav && go test -race ./...)
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.15.0
+          args: --timeout=5m ./...
+      - name: Build release archives and Debian package
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          go clean -cache
+          export GOCACHE="$(mktemp -d)"
+          trap 'rm -rf "$GOCACHE"' EXIT
+          mkdir -p dist
+          build() {
+            local goos=$1 goarch=$2 name=$3 package=$4 module=${5:-.}
+            local suffix=""
+            [[ "$goos" == windows ]] && suffix=.exe
+            if [[ "$module" == . ]]; then
+              CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "-s -w" -o "dist/$name$suffix" "$package"
+            else
+              (cd "$module" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/dist/$name$suffix" "$package")
+            fi
+          }
+          archive() {
+            local goos=$1 goarch=$2; shift 2
+            local staging="dist/staging-$goos-$goarch"
+            mkdir -p "$staging"
+            for item in "$@"; do cp "dist/$item" "$staging/"; done
+            cp README.md LICENSE "$staging/"
+            local base="nando_${VERSION}_${goos}_${goarch}"
+            if [[ "$goos" == windows ]]; then
+              (cd "$staging" && zip -q -r "../$base.zip" .)
+            else
+              tar -C "$staging" -czf "dist/$base.tar.gz" .
+            fi
+            rm -rf "$staging"
+            rm -f dist/nando dist/nando-fuse dist/nando-webdav dist/nando.exe dist/nando-webdav.exe
+          }
+          for arch in amd64 arm64; do
+            build linux "$arch" nando ./cmd/nando
+            build linux "$arch" nando-fuse ./cmd/nando-fuse adapters/fuse
+            build linux "$arch" nando-webdav ./cmd/nando-webdav adapters/webdav
+            archive linux "$arch" nando nando-fuse nando-webdav
+          done
+          for arch in amd64 arm64; do
+            build darwin "$arch" nando ./cmd/nando
+            build darwin "$arch" nando-webdav ./cmd/nando-webdav adapters/webdav
+            archive darwin "$arch" nando nando-webdav
+            build windows "$arch" nando ./cmd/nando
+            build windows "$arch" nando-webdav ./cmd/nando-webdav adapters/webdav
+            archive windows "$arch" nando.exe nando-webdav.exe
+          done
+          sudo apt-get install -y --no-install-recommends zip
+          mkdir -p .build/deb
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o .build/deb/nando ./cmd/nando
+          (cd adapters/fuse && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/.build/deb/nando-fuse" ./cmd/nando-fuse)
+          (cd adapters/webdav && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/.build/deb/nando-webdav" ./cmd/nando-webdav)
+          sed \
+            -e "s|\${VERSION}|$VERSION|g" \
+            -e "s|\${BUILD_DIR}|$GITHUB_WORKSPACE/.build/deb|g" \
+            -e 's|\${NFPM_ARCH}|amd64|g' \
+            packaging/nfpm.yaml > .build/deb/nfpm.yaml
+          nfpm package --config .build/deb/nfpm.yaml --packager deb --target "$GITHUB_WORKSPACE/dist"
+          cp .build/deb/*.deb dist/
+          PACKAGE=$(find dist -maxdepth 1 -type f -name '*.deb' -print -quit)
+          test -n "$PACKAGE"
+          dpkg-deb --contents "$PACKAGE"
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          cat dist/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: validate-and-build
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+      - name: Create release and attach assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/* --verify-tag --generate-notes
