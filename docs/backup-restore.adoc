@@ -18,12 +18,15 @@ complete directory, including:
 * `coordination.db` and any SQLite sidecars. It contains the Repository's
   coordination/resource-lock state.
 * `objects/`, including all content-addressed Local Objects.
-* `repository.json`, which records Repository-owned delivery settings.
+* `repository.json`, which records Repository-owned delivery settings and the
+  Metadata identity witness. Restore it with the matching SQLite database; a
+  missing or mismatched witness prevents GCS orphan deletion.
 * `temp/`, especially `temp/rpc-sessions/` Recovery staging and manifests.
 
 Include the complete `objects/` directory rather than filtering to currently
-referenced IDs: valid unreferenced Objects are GC-eligible and the Repository
-must be captured as one state. Do not run GC as a backup-preparation step.
+referenced IDs: valid unreferenced Local Objects are GC-eligible and the
+Repository must be captured as one state. GCS Objects are never removed by
+automatic GC. Do not run GC as a backup-preparation step.
 
 The current SQLite setup does not explicitly enable WAL mode. Still, do not
 copy a live database file by itself. Quiesce the daemon and let its SQLite

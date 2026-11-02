@@ -29,7 +29,7 @@ type apiAttrs struct {
 }
 
 type gcsAPI interface {
-	Upload(context.Context, string, content.ID, int64, io.Reader) (apiAttrs, error)
+	Upload(context.Context, string, content.ID, int64, []byte, io.Reader) (apiAttrs, error)
 	Attrs(context.Context, string) (apiAttrs, error)
 	Open(context.Context, string) (io.ReadCloser, error)
 	List(context.Context) ([]apiAttrs, error)
@@ -72,20 +72,22 @@ func objectName(id content.ID) string { return "objects/" + id.String() }
 // precondition. If the response is ambiguous or the name already exists, API
 // attributes are queried and accepted only when they identify this content ID
 // and size. No object bytes are read back from GCS.
-func (s *Store) Upload(ctx context.Context, id content.ID, size int64, src io.Reader) (objectstore.ReplicaInfo, error) {
+func (s *Store) Upload(ctx context.Context, id content.ID, size int64, expectedMD5 []byte, src io.Reader) (objectstore.ReplicaInfo, error) {
 	if err := id.Validate(); err != nil {
 		return objectstore.ReplicaInfo{}, err
 	}
-	localHash := md5.New()
-	attrs, uploadErr := s.api.Upload(ctx, objectName(id), id, size, io.TeeReader(src, localHash))
-	if uploadErr == nil && matches(attrs, id, size, localHash.Sum(nil)) {
+	if len(expectedMD5) != md5.Size {
+		return objectstore.ReplicaInfo{}, fmt.Errorf("upload requires a precomputed MD5")
+	}
+	attrs, uploadErr := s.api.Upload(ctx, objectName(id), id, size, expectedMD5, src)
+	if uploadErr == nil && matches(attrs, id, size, expectedMD5) {
 		return toReplicaInfo(attrs), nil
 	}
 	if uploadErr == nil {
 		uploadErr = ErrReplicaConflict
 	}
 	attrs, attrsErr := s.api.Attrs(ctx, objectName(id))
-	if attrsErr == nil && matches(attrs, id, size, localHash.Sum(nil)) {
+	if attrsErr == nil && matches(attrs, id, size, expectedMD5) {
 		return toReplicaInfo(attrs), nil
 	}
 	if attrsErr == nil {
@@ -167,16 +169,16 @@ func (s *Store) DeleteReplica(ctx context.Context, id content.ID, generation int
 
 type storageAPI struct{ bucket *storage.BucketHandle }
 
-func (a *storageAPI) Upload(ctx context.Context, name string, id content.ID, size int64, src io.Reader) (apiAttrs, error) {
+func (a *storageAPI) Upload(ctx context.Context, name string, id content.ID, size int64, expectedMD5 []byte, src io.Reader) (apiAttrs, error) {
 	localMD5 := md5.New()
-	src = io.TeeReader(src, localMD5)
+	tee := io.TeeReader(src, localMD5)
 	obj := a.bucket.Object(name).If(storage.Conditions{DoesNotExist: true})
 	uploadCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	w := obj.NewWriter(uploadCtx)
 	w.ChunkSize = 256 << 10
 	w.Metadata = map[string]string{"nando-content-id": id.String()}
-	if _, err := io.Copy(w, src); err != nil {
+	if _, err := io.Copy(w, tee); err != nil {
 		cancel()
 		return apiAttrs{}, err
 	}
@@ -188,7 +190,7 @@ func (a *storageAPI) Upload(ctx context.Context, name string, id content.ID, siz
 		return a.Attrs(ctx, name)
 	}
 	result := convertAttrs(name, attrs)
-	if len(result.MD5) != md5.Size || !bytes.Equal(result.MD5, localMD5.Sum(nil)) {
+	if len(result.MD5) != md5.Size || !bytes.Equal(result.MD5, expectedMD5) || !bytes.Equal(localMD5.Sum(nil), expectedMD5) {
 		return apiAttrs{}, ErrReplicaConflict
 	}
 	return result, nil

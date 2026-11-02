@@ -36,6 +36,7 @@ func executeCLI(ctx context.Context, stdout, stderr *bytes.Buffer, args []string
 		&commands.MvCommand{},
 		&commands.RmCommand{},
 		&commands.GcCommand{},
+		&commands.GCSOrphansCommand{},
 		&commands.SyncCommand{},
 		&commands.DaemonCommand{},
 		&commands.DoctorCommand{},

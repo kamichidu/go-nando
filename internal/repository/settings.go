@@ -14,9 +14,10 @@ const (
 
 // Settings are repository-owned configuration, distinct from per-user CLI config.
 type Settings struct {
-	DeliveryMode  DeliveryMode `json:"delivery_mode"`
-	GCSBucket     string       `json:"gcs_bucket,omitempty"`
-	MaxLocalBytes int64        `json:"max_local_bytes,omitempty"`
+	DeliveryMode     DeliveryMode `json:"delivery_mode"`
+	GCSBucket        string       `json:"gcs_bucket,omitempty"`
+	MaxLocalBytes    int64        `json:"max_local_bytes,omitempty"`
+	MetadataIdentity string       `json:"metadata_identity,omitempty"`
 }
 
 func DefaultSettings() Settings { return Settings{DeliveryMode: DeliveryModeLocal} }

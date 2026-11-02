@@ -29,16 +29,17 @@ type fixedIDMetadataStore struct {
 }
 
 type fakeReplicaStore struct {
-	fail     bool
-	calls    int
-	stored   map[content.ID][]byte
-	listed   []objectstore.ReplicaInfo
-	deleted  []objectstore.ReplicaInfo
-	attrsErr error
-	attrsMD5 []byte
+	fail       bool
+	calls      int
+	stored     map[content.ID][]byte
+	listed     []objectstore.ReplicaInfo
+	deleted    []objectstore.ReplicaInfo
+	attrsErr   error
+	attrsMD5   []byte
+	generation int64
 }
 
-func (s *fakeReplicaStore) Upload(_ context.Context, id content.ID, size int64, src io.Reader) (objectstore.ReplicaInfo, error) {
+func (s *fakeReplicaStore) Upload(_ context.Context, id content.ID, size int64, expectedMD5 []byte, src io.Reader) (objectstore.ReplicaInfo, error) {
 	s.calls++
 	data, err := io.ReadAll(src)
 	if err != nil {
@@ -54,8 +55,7 @@ func (s *fakeReplicaStore) Upload(_ context.Context, id content.ID, size int64, 
 		s.stored = make(map[content.ID][]byte)
 	}
 	s.stored[id] = data
-	md5sum := md5.Sum(data)
-	return objectstore.ReplicaInfo{ID: id, Size: size, Generation: 1, MD5: md5sum[:]}, nil
+	return objectstore.ReplicaInfo{ID: id, Size: size, Generation: 1, MD5: append([]byte(nil), expectedMD5...)}, nil
 }
 func (s *fakeReplicaStore) OpenReplica(_ context.Context, id content.ID) (io.ReadCloser, error) {
 	data, ok := s.stored[id]
@@ -77,10 +77,14 @@ func (s *fakeReplicaStore) ReplicaAttrs(_ context.Context, id content.ID) (objec
 	if s.attrsErr != nil {
 		return objectstore.ReplicaInfo{}, s.attrsErr
 	}
-	if s.attrsMD5 != nil {
-		return objectstore.ReplicaInfo{ID: id, Size: int64(len(data)), Generation: 1, MD5: s.attrsMD5}, nil
+	generation := s.generation
+	if generation == 0 {
+		generation = 1
 	}
-	return objectstore.ReplicaInfo{ID: id, Size: int64(len(data)), Generation: 1, MD5: append([]byte{}, sum[:]...)}, nil
+	if s.attrsMD5 != nil {
+		return objectstore.ReplicaInfo{ID: id, Size: int64(len(data)), Generation: generation, MD5: s.attrsMD5}, nil
+	}
+	return objectstore.ReplicaInfo{ID: id, Size: int64(len(data)), Generation: generation, MD5: append([]byte{}, sum[:]...)}, nil
 }
 func (s *fakeReplicaStore) ListReplicas(context.Context) ([]objectstore.ReplicaInfo, error) {
 	return append([]objectstore.ReplicaInfo(nil), s.listed...), nil
@@ -211,7 +215,7 @@ func TestGCDeletesInvalidLocalObjectNames(t *testing.T) {
 	}
 }
 
-func TestGCGDeletesUnreferencedGCSReplicaWithObservedGeneration(t *testing.T) {
+func TestGCLeavesUnreferencedGCSReplicaUntouched(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	hasher := content.NewHasher()
@@ -237,11 +241,79 @@ func TestGCGDeletesUnreferencedGCSReplicaWithObservedGeneration(t *testing.T) {
 	settings := repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "unit-test"}
 	repo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(metaStore), objects, replica, hasher, coordinator, settings)
 	deleted, err := repo.GC(ctx)
-	if err != nil || deleted != 1 {
-		t.Fatalf("GC did not delete the unreferenced GCS replica: deleted=%d err=%v", deleted, err)
+	if err != nil || deleted != 0 {
+		t.Fatalf("GC unexpectedly removed an unreferenced GCS replica: deleted=%d err=%v", deleted, err)
 	}
-	if len(replica.deleted) != 1 || replica.deleted[0].ID != id || replica.deleted[0].Generation != 73 {
-		t.Fatalf("GCS deletion did not use observed generation: %+v", replica.deleted)
+	if len(replica.deleted) != 0 {
+		t.Fatalf("ordinary GC deleted GCS content: %+v", replica.deleted)
+	}
+	if err := metaStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "metadata.sqlite")); err != nil {
+		t.Fatal(err)
+	}
+	lostMetadata, err := sqlite.NewStore(filepath.Join(root, "metadata.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lostMetadata.Close()
+	repo = repository.NewRepositoryWithReplica(metadata.NewValidatingStore(lostMetadata), objects, replica, hasher, coordinator, settings)
+	if _, err := repo.GC(ctx); err == nil {
+		t.Fatal("GC unexpectedly succeeded after Metadata loss")
+	}
+	if err := repo.DeleteGCSOrphan(ctx, id, 73); err == nil {
+		t.Fatal("explicit GCS deletion proceeded without a Metadata identity witness")
+	}
+	if len(replica.deleted) != 0 {
+		t.Fatalf("Metadata loss triggered GCS deletion: %+v", replica.deleted)
+	}
+}
+
+func TestExplicitGCSOrphanDeletionRequiresVerifiedCandidateAndCurrentGeneration(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(root, "objects"), filepath.Join(root, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(root, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := coordinator.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	}()
+	id, err := content.ParseID("sha256-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &fakeReplicaStore{listed: []objectstore.ReplicaInfo{{ID: id, Size: 3, Generation: 41}}, stored: map[content.ID][]byte{id: []byte("abc")}}
+	if err := metaStore.SetRepositoryIdentity(ctx, "metadata-identity-test"); err != nil {
+		t.Fatal(err)
+	}
+	repo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "test", MetadataIdentity: "metadata-identity-test"})
+	candidates, err := repo.GCSOrphanCandidates(ctx)
+	if err != nil || len(candidates) != 1 || candidates[0].ID != id {
+		t.Fatalf("candidate dry-run=%+v err=%v", candidates, err)
+	}
+	remote.generation = 42
+	if err := repo.DeleteGCSOrphan(ctx, id, candidates[0].Generation); err == nil {
+		t.Fatal("deletion accepted a changed GCS generation")
+	}
+	if len(remote.deleted) != 0 {
+		t.Fatalf("changed generation was deleted: %+v", remote.deleted)
+	}
+	remote.generation = 41
+	if err := repo.DeleteGCSOrphan(ctx, id, candidates[0].Generation); err != nil {
+		t.Fatalf("explicit generation-matched delete: %v", err)
+	}
+	if len(remote.deleted) != 1 || remote.deleted[0].Generation != 41 {
+		t.Fatalf("delete did not use verified generation: %+v", remote.deleted)
 	}
 }
 

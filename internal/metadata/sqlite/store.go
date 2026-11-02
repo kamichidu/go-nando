@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -133,6 +134,18 @@ func (s *Store) Initialize(ctx context.Context, repoFormat repositoryformat.Form
 	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)", int64(now)); err != nil {
 		return fmt.Errorf("failed to record SQLite schema migration 3: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, MigrationV4); err != nil {
+		return fmt.Errorf("failed to apply schema migration 4: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (4, ?)", int64(now)); err != nil {
+		return fmt.Errorf("failed to record schema migration 4: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, MigrationV5); err != nil {
+		return fmt.Errorf("failed to apply schema migration 5: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (5, ?)", int64(now)); err != nil {
+		return fmt.Errorf("failed to record schema migration 5: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit SQLite schema migration: %w", err)
 	}
@@ -226,12 +239,28 @@ func (s *Store) Migrate(ctx context.Context) error {
 	defer tx.Rollback()
 	now := int64(metadata.TimestampFromTime(time.Now().UTC()))
 	for version := current + 1; version <= CurrentSchemaVersion; version++ {
+		if version == 4 {
+			var invalid, conflicts int
+			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM entries WHERE object_id IS NOT NULL AND (object_md5 IS NULL OR length(object_md5) != 16)`).Scan(&invalid); err != nil {
+				return fmt.Errorf("validate historical Content ID MD5 metadata: %w", err)
+			}
+			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM (SELECT object_id FROM entries WHERE object_id IS NOT NULL GROUP BY object_id HAVING count(DISTINCT hex(object_md5)) > 1)`).Scan(&conflicts); err != nil {
+				return fmt.Errorf("check historical Content ID MD5 consistency: %w", err)
+			}
+			if invalid != 0 || conflicts != 0 {
+				return fmt.Errorf("cannot migrate incomplete or conflicting Content ID MD5 metadata (incomplete=%d conflicts=%d)", invalid, conflicts)
+			}
+		}
 		var migration string
 		switch version {
 		case 2:
 			migration = MigrationV2
 		case 3:
 			migration = MigrationV3
+		case 4:
+			migration = MigrationV4
+		case 5:
+			migration = MigrationV5
 		default:
 			return fmt.Errorf("%w: no migration implementation for version %d", ErrMigrationsUnsupported, version)
 		}
@@ -246,6 +275,33 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return fmt.Errorf("commit SQLite migrations: %w", err)
 	}
 	return nil
+}
+
+// SetRepositoryIdentity stores the durable Metadata identity exactly once.
+func (s *Store) SetRepositoryIdentity(ctx context.Context, identity string) error {
+	if identity == "" {
+		return errors.New("repository metadata identity is required")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO repository_identity(singleton,identity) VALUES(1,?) ON CONFLICT(singleton) DO NOTHING`, identity)
+	if err != nil {
+		return fmt.Errorf("store repository metadata identity: %w", err)
+	}
+	var stored string
+	if err := s.db.QueryRowContext(ctx, `SELECT identity FROM repository_identity WHERE singleton=1`).Scan(&stored); err != nil {
+		return err
+	}
+	if stored != identity {
+		return errors.New("repository metadata identity does not match SQLite")
+	}
+	return nil
+}
+
+func (s *Store) RepositoryIdentity(ctx context.Context) (string, error) {
+	var identity string
+	if err := s.db.QueryRowContext(ctx, `SELECT identity FROM repository_identity WHERE singleton=1`).Scan(&identity); err != nil {
+		return "", err
+	}
+	return identity, nil
 }
 
 func (s *Store) scanEntry(scanner interface{ Scan(dest ...any) error }) (metadata.Entry, error) {
@@ -302,10 +358,43 @@ func (s *Store) scanEntry(scanner interface{ Scan(dest ...any) error }) (metadat
 	return entry, nil
 }
 
+func setContentMD5(ctx context.Context, tx dbtx, id content.ID, sum []byte) error {
+	if len(sum) == 0 {
+		return nil
+	}
+	if len(sum) != 16 {
+		return fmt.Errorf("content ID %s requires 16-byte MD5 metadata", id)
+	}
+	var existing []byte
+	err := tx.QueryRowContext(ctx, `SELECT md5 FROM content_metadata WHERE content_id=?`, id.String()).Scan(&existing)
+	if err == nil {
+		if !bytes.Equal(existing, sum) {
+			return fmt.Errorf("conflicting MD5 metadata for Content ID %s", id)
+		}
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("read Content ID MD5 metadata: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO content_metadata(content_id,md5) VALUES(?,?)`, id.String(), sum); err != nil {
+		return fmt.Errorf("store Content ID MD5 metadata: %w", err)
+	}
+	return nil
+}
+
+// ContentMD5 returns integrity metadata keyed by immutable Content ID.
+func (s *Store) ContentMD5(ctx context.Context, id content.ID) ([]byte, error) {
+	var sum []byte
+	if err := s.db.QueryRowContext(ctx, `SELECT md5 FROM content_metadata WHERE content_id=?`, id.String()).Scan(&sum); err != nil {
+		return nil, fmt.Errorf("read Content ID MD5 metadata: %w", err)
+	}
+	return append([]byte(nil), sum...), nil
+}
+
 // Root retrieves the root entry of the logical repository.
 func (s *Store) Root(ctx context.Context) (metadata.Entry, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT entry_id, parent_id, name, kind, object_id, object_md5, size, mtime, mode, content_type, revision, created_at, updated_at
+		SELECT entry_id, parent_id, name, kind, object_id, (SELECT md5 FROM content_metadata WHERE content_id=entries.object_id), size, mtime, mode, content_type, revision, created_at, updated_at
 		FROM entries
 		WHERE entry_id = 'root'
 	`)
@@ -320,7 +409,7 @@ type dbtx interface {
 
 func (s *Store) getByID(ctx context.Context, q dbtx, id metadata.EntryID) (metadata.Entry, error) {
 	row := q.QueryRowContext(ctx, `
-		SELECT entry_id, parent_id, name, kind, object_id, object_md5, size, mtime, mode, content_type, revision, created_at, updated_at
+		SELECT entry_id, parent_id, name, kind, object_id, (SELECT md5 FROM content_metadata WHERE content_id=entries.object_id), size, mtime, mode, content_type, revision, created_at, updated_at
 		FROM entries
 		WHERE entry_id = ?
 	`, id.String())
@@ -334,7 +423,7 @@ func (s *Store) GetByID(ctx context.Context, id metadata.EntryID) (metadata.Entr
 
 func (s *Store) getChild(ctx context.Context, q dbtx, parentID metadata.EntryID, name string) (metadata.Entry, error) {
 	row := q.QueryRowContext(ctx, `
-		SELECT entry_id, parent_id, name, kind, object_id, object_md5, size, mtime, mode, content_type, revision, created_at, updated_at
+		SELECT entry_id, parent_id, name, kind, object_id, (SELECT md5 FROM content_metadata WHERE content_id=entries.object_id), size, mtime, mode, content_type, revision, created_at, updated_at
 		FROM entries
 		WHERE parent_id = ? AND name = ?
 	`, parentID.String(), name)
@@ -349,7 +438,7 @@ func (s *Store) GetChild(ctx context.Context, parentID metadata.EntryID, name st
 // ListChildren returns direct child entries under parentID.
 func (s *Store) ListChildren(ctx context.Context, parentID metadata.EntryID) ([]metadata.Entry, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT entry_id, parent_id, name, kind, object_id, object_md5, size, mtime, mode, content_type, revision, created_at, updated_at
+		SELECT entry_id, parent_id, name, kind, object_id, (SELECT md5 FROM content_metadata WHERE content_id=entries.object_id), size, mtime, mode, content_type, revision, created_at, updated_at
 		FROM entries
 		WHERE parent_id = ?
 	`, parentID.String())
@@ -436,15 +525,14 @@ func (s *Store) Create(ctx context.Context, entry metadata.Entry) (metadata.Entr
 
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO entries (
-			entry_id, parent_id, name, kind, object_id, object_md5, size, mtime, mode, content_type, revision, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			entry_id, parent_id, name, kind, object_id, size, mtime, mode, content_type, revision, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		entry.ID.String(),
 		parentIDVal,
 		entry.Name,
 		string(entry.Kind),
 		objectIDVal,
-		entry.MD5,
 		entry.Size,
 		int64(entry.Mtime),
 		entry.Mode,
@@ -462,6 +550,11 @@ func (s *Store) Create(ctx context.Context, entry metadata.Entry) (metadata.Entr
 			return metadata.Entry{}, fmt.Errorf("%w: entry %q already exists under parent %s", metadata.ErrEntryConflict, entry.Name, parentIDStr)
 		}
 		return metadata.Entry{}, fmt.Errorf("%w: failed to create entry: %w", metadata.ErrEntryConflict, err)
+	}
+	if entry.ObjectID != nil {
+		if err := setContentMD5(ctx, tx, *entry.ObjectID, entry.MD5); err != nil {
+			return metadata.Entry{}, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -561,7 +654,6 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 			name = ?,
 			kind = ?,
 			object_id = ?,
-			object_md5 = ?,
 			size = ?,
 			mtime = ?,
 			mode = ?,
@@ -574,7 +666,6 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 		entry.Name,
 		string(entry.Kind),
 		objectIDVal,
-		entry.MD5,
 		entry.Size,
 		int64(entry.Mtime),
 		entry.Mode,
@@ -594,6 +685,11 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 	}
 	if rows == 0 {
 		return metadata.Entry{}, metadata.ErrEntryConflict
+	}
+	if entry.ObjectID != nil {
+		if err := setContentMD5(ctx, tx, *entry.ObjectID, entry.MD5); err != nil {
+			return metadata.Entry{}, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -632,10 +728,13 @@ func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTran
 		if entry.ParentID != nil {
 			parentID = sql.NullString{String: entry.ParentID.String(), Valid: true}
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO entries (entry_id,parent_id,name,kind,object_id,object_md5,size,mtime,mode,content_type,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			entry.ID.String(), parentID, entry.Name, string(entry.Kind), entry.ObjectID.String(), entry.MD5, entry.Size, int64(entry.Mtime), entry.Mode, entry.ContentType, entry.Revision, int64(entry.CreatedAt), int64(entry.UpdatedAt))
+		_, err = tx.ExecContext(ctx, `INSERT INTO entries (entry_id,parent_id,name,kind,object_id,size,mtime,mode,content_type,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			entry.ID.String(), parentID, entry.Name, string(entry.Kind), entry.ObjectID.String(), entry.Size, int64(entry.Mtime), entry.Mode, entry.ContentType, entry.Revision, int64(entry.CreatedAt), int64(entry.UpdatedAt))
 		if err != nil {
 			return metadata.Entry{}, fmt.Errorf("%w: failed to create Put Entry: %w", metadata.ErrEntryConflict, err)
+		}
+		if err := setContentMD5(ctx, tx, *entry.ObjectID, entry.MD5); err != nil {
+			return metadata.Entry{}, err
 		}
 	} else if getErr != nil {
 		return metadata.Entry{}, fmt.Errorf("read Put target Entry: %w", getErr)
@@ -651,8 +750,8 @@ func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTran
 		}
 		newRevision := entry.Revision + 1
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		res, err := tx.ExecContext(ctx, `UPDATE entries SET object_id=?,object_md5=?,size=?,mtime=?,mode=?,content_type=?,revision=?,updated_at=? WHERE entry_id=? AND revision=?`,
-			entry.ObjectID.String(), entry.MD5, entry.Size, int64(entry.Mtime), entry.Mode, entry.ContentType, newRevision, int64(now), entry.ID.String(), entry.Revision)
+		res, err := tx.ExecContext(ctx, `UPDATE entries SET object_id=?,size=?,mtime=?,mode=?,content_type=?,revision=?,updated_at=? WHERE entry_id=? AND revision=?`,
+			entry.ObjectID.String(), entry.Size, int64(entry.Mtime), entry.Mode, entry.ContentType, newRevision, int64(now), entry.ID.String(), entry.Revision)
 		if err != nil {
 			return metadata.Entry{}, fmt.Errorf("update Put Entry: %w", err)
 		}
@@ -662,6 +761,9 @@ func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTran
 		}
 		if rows != 1 {
 			return metadata.Entry{}, metadata.ErrEntryConflict
+		}
+		if err := setContentMD5(ctx, tx, *entry.ObjectID, entry.MD5); err != nil {
+			return metadata.Entry{}, err
 		}
 		entry.Revision, entry.UpdatedAt = newRevision, now
 	}
@@ -947,7 +1049,7 @@ func (s *Store) ReferencedObjectIDs(ctx context.Context) ([]content.ID, error) {
 // ListAll lists all entries.
 func (s *Store) ListAll(ctx context.Context) ([]metadata.Entry, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT entry_id, parent_id, name, kind, object_id, object_md5, size, mtime, mode, content_type, revision, created_at, updated_at
+		SELECT entry_id, parent_id, name, kind, object_id, (SELECT md5 FROM content_metadata WHERE content_id=entries.object_id), size, mtime, mode, content_type, revision, created_at, updated_at
 		FROM entries
 	`)
 	if err != nil {

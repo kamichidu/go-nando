@@ -23,6 +23,7 @@ func main() {
 		&commands.MvCommand{},
 		&commands.RmCommand{},
 		&commands.GcCommand{},
+		&commands.GCSOrphansCommand{},
 		&commands.MaintenanceCommand{},
 		&commands.SyncCommand{},
 		&commands.DaemonCommand{},

@@ -3,10 +3,8 @@ package repository
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 
@@ -77,13 +75,18 @@ func (r *Repository) ProcessTransferQueueParallel(ctx context.Context, paralleli
 				if err != nil {
 					return fmt.Errorf("read Local source size %s: %w", id, err)
 				}
+				expectedMD5, err := r.metaStore.ContentMD5(transferCtx, id)
+				if err != nil {
+					return fmt.Errorf("read Content ID integrity metadata %s: %w", id, err)
+				}
+				if len(expectedMD5) != 16 {
+					return fmt.Errorf("missing MD5 metadata for Content ID %s", id)
+				}
 				reader, err := r.objectStore.Open(transferCtx, id)
 				if err != nil {
 					return fmt.Errorf("open Local source %s for transfer: %w", id, err)
 				}
-				localHash := md5.New()
-				hashingReader := io.TeeReader(reader, localHash)
-				info, uploadErr := r.replica.Upload(transferCtx, id, size, hashingReader)
+				info, uploadErr := r.replica.Upload(transferCtx, id, size, expectedMD5, reader)
 				closeErr := reader.Close()
 				if uploadErr != nil || closeErr != nil {
 					if uploadErr != nil {
@@ -91,7 +94,7 @@ func (r *Repository) ProcessTransferQueueParallel(ctx context.Context, paralleli
 					}
 					return errors.Join(uploadErr, closeErr)
 				}
-				if info.ID != id || info.Size != size || info.Generation <= 0 || len(info.MD5) != md5.Size || !bytes.Equal(info.MD5, localHash.Sum(nil)) {
+				if info.ID != id || info.Size != size || info.Generation <= 0 || len(info.MD5) != 16 || !bytes.Equal(info.MD5, expectedMD5) {
 					return fmt.Errorf("GCS upload returned mismatched API attributes for %s: %+v", id, info)
 				}
 				if err := r.validateLease(transferCtx, operationID); err != nil {

@@ -148,13 +148,13 @@ nodes:
   - id: REQ-GCS-PUBLICATION
     level: system_requirement
     kind: object-publication-invariant
-    statement: GCS upload MUST begin only after the content ID is known, MUST use a resumable upload directly to objects/{content_id}, MUST NOT create a temporary GCS Object or copy one, and MUST NOT replace an existing live Object. Synchronization MUST first query/reconcile an existing final object by API attributes and skip payload upload when the same immutable content is already delivered. A successful GCS API upload response is authoritative transfer completion. If the response is ambiguous, the Repository MUST query the final object and use GCS API attributes to converge; an existing-name/precondition result MUST be handled idempotently by checking those API attributes. The Repository MUST retain the GCS generation and other API metadata required for subsequent conditional operations. A separate full-object read-back SHA-256 pass is not required; Local hash verification remains required, and detection of arbitrary external GCS corruption is not guaranteed.
+    statement: GCS upload MUST begin only after the content ID and an expected MD5 computed independently of the upload stream are known. It MUST use a resumable upload directly to objects/{content_id}, MUST NOT create a temporary GCS Object or copy one, and MUST NOT replace an existing live Object. Synchronization MUST first query/reconcile an existing final object by API attributes and skip payload upload when the same immutable content is already delivered. A successful GCS API upload response is authoritative transfer completion. If the response is ambiguous, the Repository MUST query the final object and use GCS API attributes to converge; an existing-name/precondition result MUST be handled idempotently by checking those API attributes against the expected content ID, size, and precomputed MD5, independent of how many input bytes the failed upload consumed. The Repository MUST retain the GCS generation and other API metadata required for subsequent conditional operations. A separate full-object read-back SHA-256 pass is not required; Local hash verification remains required, and detection of arbitrary external GCS corruption is not guaranteed.
     provenance:
       origin: imported
   - id: REQ-LOCAL-CAPACITY-GC
     level: system_requirement
     kind: garbage-collection-invariant
-    statement: Capacity GC and invalid-orphan GC MUST be distinct operations under the maintenance scheduler. Capacity GC MUST inspect configured capacity policy and reclaim Local space when needed; it MUST NOT remove a Local authoritative Object in Local mode, an untransferred Object in GCS mode, or any RLock-protected resource. It MAY evict a Local copy after the content ID is absent from the uncompleted transfer queue. Orphan GC MUST preserve every Local content ID with an uncompleted GCS delivery obligation, even when no current Entry references it, and MUST recheck that obligation under the content WLock immediately before deletion. A superseded version MAY be deleted only when no current Entry, retained history, publication head, delivery obligation, or active lease requires it, with deletion eligibility rechecked under WLock. Put, Download, or another operation that encounters actual capacity exhaustion MUST fail with a capacity error; the Repository does not require GC to reserve or guarantee future space. GC MUST NOT intentionally delete the last known-good physical Object copy; in-flight deletion I/O may complete after its WLock expires and can make a replica unavailable.
+    statement: Capacity GC and local invalid-orphan GC MUST be distinct maintenance operations. Capacity GC MUST operate on Local storage only, inspect configured capacity policy, and reclaim eligible Local cache copies only when needed; it MUST NOT delete GCS Objects, Local authoritative Objects in Local mode, untransferred GCS-mode Objects, or RLock-protected resources. Local orphan cleanup MUST preserve every content ID with an uncompleted GCS delivery obligation and recheck that obligation under the content WLock immediately before deletion. Ordinary/scheduled Repository GC MUST NOT enumerate or delete GCS Objects, including valid unreferenced GCS Objects. SQLite reference absence alone MUST never trigger GCS deletion, because Metadata loss is an accepted failure while GCS content loss is not. GCS orphan candidates may be listed only by a dedicated CLI operator command. That command MUST support listing and dry-run, and explicit deletion MUST require complete trustworthy Metadata integrity evidence, revalidate the candidate and its exact observed generation immediately before deletion, and issue a generation-matched conditional delete. If Metadata integrity/completeness cannot be established, deletion MUST be refused. Put, Download, or another operation that encounters actual Local capacity exhaustion MUST fail with a capacity error; no reservation guarantee is required. No automated GC may intentionally delete the last known-good GCS content copy.
     provenance:
       origin: imported
   - id: REQ-READ-THROUGH
@@ -166,7 +166,7 @@ nodes:
   - id: REQ-LOCAL-GCS-IMMUTABILITY
     level: system_requirement
     kind: immutability-invariant
-    statement: Local and GCS publication for a content ID MUST be no-replace. Local pre-existing Objects MUST retain existing content-ID hash verification. GCS upload success follows the GCS API response contract; ambiguous completion and existing-name results are reconciled through object lookup and API attributes, with generation and required API metadata retained. GCS deletion MUST be conditional on the exact observed Object generation so a concurrent replacement cannot be deleted accidentally. Full-object GCS read-back hashing and detection of arbitrary external corruption are not required.
+    statement: Local and GCS publication for a content ID MUST be no-replace. Local pre-existing Objects MUST retain existing content-ID hash verification. GCS upload success follows the GCS API response contract; ambiguous completion and existing-name results are reconciled through object lookup and API attributes, with generation and required API metadata retained. GCS deletion is prohibited in automatic GC and is allowed only through the explicit CLI orphan workflow after Metadata integrity and reference checks; it MUST be conditional on the exact observed Object generation so a concurrent replacement cannot be deleted accidentally. Full-object GCS read-back hashing and detection of arbitrary external corruption are not required.
     provenance:
       origin: imported
   - id: REQ-METADATA-PORTABILITY
@@ -175,6 +175,28 @@ nodes:
     statement: MetadataStore implementations MUST provide the same observable operation and atomicity semantics for Entry creation, update, move, and deletion, including revision comparison and namespace/hierarchy invariants. Repository contracts MUST NOT expose SQLite transaction, SQL, or constraint details; each adapter MUST enforce state-dependent validation atomically with its mutation using backend-native mechanisms.
     provenance:
       origin: imported
+  - id: REQ-CONTENT-MD5-METADATA
+    level: system_requirement
+    kind: object-integrity-metadata
+    statement: MD5 is immutable content metadata and MUST be stored once per Content ID, not redundantly or potentially inconsistently on each Entry. SQLite migration MUST preserve existing Entry-associated MD5 values by consolidating them by Content ID and MUST detect conflicting or incomplete historical values without inventing integrity evidence. Existing MD5 observations MUST remain available for Local cache validation and GCS replica comparisons.
+    attributes:
+      identity: Content-ID
+      sqlite_migration: consolidate-entry-md5; reject-conflicting-values
+    provenance:
+      origin: human-authored
+  - id: REQ-GCS-ORPHAN-SAFETY
+    level: system_requirement
+    kind: destructive-operation-safety
+    statement: GCS content MUST NOT be automatically deleted by ordinary or scheduled GC. SQLite reference absence, including complete SQLite database loss, is insufficient deletion evidence. Only a dedicated CLI operator workflow may delete GCS orphan candidates; it MUST enumerate candidates, provide a dry-run, require explicit deletion, establish complete Metadata integrity, verify the SQLite Metadata identity witness against the repository settings, recheck reference absence and the observed generation immediately before deletion, and use a generation-match conditional delete. Any uncertainty, missing/mismatched identity, or inability to prove Metadata completeness MUST refuse deletion. GCS content loss is prohibited; SQLite Metadata loss and Local cache loss are accepted.
+    attributes:
+      automatic_gcs_deletion: prohibited
+      metadata_integrity_required: true
+      metadata_identity_witness: repository-settings-and-sqlite-match; required-for-new-repositories
+      legacy_without_witness: candidate-list-only; deletion-refused
+      generation_match_required: true
+      final_recheck_required: true
+    provenance:
+      origin: human-authored
   - id: REQ-METADATA-BACKUP-RESPONSIBILITY
     level: system_requirement
     kind: operations-boundary
@@ -587,13 +609,15 @@ nodes:
   - id: DES-GC-CLASSES
     level: system_design
     kind: garbage-collection-model
-    statement: Capacity GC and orphan/invalid GC are separate subtasks under the maintenance scheduler. Capacity GC reads Repository capacity settings and reclaims Local space only when required; it preserves Local-mode authority, untransferred GCS-mode Objects, and RLock-protected resources. If an operation encounters actual capacity exhaustion, it returns a capacity error without requiring a reservation guarantee. Orphan/invalid GC reconciles malformed, corrupt, or unreferenced Local artifacts and unreferenced GCS Objects while respecting current and historical Metadata references, pending delivery obligations, RLocks, and the last known-good physical copy. Physical deletion requires a renewed resource WLock, after which that subtask rechecks references, transfer status, active publication heads, and deletion eligibility; GCS deletion uses the observed generation. An already-sent delete MAY complete after WLock expiry and cause replica unavailability; a later read fails locally without changing Metadata.
+    statement: Capacity GC and local orphan/invalid GC are separate subtasks under the maintenance scheduler. Capacity GC reads Repository capacity settings and reclaims Local cache space only when required; it preserves Local-mode authority, untransferred GCS-mode Objects, and RLock-protected resources. If an operation encounters actual capacity exhaustion, it returns a capacity error without requiring a reservation guarantee. Local orphan/invalid GC reconciles malformed, corrupt, or unreferenced Local artifacts while respecting pending delivery obligations and resource leases. Ordinary/scheduled GC never enumerates or deletes GCS Objects. A dedicated CLI operator workflow lists GCS orphan candidates and supports dry-run; explicit deletion requires successful Metadata integrity validation, checks references and transfer obligations under a resource WLock, rechecks the exact GCS generation immediately before conditional deletion, and refuses deletion when validation fails. GCS content is retained when Metadata completeness is uncertain.
     attributes:
       capacity_gc: [GCS-mode-only-eviction-of-confirmed-Local-cache-replicas, resource-RLock-aware]
-      invalid_orphan_gc: [Local-invalid, Local-unreferenced, GCS-unreferenced, resource-WLock-before-physical-delete]
+      invalid_orphan_gc: [Local-invalid, Local-unreferenced, resource-WLock-before-physical-delete]
+      GCS_orphan_management: CLI-only-list-and-dry-run; explicit-generation-conditional-delete; metadata-completeness-required
       Local_mode: no-capacity-eviction-of-authoritative-Objects
       last_known_good_copy: protected-from-Repository-GC
-      gcs_delete: generation-conditional
+      gcs_delete: excluded-from-automatic-GC; explicit-CLI-only; generation-conditional-with-immediate-recheck
+      metadata_loss: GCS-content-preserved; SQLite-metadata-loss-accepted; Local-cache-loss-accepted
       delayed_delete_after_expiry: allowed;availability-risk-recorded
       shared_protection_authority: resource-RWLock-only
     provenance:
@@ -812,7 +836,7 @@ nodes:
         - existing-name and ambiguous upload responses converge through final-object API attributes; GCS generation and required API metadata are used for conditional operations
         - GCS-mode Get/Cat prefer Local; a miss downloads to shared temporary storage and publishes only complete content verified against its ID
         - Local capacity GC retains unconfirmed content and RLock-protected resources, and evicts only eligible confirmed replicas under a resource WLock
-        - invalid-orphan GC protects Metadata references and resource RLocks/WLocks and can eventually collect GCS orphans using generation-conditional deletion
+        - scheduled invalid-orphan GC applies only to Local artifacts; GCS orphan candidates and explicit generation-matched deletion use a dedicated CLI workflow after Metadata integrity checks
         - periodic Capacity GC checks Repository capacity settings and reclaims only needed eligible space; a Put/Download that encounters actual capacity exhaustion returns a capacity error without a reservation guarantee
         - MetadataStore conformance semantics include atomic revisions, namespace uniqueness, parent validation, and cycle rejection without SQL/API leakage
         - resource RLocks protect Put/Get/upload/download and resource WLocks protect GC physical deletion; lock state is managed atomically in SQLite and no second GC protection mechanism exists

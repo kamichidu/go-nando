@@ -91,28 +91,8 @@ func (r *Repository) evictCapacityCandidate(ctx context.Context, id content.ID) 
 				return nil
 			}
 		}
-		var expectedMD5 []byte
-		foundReference := false
-		validMD5 := true
-		entries, err := r.metaStore.ListAll(leaseCtx)
-		if err != nil {
-			return fmt.Errorf("read local MD5 metadata: %w", err)
-		}
-		for _, entry := range entries {
-			if entry.ObjectID != nil && *entry.ObjectID == id {
-				foundReference = true
-				if len(entry.MD5) != md5.Size {
-					validMD5 = false
-					continue
-				}
-				if expectedMD5 == nil {
-					expectedMD5 = entry.MD5
-				} else if !bytes.Equal(expectedMD5, entry.MD5) {
-					validMD5 = false
-				}
-			}
-		}
-		if !foundReference || !validMD5 || len(expectedMD5) != md5.Size {
+		expectedMD5, err := r.metaStore.ContentMD5(leaseCtx, id)
+		if err != nil || len(expectedMD5) != md5.Size {
 			return nil
 		}
 		remote, err := r.replica.ReplicaAttrs(leaseCtx, id)

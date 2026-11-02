@@ -104,9 +104,9 @@ Remaining verification limits: no process-kill E2E is run at every individual ma
 |*Implemented with explicit policy; open operational semantics remain*
 
 |`REQ-LOCAL-CAPACITY-GC`, `DES-GC-CLASSES`
-|`internal/repository/capacity_gc.go` distinguishes capacity eviction from orphan/invalid GC, protects Local authoritative and untransferred data, and checks leases/references. GC methods are daemon RPC operations.
-|Repository capacity/lease tests; G2 remote object API checks; G0–G5 PASS. Scheduler periodic ticks launch Capacity GC and Orphan/Invalid GC independently and report each task failure separately.
-|Algorithm and configured automatic maintenance implemented. Local-mode automatic GC remains disabled unless scheduler policy is explicitly configured.
+|`internal/repository/capacity_gc.go` evicts eligible Local cache copies only. Ordinary and scheduled GC do not enumerate or delete GCS Objects. `nando gcs-orphans` lists verified candidates and requires an explicit generation-matched delete after Metadata integrity validation.
+|Repository capacity/lease tests and explicit orphan candidate/generation checks; scheduler periodic ticks launch Local Capacity GC and Local Orphan/Invalid GC independently.
+|Local automatic maintenance implemented; GCS orphan cleanup is a separate explicit CLI operation and refuses when Metadata integrity cannot be established.
 
 |`REQ-DOCTOR-NONDESTRUCTIVE`, `DES-DOCTOR`
 |`internal/repository/repository.go` Doctor validates root, Entry hierarchy/revisions, references and Local content without modifying repository state. `OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS` leaves GCS-mode cache/remote health interpretation unresolved.

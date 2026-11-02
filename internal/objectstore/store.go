@@ -43,7 +43,7 @@ type LocalObjectInfo struct {
 // ReplicaStore contains only the remote replica operations used by GCS delivery.
 // It does not own logical paths or Repository consistency.
 type ReplicaStore interface {
-	Upload(context.Context, content.ID, int64, io.Reader) (ReplicaInfo, error)
+	Upload(context.Context, content.ID, int64, []byte, io.Reader) (ReplicaInfo, error)
 	OpenReplica(context.Context, content.ID) (io.ReadCloser, error)
 	ReplicaExists(context.Context, content.ID) (bool, error)
 	ReplicaAttrs(context.Context, content.ID) (ReplicaInfo, error)

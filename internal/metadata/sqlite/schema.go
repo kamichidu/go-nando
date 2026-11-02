@@ -42,4 +42,21 @@ CREATE TABLE transfer_queue (
 // MigrationV3 stores the locally observed MD5 for each committed content object.
 const MigrationV3 = `ALTER TABLE entries ADD COLUMN object_md5 BLOB NULL;`
 
-const CurrentSchemaVersion = 3
+// MigrationV4 stores immutable integrity metadata by content identity.
+const MigrationV4 = `
+CREATE TABLE content_metadata (
+    content_id TEXT PRIMARY KEY,
+    md5 BLOB NOT NULL CHECK(length(md5) = 16)
+);
+INSERT INTO content_metadata(content_id, md5)
+SELECT object_id, min(object_md5) FROM entries
+WHERE object_id IS NOT NULL
+GROUP BY object_id
+HAVING count(DISTINCT hex(object_md5)) = 1 AND min(length(object_md5)) = 16;
+ALTER TABLE entries DROP COLUMN object_md5;
+`
+
+// MigrationV5 adds a metadata identity witness shared with repository.json.
+const MigrationV5 = `CREATE TABLE repository_identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), identity TEXT NOT NULL);`
+
+const CurrentSchemaVersion = 5

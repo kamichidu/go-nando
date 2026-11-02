@@ -5,12 +5,24 @@ import "context"
 import (
 	"errors"
 	"fmt"
+	"github.com/kamichidu/go-nando/internal/content"
+	"github.com/kamichidu/go-nando/internal/objectstore"
 	"time"
 )
 
 // GC runs Garbage Collection on the repository, returning the count of deleted orphan objects.
 func (a *App) GC(ctx context.Context) (int, error) {
 	return a.repo.GC(ctx)
+}
+
+// GCSOrphanCandidates returns the verified dry-run candidates for explicit CLI cleanup.
+func (a *App) GCSOrphanCandidates(ctx context.Context) ([]objectstore.ReplicaInfo, error) {
+	return a.repo.GCSOrphanCandidates(ctx)
+}
+
+// DeleteGCSOrphan deletes only the explicitly selected observed generation.
+func (a *App) DeleteGCSOrphan(ctx context.Context, id content.ID, generation int64) error {
+	return a.repo.DeleteGCSOrphan(ctx, id, generation)
 }
 
 // ProcessTransferQueue attempts pending GCS transfers once; failures remain queued.

@@ -316,6 +316,105 @@ func (r *Repository) GC(ctx context.Context) (int, error) {
 	return deletedCount, err
 }
 
+// GCSOrphanCandidates lists remote content IDs that have no current reference
+// or pending transfer. Doctor must establish a structurally complete Metadata
+// view before the result is presented as a deletion candidate list.
+func (r *Repository) GCSOrphanCandidates(ctx context.Context) ([]objectstore.ReplicaInfo, error) {
+	if r.replica == nil {
+		return nil, errors.New("GCS orphan inspection requires a replica store")
+	}
+	if err := r.doctor(ctx); err != nil {
+		return nil, fmt.Errorf("metadata integrity check failed; GCS orphan candidates are unsafe: %w", err)
+	}
+	refs, err := r.metaStore.ReferencedObjectIDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list Metadata references: %w", err)
+	}
+	refSet := make(map[string]bool, len(refs))
+	for _, id := range refs {
+		refSet[id.String()] = true
+	}
+	pending, err := r.metaStore.PendingTransfers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list pending transfers: %w", err)
+	}
+	for _, id := range pending {
+		refSet[id.String()] = true
+	}
+	all, err := r.replica.ListReplicas(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list GCS replicas: %w", err)
+	}
+	candidates := make([]objectstore.ReplicaInfo, 0)
+	for _, replica := range all {
+		if replica.ID.Validate() != nil || replica.Generation <= 0 {
+			continue
+		}
+		if !refSet[replica.ID.String()] {
+			candidates = append(candidates, replica)
+		}
+	}
+	return candidates, nil
+}
+
+// DeleteGCSOrphan explicitly deletes one operator-selected GCS generation.
+// It revalidates complete Metadata and reference absence under the content WLock.
+func (r *Repository) DeleteGCSOrphan(ctx context.Context, id content.ID, generation int64) error {
+	if r.replica == nil {
+		return errors.New("GCS orphan deletion requires a replica store")
+	}
+	if r.settings.MetadataIdentity == "" {
+		return errors.New("repository has no Metadata identity witness; refusing GCS deletion")
+	}
+	if err := id.Validate(); err != nil {
+		return err
+	}
+	if generation <= 0 {
+		return errors.New("GCS orphan deletion requires an observed generation")
+	}
+	return r.withResourceLease(ctx, contentResourceID(id.String()), coordinator.WLock, func(leaseCtx context.Context, operationID string) error {
+		identity, err := r.metaStore.RepositoryIdentity(leaseCtx)
+		if err != nil {
+			return fmt.Errorf("repository Metadata identity is missing; refusing GCS deletion: %w", err)
+		}
+		if identity != r.settings.MetadataIdentity {
+			return errors.New("repository Metadata identity mismatches settings; refusing GCS deletion")
+		}
+		refs, err := r.metaStore.ReferencedObjectIDs(leaseCtx)
+		if err != nil {
+			return fmt.Errorf("recheck Metadata references: %w", err)
+		}
+		for _, ref := range refs {
+			if ref == id {
+				return fmt.Errorf("GCS object %s is referenced by Metadata", id)
+			}
+		}
+		pending, err := r.metaStore.PendingTransfers(leaseCtx)
+		if err != nil {
+			return fmt.Errorf("recheck pending transfers: %w", err)
+		}
+		for _, queued := range pending {
+			if queued == id {
+				return fmt.Errorf("GCS object %s has a pending transfer obligation", id)
+			}
+		}
+		if err := r.doctor(leaseCtx); err != nil {
+			return fmt.Errorf("metadata integrity check failed; refusing GCS deletion: %w", err)
+		}
+		current, err := r.replica.ReplicaAttrs(leaseCtx, id)
+		if err != nil {
+			return fmt.Errorf("recheck GCS generation immediately before deletion: %w", err)
+		}
+		if current.ID != id || current.Generation != generation {
+			return fmt.Errorf("GCS generation changed for %s: observed %d, current %d", id, generation, current.Generation)
+		}
+		if err := r.validateLease(leaseCtx, operationID); err != nil {
+			return err
+		}
+		return r.replica.DeleteReplica(leaseCtx, id, generation)
+	})
+}
+
 func (r *Repository) gc(ctx context.Context) (int, error) {
 	refIDs, err := r.metaStore.ReferencedObjectIDs(ctx)
 	if err != nil {
@@ -359,14 +458,6 @@ func (r *Repository) gc(ctx context.Context) (int, error) {
 		ListRaw(context.Context) ([]string, error)
 	}); ok {
 		deleted, err := r.gcInvalidLocalObjects(ctx, lister)
-		deletedCount += deleted
-		if err != nil {
-			return deletedCount, err
-		}
-	}
-
-	if r.settings.DeliveryMode == DeliveryModeGCS {
-		deleted, err := r.gcGCSOrphans(ctx, refSet)
 		deletedCount += deleted
 		if err != nil {
 			return deletedCount, err
@@ -423,65 +514,6 @@ func (r *Repository) deleteInvalidLocalObject(ctx context.Context, deleter inter
 		return nil
 	})
 	return removed, err
-}
-
-func (r *Repository) gcGCSOrphans(ctx context.Context, refSet map[string]bool) (int, error) {
-	if r.replica == nil {
-		return 0, errors.New("GCS delivery is configured without a replica store")
-	}
-	replicas, err := r.replica.ListReplicas(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("list GCS replicas for orphan GC: %w", err)
-	}
-	deleted := 0
-	for _, replica := range replicas {
-		id := replica.ID
-		if err := id.Validate(); err != nil {
-			return deleted, fmt.Errorf("GCS returned invalid replica ID: %w", err)
-		}
-		if replica.Generation <= 0 || refSet[id.String()] {
-			continue
-		}
-		removed := false
-		err := r.withResourceLease(ctx, contentResourceID(id.String()), coordinator.WLock, func(leaseCtx context.Context, operationID string) error {
-			refs, err := r.metaStore.ReferencedObjectIDs(leaseCtx)
-			if err != nil {
-				return fmt.Errorf("recheck Metadata references before GCS orphan deletion: %w", err)
-			}
-			for _, ref := range refs {
-				if ref == id {
-					return nil
-				}
-			}
-			pending, err := r.metaStore.PendingTransfers(leaseCtx)
-			if err != nil {
-				return fmt.Errorf("recheck transfer queue before GCS orphan deletion: %w", err)
-			}
-			for _, queued := range pending {
-				if queued == id {
-					return nil
-				}
-			}
-			if err := r.validateLease(leaseCtx, operationID); err != nil {
-				return err
-			}
-			if err := r.replica.DeleteReplica(leaseCtx, id, replica.Generation); err != nil {
-				if errors.Is(err, objectstore.ErrObjectNotFound) {
-					return nil
-				}
-				return fmt.Errorf("delete unreferenced GCS replica %s: %w", id, err)
-			}
-			removed = true
-			return nil
-		})
-		if removed {
-			deleted++
-		}
-		if err != nil {
-			return deleted, err
-		}
-	}
-	return deleted, nil
 }
 
 func (r *Repository) deleteIfUnreferenced(ctx context.Context, operationID string, id content.ID) (deleted bool, retErr error) {
