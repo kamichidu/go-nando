@@ -3,9 +3,9 @@
 repository = "/var/lib/nando/<instance>"
 daemon_endpoint = "unix:///run/nando-<instance>/control.sock"
 
-# For GCS repositories, provide all four scheduler settings explicitly.
+# For repositories using remote object storage, provide all four scheduler settings explicitly.
 # No package or unit defaults are supplied.
-# gcs_sync_idle_interval = "..."
-# gcs_sync_periodic_interval = "..."
-# gcs_max_delivery_delay = "..."
-# gcs_sync_parallelism = 1
+# remote_sync_idle_interval = "..."
+# remote_sync_periodic_interval = "..."
+# remote_max_delivery_delay = "..."
+# remote_sync_parallelism = 1

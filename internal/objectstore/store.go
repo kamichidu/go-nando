@@ -25,8 +25,8 @@ type CommitResult struct {
 	Size int64
 }
 
-// ReplicaInfo is API-observed metadata for one remote immutable replica.
-type ReplicaInfo struct {
+// RemoteObjectInfo is API-observed metadata for one remote immutable object.
+type RemoteObjectInfo struct {
 	ID         content.ID
 	Size       int64
 	Generation int64
@@ -40,8 +40,21 @@ type LocalObjectInfo struct {
 	ModTime time.Time
 }
 
-// ReplicaStore contains only the remote replica operations used by GCS delivery.
-// It does not own logical paths or Repository consistency.
+// RemoteObjectStore contains operations for the single selected remote object
+// storage backend. It does not own logical paths or Repository consistency.
+type RemoteObjectStore interface {
+	Upload(context.Context, content.ID, int64, []byte, io.Reader) (RemoteObjectInfo, error)
+	OpenRemote(context.Context, content.ID) (io.ReadCloser, error)
+	RemoteExists(context.Context, content.ID) (bool, error)
+	RemoteAttrs(context.Context, content.ID) (RemoteObjectInfo, error)
+	ListRemoteObjects(context.Context) ([]RemoteObjectInfo, error)
+}
+
+// ReplicaInfo remains an alias for callers using the original metadata type.
+type ReplicaInfo = RemoteObjectInfo
+
+// ReplicaStore preserves the original source-level interface. Repository code
+// uses RemoteObjectStore and adapts this legacy interface at the boundary.
 type ReplicaStore interface {
 	Upload(context.Context, content.ID, int64, []byte, io.Reader) (ReplicaInfo, error)
 	OpenReplica(context.Context, content.ID) (io.ReadCloser, error)

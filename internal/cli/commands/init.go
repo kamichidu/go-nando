@@ -12,9 +12,11 @@ import (
 
 // InitCommand represents the "nando init" subcommand.
 type InitCommand struct {
-	deliveryMode  string
-	gcsBucket     string
-	maxLocalBytes int64
+	deliveryMode    string
+	remoteBackend   string
+	remoteBucket    string
+	legacyGCSBucket string
+	maxLocalBytes   int64
 }
 
 // Name returns the subcommand name.
@@ -24,8 +26,10 @@ func (c *InitCommand) Name() string {
 
 // RegisterFlags binds repository-owned delivery settings for a new repository.
 func (c *InitCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) context.Context {
-	fs.StringVar(&c.deliveryMode, "delivery-mode", "local", "repository delivery mode (local or gcs)")
-	fs.StringVar(&c.gcsBucket, "gcs-bucket", "", "Google Cloud Storage bucket for GCS delivery mode")
+	fs.StringVar(&c.deliveryMode, "delivery-mode", "local", "repository delivery mode (local or remote)")
+	fs.StringVar(&c.remoteBackend, "remote-backend", "gcs", "selected remote object storage backend (currently: gcs)")
+	fs.StringVar(&c.remoteBucket, "remote-bucket", "", "bucket for the selected remote object storage backend")
+	fs.StringVar(&c.legacyGCSBucket, "gcs-bucket", "", "deprecated alias for --remote-bucket")
 	fs.Int64Var(&c.maxLocalBytes, "max-local-bytes", 0, "maximum Local object bytes before Capacity GC (0 disables capacity eviction)")
 	return ctx
 }
@@ -42,7 +46,20 @@ func (c *InitCommand) Run(ctx context.Context, args []string) error {
 
 	settings := repository.DefaultSettings()
 	settings.DeliveryMode = repository.DeliveryMode(c.deliveryMode)
-	settings.GCSBucket = c.gcsBucket
+	settings.RemoteBackend = c.remoteBackend
+	if c.remoteBucket != "" && c.legacyGCSBucket != "" && c.remoteBucket != c.legacyGCSBucket {
+		return fmt.Errorf("--remote-bucket and legacy --gcs-bucket disagree")
+	}
+	settings.RemoteBucket = c.remoteBucket
+	if settings.RemoteBucket == "" {
+		settings.RemoteBucket = c.legacyGCSBucket
+	}
+	if settings.DeliveryMode == "gcs" {
+		settings.DeliveryMode = repository.DeliveryModeRemote
+	}
+	if settings.DeliveryMode == repository.DeliveryModeLocal {
+		settings.RemoteBackend = ""
+	}
 	settings.MaxLocalBytes = c.maxLocalBytes
 	if err := app.InitRepositoryWithSettings(ctx, repoDir, settings); err != nil {
 		return err

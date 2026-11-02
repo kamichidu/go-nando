@@ -15,13 +15,18 @@ import (
 // Config represents per-user runtime configuration. Repository delivery
 // settings remain in the repository-owned repository.json file.
 type Config struct {
-	Repository              string         `toml:"repository"`
-	Verbose                 bool           `toml:"verbose"`
-	DaemonEndpoint          string         `toml:"daemon_endpoint"`
-	DaemonTokenFile         string         `toml:"daemon_token_file"`
-	DaemonCACert            string         `toml:"daemon_ca_cert"`
-	DaemonTLSCert           string         `toml:"daemon_tls_cert"`
-	DaemonTLSKey            string         `toml:"daemon_tls_key"`
+	Repository                 string `toml:"repository"`
+	Verbose                    bool   `toml:"verbose"`
+	DaemonEndpoint             string `toml:"daemon_endpoint"`
+	DaemonTokenFile            string `toml:"daemon_token_file"`
+	DaemonCACert               string `toml:"daemon_ca_cert"`
+	DaemonTLSCert              string `toml:"daemon_tls_cert"`
+	DaemonTLSKey               string `toml:"daemon_tls_key"`
+	RemoteSyncIdleInterval     string `toml:"remote_sync_idle_interval"`
+	RemoteSyncPeriodicInterval string `toml:"remote_sync_periodic_interval"`
+	RemoteMaxDeliveryDelay     string `toml:"remote_max_delivery_delay"`
+	RemoteSyncParallelism      int    `toml:"remote_sync_parallelism"`
+	// Legacy GCS scheduler keys remain accepted for existing user config files.
 	GCSSyncIdleInterval     string         `toml:"gcs_sync_idle_interval"`
 	GCSSyncPeriodicInterval string         `toml:"gcs_sync_periodic_interval"`
 	GCSMaxDeliveryDelay     string         `toml:"gcs_max_delivery_delay"`
@@ -29,38 +34,81 @@ type Config struct {
 	Recovery                RecoveryConfig `toml:"recovery"`
 }
 
-// RecoveryConfig configures the logical destination for restored GCS metadata.
+// RecoveryConfig configures the logical destination for restored remote objects.
 type RecoveryConfig struct {
 	Directory string `toml:"directory"`
 }
 
-// GCSRecoveryDirectory returns the configured logical directory or its default.
-func (c Config) GCSRecoveryDirectory() string {
+// RemoteRecoveryDirectory returns the configured logical directory or its default.
+func (c Config) RemoteRecoveryDirectory() string {
 	if c.Recovery.Directory == "" {
 		return "/recyclebin"
 	}
 	return c.Recovery.Directory
 }
 
-// GCSSchedulerSettings contains explicit daemon scheduler policy. Durations
+// GCSRecoveryDirectory is a compatibility alias for RemoteRecoveryDirectory.
+func (c Config) GCSRecoveryDirectory() string { return c.RemoteRecoveryDirectory() }
+
+// RemoteSchedulerSettings contains explicit daemon scheduler policy. Durations
 // remain strings in Config so missing values are distinguishable from zero.
-type GCSSchedulerSettings struct {
+type RemoteSchedulerSettings struct {
 	IdleInterval     time.Duration
 	PeriodicInterval time.Duration
 	MaxDeliveryDelay time.Duration
 	Parallelism      int
 }
 
-func (c Config) HasGCSSchedulerSettings() bool {
-	return c.GCSSyncIdleInterval != "" || c.GCSSyncPeriodicInterval != "" || c.GCSMaxDeliveryDelay != "" || c.GCSSyncParallelism != 0
+// GCSSchedulerSettings is retained as a source compatibility alias.
+type GCSSchedulerSettings = RemoteSchedulerSettings
+
+func (c Config) remoteValues() (string, string, string, int) {
+	idle, periodic, maximum, parallelism := c.RemoteSyncIdleInterval, c.RemoteSyncPeriodicInterval, c.RemoteMaxDeliveryDelay, c.RemoteSyncParallelism
+	if idle == "" {
+		idle = c.GCSSyncIdleInterval
+	}
+	if periodic == "" {
+		periodic = c.GCSSyncPeriodicInterval
+	}
+	if maximum == "" {
+		maximum = c.GCSMaxDeliveryDelay
+	}
+	if parallelism == 0 {
+		parallelism = c.GCSSyncParallelism
+	}
+	return idle, periodic, maximum, parallelism
 }
 
-// GCSSchedulerPolicy resolves and validates every required policy value. No
+func (c Config) validateRemoteAliases() error {
+	pairs := [][2]string{{c.RemoteSyncIdleInterval, c.GCSSyncIdleInterval}, {c.RemoteSyncPeriodicInterval, c.GCSSyncPeriodicInterval}, {c.RemoteMaxDeliveryDelay, c.GCSMaxDeliveryDelay}}
+	for _, pair := range pairs {
+		if pair[0] != "" && pair[1] != "" && pair[0] != pair[1] {
+			return fmt.Errorf("generic remote scheduler setting conflicts with its legacy GCS alias")
+		}
+	}
+	if c.RemoteSyncParallelism != 0 && c.GCSSyncParallelism != 0 && c.RemoteSyncParallelism != c.GCSSyncParallelism {
+		return fmt.Errorf("remote_sync_parallelism conflicts with legacy gcs_sync_parallelism")
+	}
+	return nil
+}
+
+func (c Config) HasRemoteSchedulerSettings() bool {
+	idle, periodic, maximum, parallelism := c.remoteValues()
+	return idle != "" || periodic != "" || maximum != "" || parallelism != 0
+}
+
+func (c Config) HasGCSSchedulerSettings() bool { return c.HasRemoteSchedulerSettings() }
+
+// RemoteSchedulerPolicy resolves and validates every required policy value. No
 // operational defaults are implied by this configuration API.
-func (c Config) GCSSchedulerPolicy() (GCSSchedulerSettings, error) {
+func (c Config) RemoteSchedulerPolicy() (RemoteSchedulerSettings, error) {
+	if err := c.validateRemoteAliases(); err != nil {
+		return RemoteSchedulerSettings{}, err
+	}
+	idleValue, periodicValue, maximumValue, parallelism := c.remoteValues()
 	parse := func(name, value string) (time.Duration, error) {
 		if value == "" {
-			return 0, fmt.Errorf("%s is required when configuring the GCS scheduler", name)
+			return 0, fmt.Errorf("%s is required when configuring the remote delivery scheduler", name)
 		}
 		d, err := time.ParseDuration(value)
 		if err != nil || d <= 0 {
@@ -68,23 +116,26 @@ func (c Config) GCSSchedulerPolicy() (GCSSchedulerSettings, error) {
 		}
 		return d, nil
 	}
-	idle, err := parse("gcs_sync_idle_interval", c.GCSSyncIdleInterval)
+	idle, err := parse("remote_sync_idle_interval", idleValue)
 	if err != nil {
-		return GCSSchedulerSettings{}, err
+		return RemoteSchedulerSettings{}, err
 	}
-	periodic, err := parse("gcs_sync_periodic_interval", c.GCSSyncPeriodicInterval)
+	periodic, err := parse("remote_sync_periodic_interval", periodicValue)
 	if err != nil {
-		return GCSSchedulerSettings{}, err
+		return RemoteSchedulerSettings{}, err
 	}
-	maximum, err := parse("gcs_max_delivery_delay", c.GCSMaxDeliveryDelay)
+	maximum, err := parse("remote_max_delivery_delay", maximumValue)
 	if err != nil {
-		return GCSSchedulerSettings{}, err
+		return RemoteSchedulerSettings{}, err
 	}
-	if c.GCSSyncParallelism <= 0 {
-		return GCSSchedulerSettings{}, fmt.Errorf("gcs_sync_parallelism must be positive")
+	if parallelism <= 0 {
+		return RemoteSchedulerSettings{}, fmt.Errorf("remote_sync_parallelism must be positive")
 	}
-	return GCSSchedulerSettings{IdleInterval: idle, PeriodicInterval: periodic, MaxDeliveryDelay: maximum, Parallelism: c.GCSSyncParallelism}, nil
+	return RemoteSchedulerSettings{IdleInterval: idle, PeriodicInterval: periodic, MaxDeliveryDelay: maximum, Parallelism: parallelism}, nil
 }
+
+// GCSSchedulerPolicy is retained as a source compatibility alias.
+func (c Config) GCSSchedulerPolicy() (GCSSchedulerSettings, error) { return c.RemoteSchedulerPolicy() }
 
 // LoadConfig reads and strictly decodes a TOML configuration file.
 func LoadConfig(path string) (*Config, error) {
@@ -95,6 +146,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if unknown := metadata.Undecoded(); len(unknown) != 0 {
 		return nil, fmt.Errorf("unknown configuration keys: %s", strings.Join(keysToStrings(unknown), ", "))
+	}
+	if err := cfg.validateRemoteAliases(); err != nil {
+		return nil, err
 	}
 	return &cfg, nil
 }

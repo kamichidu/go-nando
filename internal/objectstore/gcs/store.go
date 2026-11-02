@@ -15,8 +15,9 @@ import (
 )
 
 var (
-	ErrReplicaConflict = errors.New("GCS object does not match requested content ID")
-	ErrObjectNotFound  = errors.New("GCS object not found")
+	ErrRemoteObjectConflict = errors.New("GCS object does not match requested content ID")
+	ErrReplicaConflict      = ErrRemoteObjectConflict // compatibility alias
+	ErrObjectNotFound       = errors.New("GCS object not found")
 )
 
 // apiAttrs are the object attributes returned by the GCS JSON API.
@@ -35,13 +36,18 @@ type gcsAPI interface {
 	List(context.Context) ([]apiAttrs, error)
 }
 
-// Store implements the remote immutable-replica operations for one bucket.
+// Store implements remote immutable object operations for one GCS bucket.
 type Store struct {
 	bucket string
 	api    gcsAPI
 }
 
-// NewStore constructs a GCS replica store around an authenticated Cloud Storage client.
+var (
+	_ objectstore.RemoteObjectStore = (*Store)(nil)
+	_ objectstore.ReplicaStore      = (*Store)(nil)
+)
+
+// NewStore constructs a GCS object store around an authenticated Cloud Storage client.
 func NewStore(bucket string, client *storage.Client) (*Store, error) {
 	if bucket == "" || client == nil {
 		return nil, errors.New("GCS bucket and client are required")
@@ -71,53 +77,53 @@ func objectName(id content.ID) string { return "objects/" + id.String() }
 // precondition. If the response is ambiguous or the name already exists, API
 // attributes are queried and accepted only when they identify this content ID
 // and size. No object bytes are read back from GCS.
-func (s *Store) Upload(ctx context.Context, id content.ID, size int64, expectedMD5 []byte, src io.Reader) (objectstore.ReplicaInfo, error) {
+func (s *Store) Upload(ctx context.Context, id content.ID, size int64, expectedMD5 []byte, src io.Reader) (objectstore.RemoteObjectInfo, error) {
 	if err := id.Validate(); err != nil {
-		return objectstore.ReplicaInfo{}, err
+		return objectstore.RemoteObjectInfo{}, err
 	}
 	if len(expectedMD5) != md5.Size {
-		return objectstore.ReplicaInfo{}, fmt.Errorf("upload requires a precomputed MD5")
+		return objectstore.RemoteObjectInfo{}, fmt.Errorf("upload requires a precomputed MD5")
 	}
 	attrs, uploadErr := s.api.Upload(ctx, objectName(id), id, size, expectedMD5, src)
 	if uploadErr == nil && matches(attrs, id, size, expectedMD5) {
-		return toReplicaInfo(attrs), nil
+		return toRemoteObjectInfo(attrs), nil
 	}
 	if uploadErr == nil {
-		uploadErr = ErrReplicaConflict
+		uploadErr = ErrRemoteObjectConflict
 	}
 	attrs, attrsErr := s.api.Attrs(ctx, objectName(id))
 	if attrsErr == nil && matches(attrs, id, size, expectedMD5) {
-		return toReplicaInfo(attrs), nil
+		return toRemoteObjectInfo(attrs), nil
 	}
 	if attrsErr == nil {
-		return objectstore.ReplicaInfo{}, fmt.Errorf("%w: final name %q has incompatible API attributes", ErrReplicaConflict, objectName(id))
+		return objectstore.RemoteObjectInfo{}, fmt.Errorf("%w: final name %q has incompatible API attributes", ErrRemoteObjectConflict, objectName(id))
 	}
-	return objectstore.ReplicaInfo{}, errors.Join(fmt.Errorf("resumable GCS upload %q: %w", objectName(id), uploadErr), attrsErr)
+	return objectstore.RemoteObjectInfo{}, errors.Join(fmt.Errorf("resumable GCS upload %q: %w", objectName(id), uploadErr), attrsErr)
 }
 
 func matches(attrs apiAttrs, id content.ID, size int64, localMD5 []byte) bool {
 	return attrs.ID == id && attrs.ContentID == id.String() && attrs.Size == size && attrs.Generation > 0 && len(attrs.MD5) == md5.Size && bytes.Equal(attrs.MD5, localMD5)
 }
 
-func toReplicaInfo(attrs apiAttrs) objectstore.ReplicaInfo {
-	return objectstore.ReplicaInfo{ID: attrs.ID, Size: attrs.Size, Generation: attrs.Generation, MD5: append([]byte(nil), attrs.MD5...)}
+func toRemoteObjectInfo(attrs apiAttrs) objectstore.RemoteObjectInfo {
+	return objectstore.RemoteObjectInfo{ID: attrs.ID, Size: attrs.Size, Generation: attrs.Generation, MD5: append([]byte(nil), attrs.MD5...)}
 }
 
-func (s *Store) ReplicaAttrs(ctx context.Context, id content.ID) (objectstore.ReplicaInfo, error) {
+func (s *Store) RemoteAttrs(ctx context.Context, id content.ID) (objectstore.RemoteObjectInfo, error) {
 	if err := id.Validate(); err != nil {
-		return objectstore.ReplicaInfo{}, err
+		return objectstore.RemoteObjectInfo{}, err
 	}
 	attrs, err := s.api.Attrs(ctx, objectName(id))
 	if err != nil {
-		return objectstore.ReplicaInfo{}, err
+		return objectstore.RemoteObjectInfo{}, err
 	}
 	if attrs.ID != id || attrs.ContentID != id.String() || attrs.Generation <= 0 {
-		return objectstore.ReplicaInfo{}, ErrReplicaConflict
+		return objectstore.RemoteObjectInfo{}, ErrRemoteObjectConflict
 	}
-	return toReplicaInfo(attrs), nil
+	return toRemoteObjectInfo(attrs), nil
 }
 
-func (s *Store) OpenReplica(ctx context.Context, id content.ID) (io.ReadCloser, error) {
+func (s *Store) OpenRemote(ctx context.Context, id content.ID) (io.ReadCloser, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
 	}
@@ -128,7 +134,7 @@ func (s *Store) OpenReplica(ctx context.Context, id content.ID) (io.ReadCloser, 
 	return r, err
 }
 
-func (s *Store) ReplicaExists(ctx context.Context, id content.ID) (bool, error) {
+func (s *Store) RemoteExists(ctx context.Context, id content.ID) (bool, error) {
 	if err := id.Validate(); err != nil {
 		return false, err
 	}
@@ -142,18 +148,32 @@ func (s *Store) ReplicaExists(ctx context.Context, id content.ID) (bool, error) 
 	return attrs.ID == id && attrs.ContentID == id.String(), nil
 }
 
-func (s *Store) ListReplicas(ctx context.Context) ([]objectstore.ReplicaInfo, error) {
+func (s *Store) ListRemoteObjects(ctx context.Context) ([]objectstore.RemoteObjectInfo, error) {
 	attrs, err := s.api.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]objectstore.ReplicaInfo, 0, len(attrs))
+	result := make([]objectstore.RemoteObjectInfo, 0, len(attrs))
 	for _, item := range attrs {
 		if item.ID.Validate() == nil && item.ContentID == item.ID.String() && item.Generation > 0 {
-			result = append(result, toReplicaInfo(item))
+			result = append(result, toRemoteObjectInfo(item))
 		}
 	}
 	return result, nil
+}
+
+// The original ReplicaStore method names remain available for source compatibility.
+func (s *Store) OpenReplica(ctx context.Context, id content.ID) (io.ReadCloser, error) {
+	return s.OpenRemote(ctx, id)
+}
+func (s *Store) ReplicaExists(ctx context.Context, id content.ID) (bool, error) {
+	return s.RemoteExists(ctx, id)
+}
+func (s *Store) ReplicaAttrs(ctx context.Context, id content.ID) (objectstore.ReplicaInfo, error) {
+	return s.RemoteAttrs(ctx, id)
+}
+func (s *Store) ListReplicas(ctx context.Context) ([]objectstore.ReplicaInfo, error) {
+	return s.ListRemoteObjects(ctx)
 }
 
 type storageAPI struct{ bucket *storage.BucketHandle }
@@ -180,7 +200,7 @@ func (a *storageAPI) Upload(ctx context.Context, name string, id content.ID, siz
 	}
 	result := convertAttrs(name, attrs)
 	if len(result.MD5) != md5.Size || !bytes.Equal(result.MD5, expectedMD5) || !bytes.Equal(localMD5.Sum(nil), expectedMD5) {
-		return apiAttrs{}, ErrReplicaConflict
+		return apiAttrs{}, ErrRemoteObjectConflict
 	}
 	return result, nil
 }

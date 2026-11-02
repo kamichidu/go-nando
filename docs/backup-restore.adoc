@@ -14,7 +14,7 @@ complete directory, including:
 
 * `metadata.sqlite` and any `metadata.sqlite-wal` or `metadata.sqlite-shm`
   sidecars present. Metadata, Repository Format, schema history, and pending
-  GCS delivery obligations share the Metadata database.
+  remote delivery obligations share the Metadata database.
 * `coordination.db` and any SQLite sidecars. It contains the Repository's
   coordination/resource-lock state.
 * `objects/`, including all content-addressed Local Objects.
@@ -24,25 +24,24 @@ complete directory, including:
 
 Include the complete `objects/` directory rather than filtering to currently
 referenced IDs: valid unreferenced Local Objects are GC-eligible and the
-Repository must be captured as one state. GCS Objects are never removed by
+Repository must be captured as one state. Remote objects are never removed by
 automatic GC or the `nando admin recover` command. That command restores
-missing Metadata Entries under `/recyclebin/<content-id>` without changing GCS
-objects. Do not run GC as a backup-preparation step.
+missing Metadata Entries under `/recyclebin/<content-id>` without changing remote objects. Do not run GC as a backup-preparation step.
 
-GCS recovery treats the listed object's GCS bytes and API attributes as the
+GCS recovery (the current remote backend implementation) treats the listed object's bytes and provider API attributes as the
 recovery authority. It does not download the full object or recompute its
-SHA-256 content ID. Each recovered object must have a valid Content ID,
+SHA-256 content ID. For the current GCS backend, each recovered object must have a valid Content ID,
 generation, size, and an available 16-byte MD5 attribute; objects with missing
 or malformed MD5 are reported as errors and are not restored. Recovery may
 continue restoring other valid objects and reports a combined error, so the
-operator should review the reported IDs and rerun after resolving GCS attribute
+operator should review the reported IDs and rerun after resolving provider attribute
 problems. A restored Entry does not independently prove that the bytes match
-its Content ID; operators should verify the object through their approved GCS
+its Content ID; operators should verify the object through their approved provider
 inspection process before relying on it.
 
-Automatic and scheduled GC never delete GCS objects. Restored GCS objects may
+Automatic and scheduled GC never delete remote objects. Restored remote objects may
 be deleted only after an explicit human decision and action using the
-operator's approved GCS administration workflow. This project does not provide
+operator's approved remote-storage administration workflow. This project does not provide
 a GCS deletion command. Verify the object's generation, attributes, and
 retention/policy constraints before that separate action; metadata recovery
 does not authorize remote deletion.
@@ -72,7 +71,7 @@ the Repository.
 . While it remains stopped, capture all Repository components as one
 consistent set, including components on other volumes.
 
-Do not wait for GCS delivery to finish. Preserve pending queue rows and their
+Do not wait for remote delivery to finish. Preserve pending queue rows and their
 Local Objects together; after restore, the daemon scheduler can retry them.
 An abrupt kill or power loss is not a normal static point. It may leave
 Recovery work and must be treated as crash recovery, not as a cleanly quiesced
@@ -104,21 +103,21 @@ path. Version 1 records without an unambiguous matching stage require operator
 recovery from a valid copy.
 
 While services remain stopped, check the restored tree, owner/mode, Repository
-path, runtime config, and GCS credentials. Then start only the daemon, keeping
+path, runtime config, and provider credentials. Then start only the daemon, keeping
 FUSE/WebDAV and other clients stopped; run `nando doctor` and inspect
 `nando recovery list` before resuming clients or deciding whether to retry or
 discard any Recovery record. The current `doctor` command requires the daemon
 RPC, so logical validation happens with the daemon running but before clients
 resume. `doctor` checks Metadata hierarchy and verifies referenced
 Local Object hashes, but it does not validate the backup archive, Recovery
-manifests, pending queue completeness, or remote GCS bytes.
+manifests, pending queue completeness, or remote object bytes.
 
-GCS delivery resumes asynchronously when the GCS Repository is opened with its
-explicit scheduler settings and usable ADC credentials. Existing immutable
+Remote delivery resumes asynchronously when the Repository is opened with its
+explicit scheduler settings and usable ADC credentials. For the current GCS backend, existing immutable
 content IDs are reconciled through GCS API attributes, so retry after an
 ambiguous upload does not create another object under that name. The current
 implementation does not read all remote bytes back to hash-verify them, and
-there is no CLI command that reports queue drain completion. A GCS outage may
+there is no CLI command that reports queue drain completion. A remote service outage may
 therefore leave delivery pending while local Repository operation continues.
 
 If restore checks fail, stop the daemon, retain the failed tree for diagnosis,
