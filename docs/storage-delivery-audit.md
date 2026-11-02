@@ -41,7 +41,7 @@ Audit baseline: `main` at `04f4e8991f0f7cd12c87a01fcd5a690558e5cf64`. The checko
 
 | Metadata contract and SQLite schema
 | `internal/metadata/store.go`, `internal/metadata/validating_store.go`, `internal/metadata/sqlite/schema.go`, `internal/metadata/sqlite/store.go`; `internal/metadata/sqlite/store_test.go`, `internal/metadata/validating_store_test.go`
-| Public MetadataStore exposes semantic operations, not SQL transactions. SQLite schema migration v1 has `entries`, `repository_format`, and `schema_migrations`; `repository_format` stores format version and content-ID algorithm/format. Create, Update, Move, and Delete use SQLite transactions and operation-specific checks; revision CAS, sibling uniqueness, parent existence/kind, and cycle checks are backend-side. There is no Firestore adapter and no transfer-state schema. Metadata backup procedure is not present in the inspected CLI or app code.
+| Public MetadataStore exposes semantic operations, not SQL transactions. The observed SQLite v1 schema has `entries`, `repository_format`, `schema_migrations`, `transfer_queue`, and `content_metadata`; `repository_format` stores format version and content-ID algorithm/format. Create, Update, Move, and Delete use SQLite transactions and operation-specific checks; revision CAS, sibling uniqueness, parent existence/kind, and cycle checks are backend-side. There is no Firestore adapter or metadata backup procedure in the inspected CLI/app code. **Schema-version policy gap:** the accepted target in `docs/design.ir.yaml` (REQ-SQLITE-SCHEMA-VERSIONING) makes `PRAGMA user_version` the sole schema version authority and permits only an explicit adjacent N-1-to-N migration per release. Current code instead uses the `schema_migrations` table, accepts an existing v1 database at initialization, and has no `nando admin migrate` command. This policy is target design and is not implemented; no Go or CLI changes were made.
 
 | Existing compatibility tests
 | `internal/repository/phase4_test.go`, `internal/repository/repository_test.go`, `internal/objectstore/local/*_test.go`, `internal/coordinator/sqlite/*_test.go`, `internal/metadata/sqlite/store_test.go`, `internal/cli/commands/commands_test.go`
@@ -64,9 +64,15 @@ The corresponding current-source facts and comparisons are recorded in `docs/des
 * Local/Remote mode, selected remote backend and bucket, and capacity policy are Repository settings. No general settings framework is implied. Pre-v1 repository settings are unsupported; v1 settings use `remote_backend=gcs` for the current GCS backend. Automatic mode conversion and bucket changes remain unsupported.
 * The persistent queue is content-ID keyed, idempotently enqueued in the same Metadata transaction as Put, rediscovered after restart, and retried periodically from complete Local content. GCS API-contract completion (including API-attribute reconciliation of ambiguous/existing-name results) deletes the queue row. It is not a Pending Entry or resumed Put; no retry state machine is needed. Metadata backups remain an operator responsibility.
 
-== Remaining open decisions
+== Accepted schema migration policy
 
 These are historical migration-audit items. The Design IR is authoritative and now records the accepted one-backend policy and settings compatibility decision; GCS API/bucket behavior remains provider-specific.
+
+The accepted target is recorded in `docs/design.ir.yaml` as REQ-SQLITE-SCHEMA-VERSIONING. It uses `PRAGMA user_version` as the sole integer schema authority, starts at 1, advances by exactly one per schema change, and is independent of the v1.0.0-then-sequential-minor application release sequence (patch releases carry fixes). Each release migrates only its immediate predecessor through the explicit `nando admin migrate` command; normal startup validates and refuses mismatches, `init` creates only a new database, unsupported/legacy states remain untouched, and schema plus version update are transactional with rollback. Downgrade and skipped upgrades are unsupported; operators must install each intermediate release. This bounds migration state space and test combinatorics. These are target requirements, not current behavior: implementation still uses `schema_migrations`, has no explicit migration command, and does not implement the required adjacent migration/refusal policy. See IMP-SQLITE-SCHEMA-LIFECYCLE-GAP in the IR.
+
+== Remaining open decisions
+
+The following matters remain open; the SQLite schema migration policy above is accepted. The Design IR is authoritative for settled semantics; GCS API and bucket behavior remains provider-specific.
 
 . **GCS bucket policy:** define behavior under versioning, soft delete, retention, external overwrite/delete, bucket or prefix changes, and object recreation. Generation observations support reconciliation; GCS deletion is not a Repository operation.
 . **Capacity policy values:** Repository settings own capacity policy, periodic GC consults it, and actual exhaustion returns a capacity error. Exact configurable thresholds and eviction priority are operational details not specified here; no reservation guarantee is required.

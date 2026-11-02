@@ -241,6 +241,50 @@ nodes:
       current_remote_backend_value: gcs
     provenance:
       origin: human-authored
+  - id: REQ-SQLITE-SCHEMA-VERSIONING
+    level: system_requirement
+    kind: compatibility-invariant
+    statement: >-
+      SQLite PRAGMA user_version MUST be the sole authority for SQLite schema
+      version, with initial schema version 1. Each schema change MUST increment
+      user_version by exactly one; schema version MUST be independent of
+      application semantic version. The application release sequence starts at
+      v1.0.0 and proceeds through sequential minor releases, with patch releases
+      for fixes; this sequence MUST NOT be inferred from or encoded by
+      user_version. Each released executable MUST support migration from exactly
+      the immediately preceding schema N-1 to its own schema N, and MUST NOT
+      skip versions, support N-2 or older schemas, or carry a historical
+      migration chain. Migration code in a release MUST cover only its immediate
+      predecessor. `nando admin migrate` MUST be the sole explicit migration
+      entry point. Normal startup and initialization MUST validate the schema
+      version and refuse mismatches without migration; initialization MUST
+      create a new database only and MUST NOT initialize or migrate an existing
+      database. Unknown, older, newer, and legacy schema/data states MUST be
+      refused without mutation. A migration MUST apply schema changes and the
+      new user_version in one transaction and roll back both on failure.
+      Downgrade is unsupported. Operators upgrading across a schema change MUST
+      use each intermediate release in sequence. Adjacent-only support bounds
+      migration state space and test combinatorics to one predecessor
+      transition per release.
+    attributes:
+      authority: SQLite-PRAGMA-user_version-only
+      initial_schema_version: 1
+      schema_increment: exactly-one-per-schema-change
+      application_release_sequence: v1.0.0-then-sequential-minors;patches-for-fixes
+      release_and_schema_versions_independent: true
+      supported_source_schema: immediate-predecessor-only
+      skipped_upgrade: unsupported
+      historical_migration_chain: unsupported
+      migration_entry_point: nando-admin-migrate
+      normal_startup_migration: prohibited
+      init_existing_database: prohibited
+      unsupported_state_mutation: prohibited
+      migration_atomicity: schema-and-user_version-same-transaction
+      downgrade: unsupported
+      operator_upgrade_path: every-intermediate-release
+      rationale: bound-migration-state-space-and-test-combinatorics
+    provenance:
+      origin: human-authored
   - id: REQ-ENTRY-ID
     level: system_requirement
     kind: identity-invariant
@@ -498,7 +542,7 @@ nodes:
   - id: DES-CONSTRUCTION
     level: system_design
     kind: composition-root
-    statement: The executable composition root reads persisted Repository Format metadata and canonical v1 Repository settings, validates their meaning before use, then composes the metadata backend, object backend, digest algorithm, and Repository. Repository settings own Local/Remote delivery mode, the one selected remote backend and its bucket, and capacity policy; they are distinct from per-user runtime TOML configuration, which owns repository selection and client/daemon runtime options only. Unsupported pre-v1 settings or Repository Format state MUST fail before mutation. The SQLite adapter owns the clean v1 schema baseline and only migrations required for future v1+ compatibility; pre-v1 schema histories MUST be rejected without modification.
+    statement: The executable composition root reads persisted Repository Format metadata and canonical v1 Repository settings, validates their meaning before use, then composes the metadata backend, object backend, digest algorithm, and Repository. Repository settings own Local/Remote delivery mode, the one selected remote backend and its bucket, and capacity policy; they are distinct from per-user runtime TOML configuration, which owns repository selection and client/daemon runtime options only. Unsupported pre-v1 settings or Repository Format state MUST fail before mutation. The SQLite adapter's target schema lifecycle is defined by REQ-SQLITE-SCHEMA-VERSIONING; the currently inspected implementation does not yet conform.
     attributes:
       current_backends: [SQLite Metadata Store, Local Object Store, GCS remote object storage]
       remote_backend_selection: exactly-one-per-repository;currently-GCS
@@ -508,6 +552,7 @@ nodes:
       legacy_settings_fields_read: []
       unsupported_settings_policy: reject-without-rewrite
       sqlite_schema_baseline: v1-current
+      sqlite_schema_lifecycle_requirement: REQ-SQLITE-SCHEMA-VERSIONING
       settings_scope_limit: capacity-policy-representation-not-yet-implemented
     provenance:
       origin: imported
@@ -1028,7 +1073,20 @@ nodes:
   - id: IMP-CURRENT-METADATA-SQLITE
     level: implementation
     kind: observed-implementation
-    statement: At repository revision 04f4e8991f0f7cd12c87a01fcd5a690558e5cf64, MetadataStore is implemented by SQLite schema migration version 1 with entries, repository_format, and schema_migrations tables. SQLite performs state-dependent Create, Update, Move, and Delete checks in backend transactions; the public MetadataStore interface exposes semantic operations rather than SQL transaction types. There is no Firestore adapter or transfer-state schema.
+    statement: >-
+      At repository revision 04f4e8991f0f7cd12c87a01fcd5a690558e5cf64,
+      MetadataStore is implemented by SQLite schema migration version 1 with
+      entries, repository_format, and schema_migrations tables. This observed
+      implementation does not conform to REQ-SQLITE-SCHEMA-VERSIONING:
+      schema_migrations, not PRAGMA user_version, is used as version authority;
+      initialization can accept an existing database; there is no nando admin
+      migrate command; and the adapter only accepts the v1 baseline rather than
+      migrating from exactly one predecessor. SQLite performs state-dependent
+      Create, Update, Move, and Delete checks in backend transactions; the
+      public MetadataStore interface exposes semantic operations rather than
+      SQL transaction types. There is no Firestore adapter or transfer-state
+      schema. No Go source or CLI changes are part of this documentation-only
+      decision.
     provenance:
       origin: observed
     artifact_refs:
@@ -1039,6 +1097,22 @@ nodes:
         revision: 04f4e8991f0f7cd12c87a01fcd5a690558e5cf64
         role: implementation-source
       - uri: https://github.com/kamichidu/go-nando/blob/04f4e8991f0f7cd12c87a01fcd5a690558e5cf64/internal/metadata/sqlite/store.go
+        revision: 04f4e8991f0f7cd12c87a01fcd5a690558e5cf64
+        role: implementation-source
+  - id: IMP-SQLITE-SCHEMA-LIFECYCLE-GAP
+    level: implementation
+    kind: observed-implementation
+    statement: At the inspected branch state, SQLite schema versioning uses a schema_migrations table and not PRAGMA user_version. Store.Initialize accepts an already initialized v1 database and otherwise creates the baseline; CheckMigrations accepts only the v1 ledger baseline. The CLI provides nando admin recover but no nando admin migrate. Therefore the adjacent-only migration policy in REQ-SQLITE-SCHEMA-VERSIONING is target design and is not implemented. No migration, refusal, transaction, or downgrade behavior required by that target may be represented as implemented until code changes establish it.
+    provenance:
+      origin: observed
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/04f4e8991f0f7cd12c87a01fcd5a690558e5cf64/internal/metadata/sqlite/schema.go
+        revision: 04f4e8991f0f7cd12c87a01fcd5a690558e5cf64
+        role: implementation-source
+      - uri: https://github.com/kamichidu/go-nando/blob/04f4e8991f0f7cd12c87a01fcd5a690558e5cf64/internal/metadata/sqlite/store.go
+        revision: 04f4e8991f0f7cd12c87a01fcd5a690558e5cf64
+        role: implementation-source
+      - uri: https://github.com/kamichidu/go-nando/blob/04f4e8991f0f7cd12c87a01fcd5a690558e5cf64/internal/cli/commands/remote_orphans.go
         revision: 04f4e8991f0f7cd12c87a01fcd5a690558e5cf64
         role: implementation-source
   - id: IMP-CURRENT-SHA1
