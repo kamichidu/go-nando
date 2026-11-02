@@ -60,17 +60,34 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{Recovery: RecoveryConfig{Directory: "/recyclebin"}}
+	want := Config{}
 	if *cfg != want {
-		t.Fatalf("sample config=%+v, want documented effective defaults %+v", *cfg, want)
+		t.Fatalf("sample config=%+v, want empty configuration defaults %+v", *cfg, want)
 	}
 	sampleBytes, err := os.ReadFile(samplePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"repository", "verbose", "daemon_endpoint", "daemon_token_file", "daemon_ca_cert", "daemon_tls_cert", "daemon_tls_key"} {
+	for _, key := range []string{"repository", "verbose"} {
 		if !strings.Contains(string(sampleBytes), key+" =") {
 			t.Errorf("sample is missing active config key %q", key)
+		}
+	}
+	advancedPath := filepath.Join("..", "..", "samples", "config-advanced.toml")
+	advanced, err := LoadConfig(advancedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *advanced != (Config{}) {
+		t.Fatalf("advanced sample=%+v, want empty transport defaults", advanced)
+	}
+	advancedBytes, err := os.ReadFile(advancedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"endpoint", "token_from_env", "ca_cert", "tls_cert", "tls_key"} {
+		if !strings.Contains(string(advancedBytes), key+" =") {
+			t.Errorf("advanced sample is missing supported config key %q", key)
 		}
 	}
 	if runtime.GOOS == "windows" {
@@ -82,8 +99,59 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Repository != "" || cfg.DaemonEndpoint != "" || resolved.DataDir == filepath.Dir(resolved.ConfigFile) {
+	if cfg.Repository != "" || cfg.Daemon.Endpoint != "" || resolved.DataDir == filepath.Dir(resolved.ConfigFile) {
 		t.Fatalf("sample does not select active default data/transport paths: cfg=%+v paths=%+v", cfg, resolved)
+	}
+}
+
+func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want DaemonConfig
+	}{
+		{"nested token sources", "[daemon]\nendpoint = \"tcp://host:7443\"\ntoken = \"literal\"\nca_cert = \"ca.pem\"\ntls_cert = \"cert.pem\"\ntls_key = \"key.pem\"\n", DaemonConfig{Endpoint: "tcp://host:7443", Token: "literal", CACert: "ca.pem", TLSCert: "cert.pem", TLSKey: "key.pem"}},
+		{"nested file alias", "[daemon]\ntoken_file = \"token\"\n", DaemonConfig{TokenFromFile: "token", TokenFile: "token"}},
+		{"legacy", "daemon_endpoint = \"tcp://host:7443\"\ndaemon_token_file = \"token\"\ndaemon_ca_cert = \"ca.pem\"\ndaemon_tls_cert = \"cert.pem\"\ndaemon_tls_key = \"key.pem\"\n", DaemonConfig{Endpoint: "tcp://host:7443", TokenFromFile: "token", TokenFile: "token", CACert: "ca.pem", TLSCert: "cert.pem", TLSKey: "key.pem"}},
+		{"mixed distinct fields", "daemon_endpoint = \"tcp://host:7443\"\n[daemon]\ntoken_from_file = \"token\"\n", DaemonConfig{Endpoint: "tcp://host:7443", TokenFromFile: "token"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(test.text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadConfig(path)
+			if err != nil || cfg.Daemon != test.want {
+				t.Fatalf("daemon config=%+v err=%v, want %+v", cfg, err, test.want)
+			}
+		})
+	}
+	for _, text := range []string{
+		"daemon_endpoint = \"\"\n[daemon]\nendpoint = \"tcp://host:7443\"\n",
+		"daemon_tls_key = \"key.pem\"\n[daemon]\ntls_key = \"\"\n",
+	} {
+		path := filepath.Join(t.TempDir(), "ambiguous.toml")
+		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "both set") {
+			t.Fatalf("duplicate old/new daemon keys accepted: %v", err)
+		}
+	}
+	for _, text := range []string{
+		"[daemon]\ntoken = \"secret-value\"\ntoken_from_file = \"path\"\n",
+		"[daemon]\ntoken_from_file = \"path\"\ntoken_from_env = \"SECRET_NAME\"\n",
+		"[daemon]\ntoken = \"secret-value\"\ntoken_from_env = \"SECRET_NAME\"\n",
+		"daemon_token_file = \"legacy-path\"\n[daemon]\ntoken_from_env = \"SECRET_NAME\"\n",
+	} {
+		path := filepath.Join(t.TempDir(), "conflicting-token-sources.toml")
+		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(path); err == nil || strings.Contains(err.Error(), "secret-value") || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("conflicting token sources were not safely rejected: %v", err)
+		}
 	}
 }
 

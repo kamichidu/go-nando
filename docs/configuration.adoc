@@ -1,0 +1,83 @@
+= Configuration
+
+nando reads an optional per-user TOML file. The default path is
+`${XDG_CONFIG_HOME:-~/.config}/nando/config.toml`; the default data directory
+is `${XDG_DATA_HOME:-~/.local/share}/nando`. On Windows, `USERPROFILE` supplies
+the home directory when the XDG variables are unset. Set both XDG variables to
+use them without a home directory.
+
+Copy `samples/config.toml` to the default config path to begin. Its empty
+`repository` value selects the default data directory. Set `repository` to
+select another repository. Command-line options take precedence over TOML
+values. An absent default config file is allowed; a missing file named with
+`--config` is an error. Unknown TOML keys are rejected.
+
+== Existing repositories
+
+Older versions used a repository under the user config directory. If nando
+detects an initialized repository there and no repository was explicitly
+selected, it stops rather than silently opening a different data directory.
+Set `repository` in the config file or pass `--repository` to select the old
+repository explicitly. Do not initialize a new repository over data you intend
+to keep.
+
+== Advanced daemon transport
+
+The standard local endpoint is a repository-specific Unix socket selected
+automatically. `samples/config-advanced.toml` lists the supported TCP transport
+keys under `[daemon]`. TCP requires server TLS and bearer authentication;
+clients also need the configured token and, when using a private CA, the CA
+certificate. The TLS certificate and key are read by `nando daemon`; the token
+and CA settings are used by client commands. Choose exactly one nonempty token
+source: `token` for a literal, `token_from_file` for a protected file, or
+`token_from_env` for the name of an environment variable. The environment
+variable's value is the token. Prefer `token_from_env` to avoid storing a
+literal token in TOML. Empty or unset sources leave token authentication
+unconfigured; TCP still requires a nonempty token and TLS. Conflicting sources
+are rejected without printing token contents. The prior nested `token_file`
+spelling and top-level `daemon_token_file` remain accepted as file-source
+aliases. Existing top-level `daemon_*` transport keys remain supported. When
+the old and new spelling of the same non-token setting both occur,
+configuration loading fails and names both keys; migrate each setting to the
+new spelling and remove its legacy key.
+
+[source,toml]
+----
+[daemon]
+endpoint = "tcp://127.0.0.1:7443"
+token_from_env = "NANDO_DAEMON_TOKEN"
+ca_cert = "/etc/nando/ca.pem"
+tls_cert = "/etc/nando/server.pem"
+tls_key = "/etc/nando/server-key.pem"
+----
+
+For file-based provisioning, use `token_from_file = "/etc/nando/token"`
+instead. A literal can be provided with `token = "..."`, but environment or
+file sources avoid placing the token value in the TOML file.
+
+== Remote delivery scheduler
+
+Remote delivery to the currently supported GCS backend requires all four scheduler settings in the daemon's TOML file. Generic `remote_sync_idle_interval`, `remote_sync_periodic_interval`, `remote_max_delivery_delay`, and `remote_sync_parallelism` keys are canonical. The legacy `gcs_sync_idle_interval`, `gcs_sync_periodic_interval`, `gcs_max_delivery_delay`, and `gcs_sync_parallelism` keys remain supported; conflicting old and new values are rejected.
+
+[source,toml]
+----
+remote_sync_idle_interval = "30s"
+remote_sync_periodic_interval = "5m"
+remote_max_delivery_delay = "30m"
+remote_sync_parallelism = 2
+----
+
+These values are examples, not operational defaults. Select them for the
+deployment. Intervals must be positive Go durations and parallelism must be
+positive. A Local repository may also run scheduled maintenance when these
+settings are provided.
+
+== Recovery directory
+
+For remote-object orphan recovery using the current GCS backend, the logical destination defaults to `/recyclebin`. Override it with:
+
+[source,toml]
+----
+[recovery]
+directory = "/another-directory"
+----

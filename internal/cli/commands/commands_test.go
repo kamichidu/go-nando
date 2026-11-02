@@ -255,7 +255,7 @@ func TestTOMLConfigSelectsRepositoryAndSharedDaemonEndpoint(t *testing.T) {
 	// Use a test-owned absolute socket path as the configured endpoint.
 	endpoint := "unix://" + filepath.Join(socketDir, "configured.sock")
 	configPath := filepath.Join(t.TempDir(), "config.toml")
-	configText := fmt.Sprintf("repository = %q\nverbose = true\ndaemon_endpoint = %q\ndaemon_token_file = \"\"\ndaemon_ca_cert = \"\"\ndaemon_tls_cert = \"\"\ndaemon_tls_key = \"\"\n", repoDir, endpoint)
+	configText := fmt.Sprintf("repository = %q\nverbose = true\n[daemon]\nendpoint = %q\n", repoDir, endpoint)
 	if err := os.WriteFile(configPath, []byte(configText), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -365,10 +365,7 @@ func TestLegacyDefaultRepositoryRequiresExplicitSelection(t *testing.T) {
 func TestTOMLConfigTCPAuthenticationAndTLS(t *testing.T) {
 	repoDir := filepath.Join(t.TempDir(), "repo")
 	certPEM, certPath, keyPath := writeCommandTestCertificate(t)
-	tokenPath := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenPath, []byte("nando-test-token\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("NANDO_TEST_DAEMON_TOKEN", "nando-test-token")
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -378,7 +375,7 @@ func TestTOMLConfigTCPAuthenticationAndTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(t.TempDir(), "tcp-config.toml")
-	configText := fmt.Sprintf("repository = %q\nverbose = false\ndaemon_endpoint = %q\ndaemon_token_file = %q\ndaemon_ca_cert = %q\ndaemon_tls_cert = %q\ndaemon_tls_key = %q\n", repoDir, endpoint, tokenPath, certPath, certPath, keyPath)
+	configText := fmt.Sprintf("repository = %q\nverbose = false\n[daemon]\nendpoint = %q\ntoken_from_env = \"NANDO_TEST_DAEMON_TOKEN\"\nca_cert = %q\ntls_cert = %q\ntls_key = %q\n", repoDir, endpoint, certPath, certPath, keyPath)
 	if err := os.WriteFile(configPath, []byte(configText), 0600); err != nil {
 		t.Fatal(err)
 	}

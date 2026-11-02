@@ -1,25 +1,9 @@
-# Copy to the per-user config path:
-#   Linux/macOS: ${XDG_CONFIG_HOME:-~/.config}/nando/config.toml
-#   Windows:     ${XDG_CONFIG_HOME:-%USERPROFILE%\.config}\nando\config.toml
-#
-# Empty path values select the active defaults. The repository data directory
-# is separate from this config directory:
-#   Linux/macOS: ${XDG_DATA_HOME:-~/.local/share}/nando
-#   Windows:     ${XDG_DATA_HOME:-%USERPROFILE%\.local\share}\nando
-# If an older initialized repository is detected at the previous user-config
-# location, select it explicitly here or with --repository before using nando.
-
+# Copy to the per-user config path. Leave repository empty to use the default.
 repository = ""
 verbose = false
 
-# Empty endpoint uses the repository-specific local UDS endpoint. A TCP
-# endpoint requires daemon_tls_cert, daemon_tls_key, and daemon_token_file.
-daemon_endpoint = ""
-daemon_token_file = ""
-daemon_ca_cert = ""
-daemon_tls_cert = ""
-daemon_tls_key = ""
+# TCP daemon authentication can use one token source under [daemon]:
+# token_from_env = "NANDO_DAEMON_TOKEN"
 
-[recovery]
-# Logical destination for remote-object orphan metadata recovery.
-directory = "/recyclebin"
+# Remote delivery also needs explicit scheduler policy; see README and
+# docs/configuration.adoc.

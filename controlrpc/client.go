@@ -153,6 +153,32 @@ func ReadTokenFile(path string) (string, error) {
 	return token, nil
 }
 
+// ResolveToken resolves one configured bearer-token source. An unset
+// environment variable produces an empty token, preserving unauthenticated
+// local-socket behavior. The caller must not include the returned token in
+// diagnostics.
+func ResolveToken(literal, file, envName string) (string, error) {
+	count := 0
+	for _, source := range []string{literal, file, envName} {
+		if source != "" {
+			count++
+		}
+	}
+	if count > 1 {
+		return "", errors.New("daemon token sources are mutually exclusive")
+	}
+	if literal != "" {
+		return literal, nil
+	}
+	if file != "" {
+		return ReadTokenFile(file)
+	}
+	if envName != "" {
+		return os.Getenv(envName), nil
+	}
+	return "", nil
+}
+
 // DefaultEndpoint returns a per-user local socket endpoint for one repository.
 // The opaque unix:/absolute/path form avoids URL authority parsing ambiguity.
 func DefaultEndpoint(repoDir string) (string, error) {

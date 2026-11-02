@@ -15,23 +15,35 @@ import (
 // Config represents per-user runtime configuration. Repository delivery
 // settings remain in the repository-owned repository.json file.
 type Config struct {
-	Repository                 string `toml:"repository"`
-	Verbose                    bool   `toml:"verbose"`
-	DaemonEndpoint             string `toml:"daemon_endpoint"`
-	DaemonTokenFile            string `toml:"daemon_token_file"`
-	DaemonCACert               string `toml:"daemon_ca_cert"`
-	DaemonTLSCert              string `toml:"daemon_tls_cert"`
-	DaemonTLSKey               string `toml:"daemon_tls_key"`
-	RemoteSyncIdleInterval     string `toml:"remote_sync_idle_interval"`
-	RemoteSyncPeriodicInterval string `toml:"remote_sync_periodic_interval"`
-	RemoteMaxDeliveryDelay     string `toml:"remote_max_delivery_delay"`
-	RemoteSyncParallelism      int    `toml:"remote_sync_parallelism"`
-	// Legacy GCS scheduler keys remain accepted for existing user config files.
-	GCSSyncIdleInterval     string         `toml:"gcs_sync_idle_interval"`
-	GCSSyncPeriodicInterval string         `toml:"gcs_sync_periodic_interval"`
-	GCSMaxDeliveryDelay     string         `toml:"gcs_max_delivery_delay"`
-	GCSSyncParallelism      int            `toml:"gcs_sync_parallelism"`
-	Recovery                RecoveryConfig `toml:"recovery"`
+	Repository                 string         `toml:"repository"`
+	Verbose                    bool           `toml:"verbose"`
+	Daemon                     DaemonConfig   `toml:"daemon"`
+	LegacyDaemonEndpoint       string         `toml:"daemon_endpoint"`
+	LegacyDaemonTokenFile      string         `toml:"daemon_token_file"`
+	LegacyDaemonCACert         string         `toml:"daemon_ca_cert"`
+	LegacyDaemonTLSCert        string         `toml:"daemon_tls_cert"`
+	LegacyDaemonTLSKey         string         `toml:"daemon_tls_key"`
+	RemoteSyncIdleInterval     string         `toml:"remote_sync_idle_interval"`
+	RemoteSyncPeriodicInterval string         `toml:"remote_sync_periodic_interval"`
+	RemoteMaxDeliveryDelay     string         `toml:"remote_max_delivery_delay"`
+	RemoteSyncParallelism      int            `toml:"remote_sync_parallelism"`
+	GCSSyncIdleInterval        string         `toml:"gcs_sync_idle_interval"`
+	GCSSyncPeriodicInterval    string         `toml:"gcs_sync_periodic_interval"`
+	GCSMaxDeliveryDelay        string         `toml:"gcs_max_delivery_delay"`
+	GCSSyncParallelism         int            `toml:"gcs_sync_parallelism"`
+	Recovery                   RecoveryConfig `toml:"recovery"`
+}
+
+// DaemonConfig contains daemon listener and client transport settings.
+type DaemonConfig struct {
+	Endpoint      string `toml:"endpoint"`
+	Token         string `toml:"token"`
+	TokenFromFile string `toml:"token_from_file"`
+	TokenFromEnv  string `toml:"token_from_env"`
+	TokenFile     string `toml:"token_file"`
+	CACert        string `toml:"ca_cert"`
+	TLSCert       string `toml:"tls_cert"`
+	TLSKey        string `toml:"tls_key"`
 }
 
 // RecoveryConfig configures the logical destination for restored remote objects.
@@ -149,6 +161,45 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if err := cfg.validateRemoteAliases(); err != nil {
 		return nil, err
+	}
+	legacy := []struct {
+		name, old string
+		new       *string
+	}{
+		{"daemon_endpoint", cfg.LegacyDaemonEndpoint, &cfg.Daemon.Endpoint},
+		{"daemon_ca_cert", cfg.LegacyDaemonCACert, &cfg.Daemon.CACert},
+		{"daemon_tls_cert", cfg.LegacyDaemonTLSCert, &cfg.Daemon.TLSCert},
+		{"daemon_tls_key", cfg.LegacyDaemonTLSKey, &cfg.Daemon.TLSKey},
+	}
+	for _, item := range legacy {
+		if !metadata.IsDefined(item.name) {
+			continue
+		}
+		key := strings.TrimPrefix(item.name, "daemon_")
+		if metadata.IsDefined("daemon", key) {
+			return nil, fmt.Errorf("configuration keys %q and %q are both set", item.name, "daemon."+key)
+		}
+		*item.new = item.old
+	}
+	if cfg.Daemon.TokenFile != "" && cfg.Daemon.TokenFromFile != "" {
+		return nil, errors.New("daemon token sources are mutually exclusive")
+	}
+	fileDefined := metadata.IsDefined("daemon", "token_file")
+	if fileDefined {
+		cfg.Daemon.TokenFromFile = cfg.Daemon.TokenFile
+	}
+	if metadata.IsDefined("daemon_token_file") {
+		if cfg.Daemon.TokenFromFile != "" || cfg.Daemon.Token != "" || cfg.Daemon.TokenFromEnv != "" {
+			return nil, errors.New("daemon token sources are mutually exclusive")
+		}
+		cfg.Daemon.TokenFromFile = cfg.LegacyDaemonTokenFile
+		cfg.Daemon.TokenFile = cfg.Daemon.TokenFromFile
+	}
+	if metadata.IsDefined("daemon", "token_file") {
+		cfg.Daemon.TokenFile = cfg.Daemon.TokenFromFile
+	}
+	if cfg.Daemon.Token != "" && cfg.Daemon.TokenFromFile != "" || cfg.Daemon.Token != "" && cfg.Daemon.TokenFromEnv != "" || cfg.Daemon.TokenFromFile != "" && cfg.Daemon.TokenFromEnv != "" {
+		return nil, errors.New("daemon token sources are mutually exclusive")
 	}
 	return &cfg, nil
 }
