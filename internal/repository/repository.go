@@ -23,7 +23,7 @@ import (
 type Repository struct {
 	metaStore   metadata.MetadataStore
 	objectStore objectstore.ObjectStore
-	replica     objectstore.ReplicaStore
+	remoteStore objectstore.RemoteObjectStore
 	hasher      content.Hasher
 	coordinator Coordinator
 	settings    Settings
@@ -37,19 +37,28 @@ func NewRepository(metaStore metadata.MetadataStore, objStore objectstore.Object
 
 // NewRepositoryWithSettings creates a Repository with persisted delivery settings.
 func NewRepositoryWithSettings(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, hasher content.Hasher, coordinator Coordinator, settings Settings) *Repository {
-	return NewRepositoryWithReplica(metaStore, objStore, nil, hasher, coordinator, settings)
+	return NewRepositoryWithRemoteObjectStore(metaStore, objStore, nil, hasher, coordinator, settings)
 }
 
-// NewRepositoryWithReplica installs the remote replica used by GCS delivery.
-func NewRepositoryWithReplica(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, replica objectstore.ReplicaStore, hasher content.Hasher, coordinator Coordinator, settings Settings) *Repository {
+// NewRepositoryWithRemoteObjectStore installs the repository's selected remote backend.
+func NewRepositoryWithRemoteObjectStore(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, remote objectstore.RemoteObjectStore, hasher content.Hasher, coordinator Coordinator, settings Settings) *Repository {
+	settings = settings.Canonical()
 	return &Repository{
 		metaStore:   metaStore,
 		objectStore: objStore,
-		replica:     replica,
+		remoteStore: remote,
 		hasher:      hasher,
 		coordinator: coordinator,
 		settings:    settings,
 	}
+}
+
+// NewRepositoryWithReplica is retained for source compatibility.
+func NewRepositoryWithReplica(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, remote objectstore.ReplicaStore, hasher content.Hasher, coordinator Coordinator, settings Settings) *Repository {
+	if remote == nil {
+		return NewRepositoryWithRemoteObjectStore(metaStore, objStore, nil, hasher, coordinator, settings)
+	}
+	return NewRepositoryWithRemoteObjectStore(metaStore, objStore, legacyReplicaAdapter{remote}, hasher, coordinator, settings)
 }
 
 // ResolvePath traverses the parent-child relationships in MetadataStore to find the entry at repoPath.
@@ -316,42 +325,65 @@ func (r *Repository) GC(ctx context.Context) (int, error) {
 	return deletedCount, err
 }
 
-// RestoreGCSOrphans recreates Metadata Entries for remote objects whose
-// Content IDs have no current SQLite reference. GCS objects are only read;
+// RestoreRemoteOrphans recreates Metadata Entries for remote objects whose
+// Content IDs have no current SQLite reference. Remote objects are only read;
 // their names and bytes are never changed. Restored Entries use the Content ID
 // as their name under /recyclebin because their original names are unknown.
-func (r *Repository) RestoreGCSOrphans(ctx context.Context) (int, error) {
-	return r.RestoreGCSOrphansTo(ctx, "/recyclebin")
+func (r *Repository) RestoreRemoteOrphans(ctx context.Context) (int, error) {
+	return r.RestoreRemoteOrphansTo(ctx, "/recyclebin")
 }
 
-// RestoreGCSOrphansTo restores missing Entries under the configured logical directory.
+// RestoreGCSOrphans and RestoreGCSOrphansTo are compatibility aliases.
+func (r *Repository) RestoreGCSOrphans(ctx context.Context) (int, error) {
+	return r.RestoreRemoteOrphans(ctx)
+}
 func (r *Repository) RestoreGCSOrphansTo(ctx context.Context, recoveryDirectory string) (int, error) {
-	if r.replica == nil {
-		return 0, errors.New("GCS orphan recovery requires a replica store")
+	return r.RestoreRemoteOrphansTo(ctx, recoveryDirectory)
+}
+
+type legacyReplicaAdapter struct{ objectstore.ReplicaStore }
+
+func (a legacyReplicaAdapter) OpenRemote(ctx context.Context, id content.ID) (io.ReadCloser, error) {
+	return a.OpenReplica(ctx, id)
+}
+func (a legacyReplicaAdapter) RemoteExists(ctx context.Context, id content.ID) (bool, error) {
+	return a.ReplicaExists(ctx, id)
+}
+func (a legacyReplicaAdapter) RemoteAttrs(ctx context.Context, id content.ID) (objectstore.RemoteObjectInfo, error) {
+	return a.ReplicaAttrs(ctx, id)
+}
+func (a legacyReplicaAdapter) ListRemoteObjects(ctx context.Context) ([]objectstore.RemoteObjectInfo, error) {
+	return a.ListReplicas(ctx)
+}
+
+// RestoreRemoteOrphansTo restores missing Entries under the configured logical directory.
+func (r *Repository) RestoreRemoteOrphansTo(ctx context.Context, recoveryDirectory string) (int, error) {
+	if r.remoteStore == nil {
+		return 0, errors.New("remote object recovery requires a remote object store")
 	}
 	normalized, err := paths.NormalizeLogicalPath(recoveryDirectory)
 	if err != nil || normalized == "/" {
-		return 0, fmt.Errorf("invalid GCS recovery directory %q", recoveryDirectory)
+		return 0, fmt.Errorf("invalid remote recovery directory %q", recoveryDirectory)
 	}
-	all, err := r.replica.ListReplicas(ctx)
+	all, err := r.remoteStore.ListRemoteObjects(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("list GCS objects: %w", err)
+		return 0, fmt.Errorf("list remote objects: %w", err)
 	}
 	recovered := 0
 	var failures []error
-	for _, replica := range all {
-		if err := replica.ID.Validate(); err != nil || replica.Generation <= 0 {
-			failures = append(failures, fmt.Errorf("invalid GCS replica record %q: require a valid Content ID and generation", replica.ID))
+	for _, remoteObject := range all {
+		if err := remoteObject.ID.Validate(); err != nil || remoteObject.Generation <= 0 {
+			failures = append(failures, fmt.Errorf("invalid GCS API object record %q: require a valid Content ID and generation", remoteObject.ID))
 			continue
 		}
-		if len(replica.MD5) != 16 {
-			failures = append(failures, fmt.Errorf("GCS object %s has missing or invalid MD5 metadata (%d bytes); verify the object attributes in GCS and restore only after a valid 16-byte MD5 is available", replica.ID, len(replica.MD5)))
+		if len(remoteObject.MD5) != 16 {
+			failures = append(failures, fmt.Errorf("GCS object %s has missing or invalid MD5 metadata (%d bytes); verify the object attributes in GCS and restore only after a valid 16-byte MD5 is available", remoteObject.ID, len(remoteObject.MD5)))
 			continue
 		}
-		name := replica.ID.String()
-		created, err := r.restoreGCSOrphan(ctx, replica, normalized, name)
+		name := remoteObject.ID.String()
+		created, err := r.restoreRemoteOrphan(ctx, remoteObject, normalized, name)
 		if err != nil {
-			failures = append(failures, fmt.Errorf("restore GCS object %s: %w", name, err))
+			failures = append(failures, fmt.Errorf("restore remote object %s: %w", name, err))
 			continue
 		}
 		if created {
@@ -361,9 +393,9 @@ func (r *Repository) RestoreGCSOrphansTo(ctx context.Context, recoveryDirectory 
 	return recovered, errors.Join(failures...)
 }
 
-func (r *Repository) restoreGCSOrphan(ctx context.Context, replica objectstore.ReplicaInfo, directory, name string) (created bool, retErr error) {
+func (r *Repository) restoreRemoteOrphan(ctx context.Context, remoteObject objectstore.RemoteObjectInfo, directory, name string) (created bool, retErr error) {
 	opID := uuid.NewString()
-	resourceID := contentResourceID(replica.ID.String())
+	resourceID := contentResourceID(remoteObject.ID.String())
 	if err := r.coordinator.AcquireResourceLock(ctx, resourceID, opID, coordinator.WLock, resourceLeaseTTL); err != nil {
 		return false, fmt.Errorf("acquire content WLock: %w", err)
 	}
@@ -387,7 +419,7 @@ func (r *Repository) restoreGCSOrphan(ctx context.Context, replica objectstore.R
 		return false, fmt.Errorf("recheck Metadata references under content WLock: %w", err)
 	}
 	for _, id := range refs {
-		if id == replica.ID {
+		if id == remoteObject.ID {
 			return false, nil
 		}
 	}
@@ -397,7 +429,7 @@ func (r *Repository) restoreGCSOrphan(ctx context.Context, replica objectstore.R
 	}
 	existing, err := r.metaStore.GetChild(leaseCtx, parent.ID, name)
 	if err == nil {
-		if existing.Kind == metadata.EntryKindFile && existing.ObjectID != nil && *existing.ObjectID == replica.ID {
+		if existing.Kind == metadata.EntryKindFile && existing.ObjectID != nil && *existing.ObjectID == remoteObject.ID {
 			return false, nil
 		}
 		return false, fmt.Errorf("recovery path %s is occupied by another Entry", path.Join(directory, name))
@@ -409,16 +441,16 @@ func (r *Repository) restoreGCSOrphan(ctx context.Context, replica objectstore.R
 		return false, err
 	}
 	now := metadata.TimestampFromTime(time.Now().UTC())
-	objectID := replica.ID
+	objectID := remoteObject.ID
 	_, err = r.metaStore.Create(leaseCtx, metadata.Entry{
 		ID: metadata.EntryID(uuid.NewString()), ParentID: &parent.ID, Name: name,
-		Kind: metadata.EntryKindFile, ObjectID: &objectID, MD5: append([]byte(nil), replica.MD5...),
-		Size: replica.Size, Mtime: now, Mode: 0644, ContentType: "application/octet-stream",
+		Kind: metadata.EntryKindFile, ObjectID: &objectID, MD5: append([]byte(nil), remoteObject.MD5...),
+		Size: remoteObject.Size, Mtime: now, Mode: 0644, ContentType: "application/octet-stream",
 		Revision: 1, CreatedAt: now, UpdatedAt: now,
 	})
 	if errors.Is(err, metadata.ErrEntryConflict) {
 		existing, getErr := r.metaStore.GetChild(leaseCtx, parent.ID, name)
-		if getErr == nil && existing.Kind == metadata.EntryKindFile && existing.ObjectID != nil && *existing.ObjectID == replica.ID {
+		if getErr == nil && existing.Kind == metadata.EntryKindFile && existing.ObjectID != nil && *existing.ObjectID == remoteObject.ID {
 			return false, nil
 		}
 	}

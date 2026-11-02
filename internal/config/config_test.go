@@ -105,6 +105,42 @@ func TestGCSSchedulerPolicyRequiresExplicitCompletePositiveSettings(t *testing.T
 	}
 }
 
+func TestRemoteSchedulerConfigReadsCanonicalAndLegacyKeys(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		text string
+	}{
+		{"generic", "remote_sync_idle_interval = \"250ms\"\nremote_sync_periodic_interval = \"1s\"\nremote_max_delivery_delay = \"5s\"\nremote_sync_parallelism = 3\n"},
+		{"legacy", "gcs_sync_idle_interval = \"250ms\"\ngcs_sync_periodic_interval = \"1s\"\ngcs_max_delivery_delay = \"5s\"\ngcs_sync_parallelism = 3\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(test.text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy, err := cfg.RemoteSchedulerPolicy()
+			if err != nil || policy.Parallelism != 3 || policy.MaxDeliveryDelay != 5*time.Second {
+				t.Fatalf("remote policy=%+v err=%v", policy, err)
+			}
+		})
+	}
+}
+
+func TestRemoteSchedulerConfigRejectsConflictingAliases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	contents := "remote_sync_idle_interval = \"250ms\"\ngcs_sync_idle_interval = \"500ms\"\n"
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("conflicting generic and legacy scheduler keys were accepted")
+	}
+}
+
 func TestLoadConfigRejectsUnknownKeys(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "unknown.toml")
 	if err := os.WriteFile(path, []byte("verbose = true\ninert_key = 1\n"), 0600); err != nil {

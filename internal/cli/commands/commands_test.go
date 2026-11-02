@@ -21,8 +21,10 @@ import (
 
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/controlrpc"
+	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/cli"
 	"github.com/kamichidu/go-nando/internal/cli/commands"
+	"github.com/kamichidu/go-nando/internal/repository"
 )
 
 func executeCLI(ctx context.Context, stdout, stderr *bytes.Buffer, args []string) int {
@@ -36,7 +38,7 @@ func executeCLI(ctx context.Context, stdout, stderr *bytes.Buffer, args []string
 		&commands.MvCommand{},
 		&commands.RmCommand{},
 		&commands.GcCommand{},
-		&commands.GCSOrphansCommand{},
+		&commands.RemoteOrphansCommand{},
 		&commands.SyncCommand{},
 		&commands.DaemonCommand{},
 		&commands.DoctorCommand{},
@@ -204,13 +206,43 @@ func TestPutUsesDaemonResourceSession(t *testing.T) {
 }
 
 func TestAdminRecoverCommandNameAndArguments(t *testing.T) {
-	command := &commands.GCSOrphansCommand{}
+	command := &commands.RemoteOrphansCommand{}
 	if command.Name() != "admin" {
 		t.Fatalf("command name=%q", command.Name())
 	}
 	var stdout, stderr bytes.Buffer
 	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"admin", "unknown"}); code == 0 || !strings.Contains(stderr.String(), "nando admin recover") {
 		t.Fatalf("invalid admin command: code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestInitAcceptsGenericAndLegacyRemoteFlags(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{"generic", []string{"--delivery-mode", "remote", "--remote-backend", "gcs", "--remote-bucket", "new-bucket"}},
+		{"legacy", []string{"--delivery-mode", "gcs", "--gcs-bucket", "old-bucket"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repoDir := filepath.Join(t.TempDir(), "repository")
+			args := append([]string{"--repository", repoDir, "init"}, test.args...)
+			var stdout, stderr bytes.Buffer
+			if code := executeCLI(context.Background(), &stdout, &stderr, args); code != 0 {
+				t.Fatalf("init: code=%d stderr=%q", code, stderr.String())
+			}
+			settings, err := app.LoadRepositorySettings(repoDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantBucket := "new-bucket"
+			if test.name == "legacy" {
+				wantBucket = "old-bucket"
+			}
+			if settings.DeliveryMode != repository.DeliveryModeRemote || settings.RemoteBackend != "gcs" || settings.RemoteBucket != wantBucket {
+				t.Fatalf("repository settings=%+v", settings)
+			}
+		})
 	}
 }
 

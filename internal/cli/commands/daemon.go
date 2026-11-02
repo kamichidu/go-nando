@@ -88,10 +88,10 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
-	if repositorySettings.DeliveryMode == repository.DeliveryModeGCS || cfg.HasGCSSchedulerSettings() {
-		policy, err := cfg.GCSSchedulerPolicy()
+	if repositorySettings.DeliveryMode == repository.DeliveryModeRemote || cfg.HasRemoteSchedulerSettings() {
+		policy, err := cfg.RemoteSchedulerPolicy()
 		if err != nil {
-			return fmt.Errorf("configure daemon GCS scheduler: %w", err)
+			return fmt.Errorf("configure daemon remote delivery scheduler: %w", err)
 		}
 		scheduler = &daemon.SchedulerConfig{IdleInterval: policy.IdleInterval, PeriodicInterval: policy.PeriodicInterval, MaxDeliveryDelay: policy.MaxDeliveryDelay, Parallelism: policy.Parallelism}
 	}

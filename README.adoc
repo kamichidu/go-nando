@@ -30,19 +30,25 @@ Docker Compose starts only fake GCS; the daemon, real FUSE mount, WebDAV adapter
 
 WebDAV is a separate Go module and process. Build it with `cd webdav && go build ./cmd/nando-webdav`. It connects to the daemon using public controlrpc and daemon-issued `file://` Resource URIs only. Approved Phase A operation is single-user and local-host only: the daemon uses a per-user Unix socket (private parent mode 0700, socket mode 0600), while WebDAV serves unauthenticated plain HTTP on loopback only. External exposure, multi-user authorization, WebDAV client authentication, and TLS termination are deferred. Supported conditional PUT headers and deliberate protocol gaps are documented in link:docs/webdav-phase-a.adoc[WebDAV Phase A].
 
+== Object storage delivery
+
+Repositories use either `local` delivery or `remote` delivery. Remote mode keeps complete content in Local durable staging/cache and delivers it asynchronously to exactly one selected backend. The only implemented remote backend is GCS; multiple backends, fanout, failover, and tiering are unsupported and not planned. Initialize a remote repository with `nando init --delivery-mode remote --remote-backend gcs --remote-bucket <bucket>`.
+
+Existing repositories with `delivery_mode: "gcs"` and `gcs_bucket` remain readable and are not rewritten when opened. Existing TOML scheduler keys (`gcs_sync_idle_interval`, `gcs_sync_periodic_interval`, `gcs_max_delivery_delay`, and `gcs_sync_parallelism`) and CLI flags (`--delivery-mode gcs`, `--gcs-bucket`) remain accepted aliases. New repositories and examples use generic names. Reinitializing an existing repository does not change its selected backend or bucket.
+
 == Daemon maintenance scheduling
 
-GCS delivery requires an explicit scheduler policy in the daemon's TOML config; timing and parallelism have no implicit operational defaults. Example values below are illustrative and must be selected for the deployment:
+Remote object delivery requires an explicit scheduler policy in the daemon's TOML config; timing and parallelism have no implicit operational defaults. Example values below are illustrative and must be selected for the deployment:
 
 [source,toml]
 ----
-gcs_sync_idle_interval = "30s"
-gcs_sync_periodic_interval = "5m"
-gcs_max_delivery_delay = "30m"
-gcs_sync_parallelism = 2
+remote_sync_idle_interval = "30s"
+remote_sync_periodic_interval = "5m"
+remote_max_delivery_delay = "30m"
+remote_sync_parallelism = 2
 ----
 
-The daemon runs transfer processing, Capacity GC, and Orphan/Invalid GC as independent tasks. GCS queue rows retain their durable enqueue timestamps so maximum-delay eligibility survives daemon restart. Idle is currently measured from the last successful content commit observed by the daemon; the Design IR still records the broader idle definition/default policy as an open decision. The scheduler also runs for Local repositories when these settings are explicitly configured; without an explicit policy, Local repositories keep their existing manual maintenance behavior.
+The daemon runs remote delivery processing, Capacity GC, and Orphan/Invalid GC as independent tasks. The current implementation supports one selected remote backend per repository, GCS; multiple remote backends, fanout, failover, and tiering are unsupported and not planned. Remote delivery queue rows retain their durable enqueue timestamps so maximum-delay eligibility survives daemon restart. Idle is currently measured from the last successful content commit observed by the daemon; the Design IR records the broader idle definition/default policy as an open decision. The scheduler also runs for Local repositories when these settings are explicitly configured; without an explicit policy, Local repositories keep their existing manual maintenance behavior.
 
 == Debian package and systemd
 
@@ -52,4 +58,4 @@ The system service template is experimental and is not a Phase A acceptance gate
 
 == Backup and restore
 
-Backup and restore are operator-managed. Preserve the entire stopped Repository as one consistent set, including SQLite and any sidecars, CAS objects, Recovery staging/manifests, coordination state, repository settings, and pending GCS delivery obligations. The operator chooses the snapshot or copy mechanism; no particular storage technology is required. See link:docs/backup-restore.adoc[Repository Backup and Restore] for the static point, restore checks, and current Recovery path constraint.
+Backup and restore are operator-managed. Preserve the entire stopped Repository as one consistent set, including SQLite and any sidecars, CAS objects, Recovery staging/manifests, coordination state, repository settings, and pending remote delivery obligations. The operator chooses the snapshot or copy mechanism; no particular storage technology is required. See link:docs/backup-restore.adoc[Repository Backup and Restore] for the static point, restore checks, and current Recovery path constraint.

@@ -237,9 +237,9 @@ func (r *Repository) put(ctx context.Context, localPath string, repoPath string,
 		if err := r.validateLease(leaseCtx, operationID); err != nil {
 			return err
 		}
-		if r.settings.DeliveryMode == DeliveryModeGCS {
+		if r.settings.DeliveryMode == DeliveryModeRemote {
 			if _, err := r.metaStore.CommitPut(leaseCtx, putEntry, true); err != nil {
-				return fmt.Errorf("failed to atomically commit GCS-mode Put metadata and transfer obligation: %w", err)
+				return fmt.Errorf("failed to atomically commit remote-mode Put metadata and delivery obligation: %w", err)
 			}
 		} else if createdEntry {
 			if _, err := r.metaStore.Create(leaseCtx, putEntry); err != nil {
@@ -277,11 +277,11 @@ func (r *Repository) validateLease(ctx context.Context, operationID string) erro
 
 func (r *Repository) openLocalOrDownload(ctx context.Context, operationID string, id content.ID) (reader io.ReadCloser, retErr error) {
 	reader, err := r.objectStore.Open(ctx, id)
-	if err == nil || !errors.Is(err, objectstore.ErrObjectNotFound) || r.settings.DeliveryMode != DeliveryModeGCS {
+	if err == nil || !errors.Is(err, objectstore.ErrObjectNotFound) || r.settings.DeliveryMode != DeliveryModeRemote {
 		return reader, err
 	}
-	if r.replica == nil {
-		return nil, errors.New("GCS read-through is configured without a replica store")
+	if r.remoteStore == nil {
+		return nil, errors.New("remote read-through is configured without a remote object store")
 	}
 	if err := r.coordinator.AcquireResourceLock(ctx, temporaryResourceID(operationID), operationID, coordinator.RLock, resourceLeaseTTL); err != nil {
 		return nil, fmt.Errorf("acquire download temp RLock: %w", err)
@@ -290,12 +290,12 @@ func (r *Repository) openLocalOrDownload(ctx context.Context, operationID string
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), putCleanupTimeout)
 		defer cancel()
 		if err := r.objectStore.CleanupStaging(cleanupCtx, operationID); err != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("cleanup GCS download staging: %w", err))
+			retErr = errors.Join(retErr, fmt.Errorf("cleanup remote download staging: %w", err))
 		}
 	}()
 	session, err := r.objectStore.BeginStage(ctx, operationID)
 	if err != nil {
-		return nil, fmt.Errorf("begin GCS download staging: %w", err)
+		return nil, fmt.Errorf("begin remote download staging: %w", err)
 	}
 	sessionClosed := false
 	defer func() {
@@ -303,29 +303,29 @@ func (r *Repository) openLocalOrDownload(ctx context.Context, operationID string
 			retErr = errors.Join(retErr, session.Close())
 		}
 	}()
-	remote, err := r.replica.OpenReplica(ctx, id)
+	remote, err := r.remoteStore.OpenRemote(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("open GCS replica %s: %w", id, err)
+		return nil, fmt.Errorf("open remote object %s: %w", id, err)
 	}
 	staged, stageErr := session.Stage(ctx, remote)
 	remoteCloseErr := remote.Close()
 	sessionCloseErr := session.Close()
 	sessionClosed = true
 	if err := errors.Join(stageErr, remoteCloseErr, sessionCloseErr); err != nil {
-		return nil, fmt.Errorf("stage GCS download %s: %w", id, err)
+		return nil, fmt.Errorf("stage remote download %s: %w", id, err)
 	}
 	if staged.ID() != id {
-		return nil, fmt.Errorf("downloaded GCS content has the wrong identity: got %s, want %s: %w", staged.ID(), id, objectstore.ErrHashMismatch)
+		return nil, fmt.Errorf("downloaded remote content has the wrong identity: got %s, want %s: %w", staged.ID(), id, objectstore.ErrHashMismatch)
 	}
 	if err := r.validateLease(ctx, operationID); err != nil {
 		return nil, err
 	}
 	result, err := r.objectStore.Publish(ctx, staged)
 	if err != nil {
-		return nil, fmt.Errorf("publish verified GCS download: %w", err)
+		return nil, fmt.Errorf("publish verified remote download: %w", err)
 	}
 	if result.ID != id || result.Size != staged.Size() {
-		return nil, fmt.Errorf("object store published unexpected GCS download: got %s/%d want %s/%d", result.ID, result.Size, id, staged.Size())
+		return nil, fmt.Errorf("object store published unexpected remote download: got %s/%d want %s/%d", result.ID, result.Size, id, staged.Size())
 	}
 	if err := r.validateLease(ctx, operationID); err != nil {
 		return nil, err

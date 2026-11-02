@@ -743,7 +743,7 @@ func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTran
 	return entry, nil
 }
 
-// PendingTransfers lists distinct content IDs whose GCS delivery is pending.
+// PendingTransfers lists distinct content IDs whose remote delivery is pending.
 func (s *Store) PendingTransfers(ctx context.Context) ([]content.ID, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT content_id FROM transfer_queue ORDER BY content_id")
 	if err != nil {

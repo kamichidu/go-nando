@@ -301,20 +301,23 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func() error, err
 	}
 
 	validatingMetaStore := metadata.NewValidatingStore(metaStore)
-	var replica objectstore.ReplicaStore
+	var remoteStore objectstore.RemoteObjectStore
 	var gcsClient io.Closer
-	if repoSettings.DeliveryMode == repository.DeliveryModeGCS {
-		gcsStore, client, err := gcs.NewClientStore(ctx, repoSettings.GCSBucket)
+	if repoSettings.DeliveryMode == repository.DeliveryModeRemote {
+		if repoSettings.RemoteBackend != "" && repoSettings.RemoteBackend != "gcs" {
+			return nil, "", nil, errors.Join(fmt.Errorf("unsupported remote object storage backend %q", repoSettings.RemoteBackend), metaStore.Close())
+		}
+		gcsStore, client, err := gcs.NewClientStore(ctx, repoSettings.Bucket())
 		if err != nil {
 			return nil, "", nil, errors.Join(err, metaStore.Close())
 		}
-		replica, gcsClient = gcsStore, client
+		remoteStore, gcsClient = gcsStore, client
 	}
 	coordinator, err := coordinatorsqlite.Open(filepath.Join(repoDir, "coordination.db"))
 	if err != nil {
 		return nil, "", nil, errors.Join(fmt.Errorf("failed to open repository coordinator: %w", err), closeIfNotNil(gcsClient), metaStore.Close())
 	}
-	repo := repository.NewRepositoryWithReplica(validatingMetaStore, objStore, replica, hasher, coordinator, repoSettings)
+	repo := repository.NewRepositoryWithRemoteObjectStore(validatingMetaStore, objStore, remoteStore, hasher, coordinator, repoSettings)
 	application := app.NewApp(repo)
 
 	cleanup := func() error {

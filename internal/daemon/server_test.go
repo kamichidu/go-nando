@@ -743,6 +743,6 @@ func openTestApplication(t *testing.T, repoDir string) (*app.App, func() error) 
 	if err != nil {
 		t.Fatal(errors.Join(err, coordinator.Close(), metaStore.Close()))
 	}
-	repo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(metaStore), objects, nil, hasher, coordinator, settings)
+	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, nil, hasher, coordinator, settings)
 	return app.NewApp(repo), func() error { return errors.Join(coordinator.Close(), metaStore.Close()) }
 }

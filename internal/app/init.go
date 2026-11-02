@@ -25,6 +25,7 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	if err := settings.Validate(); err != nil {
 		return fmt.Errorf("invalid repository settings: %w", err)
 	}
+	settings = settings.Canonical()
 	// 1. Create root directory
 	if err := os.MkdirAll(repoDir, 0755); err != nil {
 		return fmt.Errorf("failed to create repository root directory: %w", err)

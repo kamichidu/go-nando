@@ -37,7 +37,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now nando@work.service
 ```
 
-Do not copy the example's placeholder path literally. If GCS is enabled, set
+Do not copy the example's placeholder path literally. For remote object delivery, set
 all four scheduler values in the instance TOML. The package does not select
 operational timing or parallelism defaults. ADC remains host/user managed; use
 the user's native identity or a private credential file and ensure the user
@@ -77,7 +77,7 @@ provided for experimentation only and is not required to pass Phase A.
 FUSE and WebDAV remain separate client processes. Start the daemon before
 either client, and stop clients before the daemon. WebDAV remains loopback-only
 and unauthenticated under the approved Phase A boundary. The daemon does not
-require network availability at startup; GCS operations retry asynchronously.
+require network availability at startup; remote delivery retries asynchronously.
 
 ## Upgrade and removal
 
