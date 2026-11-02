@@ -85,7 +85,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"endpoint", "token_file", "ca_cert", "tls_cert", "tls_key"} {
+	for _, key := range []string{"endpoint", "token_from_env", "ca_cert", "tls_cert", "tls_key"} {
 		if !strings.Contains(string(advancedBytes), key+" =") {
 			t.Errorf("advanced sample is missing supported config key %q", key)
 		}
@@ -110,9 +110,10 @@ func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
 		text string
 		want DaemonConfig
 	}{
-		{"nested", "[daemon]\nendpoint = \"tcp://host:7443\"\ntoken_file = \"token\"\nca_cert = \"ca.pem\"\ntls_cert = \"cert.pem\"\ntls_key = \"key.pem\"\n", DaemonConfig{"tcp://host:7443", "token", "ca.pem", "cert.pem", "key.pem"}},
-		{"legacy", "daemon_endpoint = \"tcp://host:7443\"\ndaemon_token_file = \"token\"\ndaemon_ca_cert = \"ca.pem\"\ndaemon_tls_cert = \"cert.pem\"\ndaemon_tls_key = \"key.pem\"\n", DaemonConfig{"tcp://host:7443", "token", "ca.pem", "cert.pem", "key.pem"}},
-		{"mixed distinct fields", "daemon_endpoint = \"tcp://host:7443\"\n[daemon]\ntoken_file = \"token\"\n", DaemonConfig{Endpoint: "tcp://host:7443", TokenFile: "token"}},
+		{"nested token sources", "[daemon]\nendpoint = \"tcp://host:7443\"\ntoken = \"literal\"\nca_cert = \"ca.pem\"\ntls_cert = \"cert.pem\"\ntls_key = \"key.pem\"\n", DaemonConfig{Endpoint: "tcp://host:7443", Token: "literal", CACert: "ca.pem", TLSCert: "cert.pem", TLSKey: "key.pem"}},
+		{"nested file alias", "[daemon]\ntoken_file = \"token\"\n", DaemonConfig{TokenFromFile: "token", TokenFile: "token"}},
+		{"legacy", "daemon_endpoint = \"tcp://host:7443\"\ndaemon_token_file = \"token\"\ndaemon_ca_cert = \"ca.pem\"\ndaemon_tls_cert = \"cert.pem\"\ndaemon_tls_key = \"key.pem\"\n", DaemonConfig{Endpoint: "tcp://host:7443", TokenFromFile: "token", TokenFile: "token", CACert: "ca.pem", TLSCert: "cert.pem", TLSKey: "key.pem"}},
+		{"mixed distinct fields", "daemon_endpoint = \"tcp://host:7443\"\n[daemon]\ntoken_from_file = \"token\"\n", DaemonConfig{Endpoint: "tcp://host:7443", TokenFromFile: "token"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -136,6 +137,20 @@ func TestLoadConfigDaemonSectionAndLegacyKeys(t *testing.T) {
 		}
 		if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "both set") {
 			t.Fatalf("duplicate old/new daemon keys accepted: %v", err)
+		}
+	}
+	for _, text := range []string{
+		"[daemon]\ntoken = \"secret-value\"\ntoken_from_file = \"path\"\n",
+		"[daemon]\ntoken_from_file = \"path\"\ntoken_from_env = \"SECRET_NAME\"\n",
+		"[daemon]\ntoken = \"secret-value\"\ntoken_from_env = \"SECRET_NAME\"\n",
+		"daemon_token_file = \"legacy-path\"\n[daemon]\ntoken_from_env = \"SECRET_NAME\"\n",
+	} {
+		path := filepath.Join(t.TempDir(), "conflicting-token-sources.toml")
+		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(path); err == nil || strings.Contains(err.Error(), "secret-value") || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("conflicting token sources were not safely rejected: %v", err)
 		}
 	}
 }

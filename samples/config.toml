@@ -5,4 +5,7 @@ repository = ""
 # Show more detail in command output.
 verbose = false
 
+# For TCP daemon authentication, prefer an environment variable under [daemon]:
+# token_from_env = "NANDO_DAEMON_TOKEN"
+
 # GCS delivery also needs explicit scheduler settings; see the README.

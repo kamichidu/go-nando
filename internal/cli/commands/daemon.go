@@ -73,15 +73,15 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 	if tokenFile == "" {
 		tokenFile = globalFlags.DaemonTokenFile
 	}
+	literal, envName := cfg.Daemon.Token, cfg.Daemon.TokenFromEnv
 	if tokenFile == "" {
-		tokenFile = cfg.Daemon.TokenFile
+		tokenFile = cfg.Daemon.TokenFromFile
+	} else {
+		literal, envName = "", ""
 	}
-	var token string
-	if tokenFile != "" {
-		token, err = controlrpc.ReadTokenFile(tokenFile)
-		if err != nil {
-			return fmt.Errorf("read daemon bearer token: %w", err)
-		}
+	token, err := controlrpc.ResolveToken(literal, tokenFile, envName)
+	if err != nil {
+		return fmt.Errorf("resolve daemon bearer token: %w", err)
 	}
 	var scheduler *daemon.SchedulerConfig
 	repositorySettings, err := app.LoadRepositorySettings(repoDir)

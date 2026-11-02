@@ -310,7 +310,7 @@ nodes:
     level: system_design
     kind: user-configuration
     statement: >-
-      Per-user runtime configuration is TOML at $XDG_CONFIG_HOME/nando/config.toml on Linux, macOS, and Windows when XDG_CONFIG_HOME is set; otherwise it is ~/.config/nando/config.toml on Linux/macOS and %USERPROFILE%/.config/nando/config.toml on Windows. Do not use os.UserConfigDir, macOS Application Support, Windows AppData, or conf.d for the new config location. Repository data is independent: $XDG_DATA_HOME/nando when set, otherwise ~/.local/share/nando on Linux/macOS and %USERPROFILE%/.local/share/nando on Windows. CLI arguments override TOML values, which override these defaults. A missing implicit config uses defaults; a missing explicit --config or malformed existing TOML is an error. Runtime keys are repository, verbose, daemon_endpoint, daemon_token_file, daemon_ca_cert, daemon_tls_cert, and daemon_tls_key; repository delivery settings remain repository-owned in repository.json. If a previous os.UserConfigDir-based initialized repository exists and the new default data repository does not, require explicit repository selection to prevent silently opening a different repository.
+      Per-user runtime configuration is TOML at $XDG_CONFIG_HOME/nando/config.toml on Linux, macOS, and Windows when XDG_CONFIG_HOME is set; otherwise it is ~/.config/nando/config.toml on Linux/macOS and %USERPROFILE%/.config/nando/config.toml on Windows. Do not use os.UserConfigDir, macOS Application Support, Windows AppData, or conf.d for the new config location. Repository data is independent: $XDG_DATA_HOME/nando when set, otherwise ~/.local/share/nando on Linux/macOS and %USERPROFILE%/.local/share/nando on Windows. CLI arguments override TOML values, which override these defaults. A missing implicit config uses defaults; a missing explicit --config or malformed existing TOML is an error. Runtime keys include repository, verbose, the nested daemon endpoint and transport settings, and the legacy top-level daemon_* spellings; exactly one nonempty daemon token source may be selected using daemon.token, daemon.token_from_file, or daemon.token_from_env. The prior daemon.token_file and daemon_token_file spellings remain file-source aliases. Repository delivery settings remain repository-owned in repository.json. If a previous os.UserConfigDir-based initialized repository exists and the new default data repository does not, require explicit repository selection to prevent silently opening a different repository.
     attributes:
       format: TOML
       config_filename: config.toml
@@ -323,7 +323,7 @@ nodes:
       explicit_missing_config: error
       malformed_config: error
       migration_guard: require-explicit-selection-when-legacy-repository-detected
-      active_keys: [repository, verbose, daemon_endpoint, daemon_token_file, daemon_ca_cert, daemon_tls_cert, daemon_tls_key]
+      active_keys: [repository, verbose, daemon.endpoint, daemon.token, daemon.token_from_file, daemon.token_from_env, daemon.ca_cert, daemon.tls_cert, daemon.tls_key, daemon_endpoint, daemon_token_file, daemon_ca_cert, daemon_tls_cert, daemon_tls_key]
     provenance:
       origin: human-authored
   - id: DES-APPLICATION-BOUNDARY

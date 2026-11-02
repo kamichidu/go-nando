@@ -97,14 +97,15 @@ func NewDaemonClientFromContext(ctx context.Context) (*controlrpc.Client, error)
 	}
 	var token string
 	tokenFile := flags.DaemonTokenFile
+	literal, envName := cfg.Daemon.Token, cfg.Daemon.TokenFromEnv
 	if tokenFile == "" {
-		tokenFile = cfg.Daemon.TokenFile
+		tokenFile = cfg.Daemon.TokenFromFile
+	} else {
+		literal, envName = "", ""
 	}
-	if tokenFile != "" {
-		token, err = controlrpc.ReadTokenFile(tokenFile)
-		if err != nil {
-			return nil, fmt.Errorf("read daemon bearer token: %w", err)
-		}
+	token, err = controlrpc.ResolveToken(literal, tokenFile, envName)
+	if err != nil {
+		return nil, fmt.Errorf("resolve daemon bearer token: %w", err)
 	}
 	var caPEM []byte
 	caCertFile := flags.DaemonCACertFile

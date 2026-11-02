@@ -34,7 +34,12 @@ type Config struct {
 
 // DaemonConfig contains daemon listener and client transport settings.
 type DaemonConfig struct {
-	Endpoint  string `toml:"endpoint"`
+	Endpoint      string `toml:"endpoint"`
+	Token         string `toml:"token"`
+	TokenFromFile string `toml:"token_from_file"`
+	TokenFromEnv  string `toml:"token_from_env"`
+	// TokenFile accepts the previous nested spelling as an alias for
+	// token_from_file while configurations are migrated.
 	TokenFile string `toml:"token_file"`
 	CACert    string `toml:"ca_cert"`
 	TLSCert   string `toml:"tls_cert"`
@@ -124,10 +129,30 @@ func LoadConfig(path string) (*Config, error) {
 			continue
 		}
 		newKey := "daemon." + strings.TrimPrefix(item.name, "daemon_")
-		if metadata.IsDefined("daemon", strings.TrimPrefix(item.name, "daemon_")) {
+		if item.name != "daemon_token_file" && metadata.IsDefined("daemon", strings.TrimPrefix(item.name, "daemon_")) {
 			return nil, fmt.Errorf("configuration keys %q and %q are both set", item.name, newKey)
 		}
-		*item.new = item.old
+		if item.name == "daemon_token_file" {
+			if item.old != "" && (cfg.Daemon.TokenFromFile != "" || cfg.Daemon.TokenFile != "") {
+				return nil, errors.New("daemon token sources are mutually exclusive")
+			}
+			if cfg.Daemon.TokenFromFile == "" {
+				cfg.Daemon.TokenFromFile = item.old
+			}
+		} else {
+			*item.new = item.old
+		}
+	}
+	if cfg.Daemon.TokenFromFile == "" {
+		cfg.Daemon.TokenFromFile = cfg.Daemon.TokenFile
+	}
+	if metadata.IsDefined("daemon", "token_file") || metadata.IsDefined("daemon_token_file") {
+		cfg.Daemon.TokenFile = cfg.Daemon.TokenFromFile
+	}
+	if cfg.Daemon.Token != "" && cfg.Daemon.TokenFromFile != "" ||
+		cfg.Daemon.Token != "" && cfg.Daemon.TokenFromEnv != "" ||
+		cfg.Daemon.TokenFromFile != "" && cfg.Daemon.TokenFromEnv != "" {
+		return nil, errors.New("daemon token sources are mutually exclusive")
 	}
 	return &cfg, nil
 }
