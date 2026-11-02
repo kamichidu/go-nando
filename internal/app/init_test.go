@@ -27,6 +27,9 @@ func TestInitRepositoryPersistsDeliverySettingsAndDoesNotReconfigure(t *testing.
 	if err != nil || got.DeliveryMode != want.DeliveryMode || got.RemoteBucket != want.RemoteBucket {
 		t.Fatalf("existing settings changed: got=%+v err=%v", got, err)
 	}
+	if err := InitRepository(context.Background(), root); err == nil {
+		t.Fatal("repeated init should reject an existing repository")
+	}
 }
 
 func TestLoadRepositorySettingsRejectsMissingSettings(t *testing.T) {

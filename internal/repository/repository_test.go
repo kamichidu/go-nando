@@ -1239,8 +1239,14 @@ func openInitializedMetadataStore(t *testing.T, dbPath string, ctx context.Conte
 	if err != nil {
 		t.Fatalf("open Metadata Store: %v", err)
 	}
-	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
-		t.Fatalf("initialize Metadata Store: %v", err)
+	if err := store.CheckMigrations(ctx); errors.Is(err, sqlite.ErrSchemaUninitialized) {
+		if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
+			t.Fatalf("initialize Metadata Store: %v", err)
+		} else if err := store.CheckMigrations(ctx); err != nil {
+			t.Fatalf("validate Metadata Store: %v", err)
+		}
+	} else if err != nil {
+		t.Fatalf("validate Metadata Store: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {

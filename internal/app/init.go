@@ -81,19 +81,7 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 		return err
 	}
 	if dbExists {
-		if err := store.CheckMigrations(ctx); err != nil {
-			return fmt.Errorf("failed schema migration validation: %w", err)
-		}
-		persistedFormat, found, err := store.RepositoryFormat(ctx)
-		if err != nil {
-			return err
-		}
-		if !found {
-			return repositoryformat.ErrUnsupported
-		}
-		if err := persistedFormat.Validate(); err != nil {
-			return err
-		}
+		return fmt.Errorf("repository already has a metadata database; init creates new repositories only")
 	}
 
 	if err := store.Initialize(ctx, repoFormat); err != nil {
@@ -132,6 +120,43 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 		}
 	}
 	return nil
+}
+
+// MigrateRepository runs the explicit schema migration command against an
+// existing repository database. It never creates the target database.
+func MigrateRepository(ctx context.Context, repoDir string) (int, error) {
+	dbPath := filepath.Join(repoDir, "metadata.sqlite")
+	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
+		return 0, fmt.Errorf("repository metadata database does not exist")
+	} else if err != nil {
+		return 0, fmt.Errorf("inspect repository metadata database: %w", err)
+	}
+	store, err := sqlite.NewExistingStore(dbPath)
+	if err != nil {
+		return 0, err
+	}
+	defer store.Close()
+	// Validate the repository format before asking the backend to perform any
+	// schema transition. The current v1 command is a no-op, but later releases
+	// keep this ordering as part of the migration boundary.
+	if err := store.CheckMigrations(ctx); err != nil {
+		return 0, err
+	}
+	repoFormat, found, err := store.RepositoryFormat(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if !found {
+		return 0, fmt.Errorf("%w: repository format metadata is missing", repositoryformat.ErrUnsupported)
+	}
+	if err := repoFormat.Validate(); err != nil {
+		return 0, err
+	}
+	version, err := store.Migrate(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return version, nil
 }
 
 // LoadRepositorySettings reads canonical v1 repository-owned delivery settings.

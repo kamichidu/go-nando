@@ -211,8 +211,33 @@ func TestAdminRecoverCommandNameAndArguments(t *testing.T) {
 		t.Fatalf("command name=%q", command.Name())
 	}
 	var stdout, stderr bytes.Buffer
-	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"admin", "unknown"}); code == 0 || !strings.Contains(stderr.String(), "nando admin recover") {
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"admin", "unknown"}); code == 0 || !strings.Contains(stderr.String(), "nando admin recover") || !strings.Contains(stderr.String(), "nando admin migrate") {
 		t.Fatalf("invalid admin command: code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestAdminMigrateCurrentAndMissingDatabase(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	repoDir := filepath.Join(t.TempDir(), "repository")
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "admin", "migrate"}); code == 0 || !strings.Contains(stderr.String(), "does not exist") {
+		t.Fatalf("migrate absent repository: code=%d stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "metadata.sqlite")); !os.IsNotExist(err) {
+		t.Fatalf("migrate created absent database: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "init"}); code != 0 {
+		t.Fatalf("init repository: code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "admin", "migrate"}); code != 0 || !strings.Contains(stdout.String(), "version 1") {
+		t.Fatalf("migrate current repository: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "admin"}); code == 0 || !strings.Contains(stderr.String(), "nando admin migrate") {
+		t.Fatalf("admin command synopsis: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 

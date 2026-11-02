@@ -758,12 +758,12 @@ func TestSQLiteStore(t *testing.T) {
 
 		// Schema check must fail indicating obsolete Phase 0 schema
 		err = store.CheckMigrations(ctx)
-		if !errors.Is(err, ErrMigrationsUnsupported) {
+		if !errors.Is(err, ErrSchemaVersionUnsupported) {
 			t.Errorf("expected incompatible migration history error, got: %v", err)
 		}
 	})
 
-	t.Run("Format metadata and migration history are persisted and enforced", func(t *testing.T) {
+	t.Run("Format metadata and schema version are persisted and enforced", func(t *testing.T) {
 		store, _ := setupStore(t)
 		defer store.Close()
 
@@ -775,9 +775,13 @@ func TestSQLiteStore(t *testing.T) {
 		if formatVersion != repositoryformat.CurrentVersion || algorithm != repositoryformat.ContentAlgorithmSHA256 || idFormat != repositoryformat.ContentIDFormatSHA256 {
 			t.Fatalf("unexpected repository format metadata: %d %q %q", formatVersion, algorithm, idFormat)
 		}
-		var migrationCount int
-		if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations WHERE version=1").Scan(&migrationCount); err != nil || migrationCount != 1 {
-			t.Fatalf("expected migration 1 to be recorded once, count=%d err=%v", migrationCount, err)
+		var schemaVersion int
+		if err := store.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schemaVersion); err != nil || schemaVersion != 1 {
+			t.Fatalf("expected user_version=1, version=%d err=%v", schemaVersion, err)
+		}
+		var ledgerCount int
+		if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'").Scan(&ledgerCount); err != nil || ledgerCount != 0 {
+			t.Fatalf("schema_migrations ledger remains: count=%d err=%v", ledgerCount, err)
 		}
 
 		if _, err := store.db.ExecContext(ctx, "UPDATE repository_format SET format_version=99 WHERE singleton=1"); err != nil {
@@ -795,22 +799,14 @@ func TestSQLiteStore(t *testing.T) {
 		}
 	})
 
-	t.Run("Pre-v1 SQLite migration history is rejected without changing schema", func(t *testing.T) {
+	t.Run("Newer SQLite user_version is rejected without mutation", func(t *testing.T) {
 		store, _ := setupStore(t)
 		defer store.Close()
-		if _, err := store.db.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at) VALUES(2, 0)"); err != nil {
+		if _, err := store.db.ExecContext(ctx, "PRAGMA user_version=2"); err != nil {
 			t.Fatal(err)
 		}
-		var before int
-		if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&before); err != nil {
-			t.Fatal(err)
-		}
-		if err := store.CheckMigrations(ctx); !errors.Is(err, ErrMigrationsUnsupported) {
-			t.Fatalf("unsupported migration history accepted: %v", err)
-		}
-		var after int
-		if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&after); err != nil || after != before {
-			t.Fatalf("unsupported history changed: before=%d after=%d err=%v", before, after, err)
+		if err := store.CheckMigrations(ctx); !errors.Is(err, ErrSchemaVersionUnsupported) {
+			t.Fatalf("unsupported schema version accepted: %v", err)
 		}
 	})
 
@@ -820,14 +816,74 @@ func TestSQLiteStore(t *testing.T) {
 			t.Fatalf("failed to create empty database: %v", err)
 		}
 		defer store.Close()
-		if err := store.CheckMigrations(ctx); !errors.Is(err, ErrMigrationsUninitialized) {
+		if err := store.CheckMigrations(ctx); !errors.Is(err, ErrSchemaUninitialized) {
 			t.Fatalf("expected empty database to have no migration history, got %v", err)
 		}
 		if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
 			t.Fatalf("fresh initialization should accept an empty database: %v", err)
 		}
 		if err := store.CheckMigrations(ctx); err != nil {
-			t.Fatalf("initialized schema migrations should be accepted: %v", err)
+			t.Fatalf("initialized schema should be accepted: %v", err)
+		}
+	})
+
+	t.Run("Nonempty legacy ledger with user_version zero is rejected", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+		if _, err := store.db.ExecContext(ctx, "PRAGMA user_version=0; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL); INSERT INTO schema_migrations VALUES(1,0)"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CheckMigrations(ctx); !errors.Is(err, ErrSchemaVersionUnsupported) {
+			t.Fatalf("legacy ledger accepted: %v", err)
+		}
+		if err := store.Initialize(ctx, repositoryformat.Current()); !errors.Is(err, ErrSchemaVersionUnsupported) {
+			t.Fatalf("init accepted legacy ledger: %v", err)
+		}
+	})
+
+	t.Run("Corrupt or missing v1 tables are rejected", func(t *testing.T) {
+		for _, table := range []string{"entries", "repository_format", "transfer_queue", "content_metadata"} {
+			t.Run(table, func(t *testing.T) {
+				store, _ := setupStore(t)
+				defer store.Close()
+				if _, err := store.db.ExecContext(ctx, "DROP TABLE "+table); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.CheckMigrations(ctx); !errors.Is(err, ErrSchemaVersionUnsupported) {
+					t.Fatalf("missing v1 table accepted: %v", err)
+				}
+			})
+		}
+		t.Run("malformed entries columns", func(t *testing.T) {
+			store, _ := setupStore(t)
+			defer store.Close()
+			if _, err := store.db.ExecContext(ctx, "DROP TABLE entries; CREATE TABLE entries(entry_id TEXT PRIMARY KEY)"); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.CheckMigrations(ctx); !errors.Is(err, ErrSchemaVersionUnsupported) {
+				t.Fatalf("malformed v1 table accepted: %v", err)
+			}
+		})
+	})
+
+	t.Run("Migrate is current-version no-op and rejects unknown versions", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+		version, err := store.Migrate(ctx)
+		if err != nil || version != CurrentSchemaVersion {
+			t.Fatalf("current migrate: version=%d err=%v", version, err)
+		}
+		if _, err := store.db.ExecContext(ctx, "PRAGMA user_version=2"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Migrate(ctx); !errors.Is(err, ErrSchemaVersionUnsupported) {
+			t.Fatalf("newer version migrate accepted: %v", err)
+		}
+		if _, err := store.db.ExecContext(ctx, "PRAGMA user_version=-1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Migrate(ctx); !errors.Is(err, ErrSchemaVersionUnsupported) {
+			t.Fatalf("older schema version migrate accepted: %v", err)
 		}
 	})
 
@@ -856,7 +912,7 @@ func TestSQLiteStore(t *testing.T) {
 			t.Fatalf("failed to open legacy repository: %v", err)
 		}
 		defer store.Close()
-		if err := store.Initialize(ctx, repositoryformat.Current()); !errors.Is(err, ErrMigrationsUnsupported) {
+		if err := store.Initialize(ctx, repositoryformat.Current()); !errors.Is(err, ErrSchemaVersionUnsupported) {
 			t.Fatalf("expected legacy repository refusal, got %v", err)
 		}
 		var objectID string

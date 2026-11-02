@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/kamichidu/go-flagshim"
+	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/cli"
 )
 
@@ -20,8 +21,20 @@ func (c *RemoteOrphansCommand) RegisterFlags(ctx context.Context, _ *flagshim.Fl
 }
 
 func (c *RemoteOrphansCommand) Run(ctx context.Context, args []string) (runErr error) {
+	if len(args) == 1 && args[0] == "migrate" {
+		repoDir, _, err := cli.ResolveRepositoryAndVerbose(ctx)
+		if err != nil {
+			return err
+		}
+		version, err := app.MigrateRepository(ctx, repoDir)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(flagshim.MustStdoutFromContext(ctx), "Repository schema is current at version %d.\n", version)
+		return err
+	}
 	if len(args) != 1 || args[0] != "recover" {
-		return fmt.Errorf("%w: nando admin recover", cli.ErrInvalidArguments)
+		return fmt.Errorf("%w: nando admin recover | nando admin migrate", cli.ErrInvalidArguments)
 	}
 	cfg, err := cli.ResolveConfigFromContext(ctx)
 	if err != nil {

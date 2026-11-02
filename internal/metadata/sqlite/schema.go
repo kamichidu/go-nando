@@ -23,10 +23,6 @@ CREATE TABLE repository_format (
     content_algorithm  TEXT NOT NULL,
     content_id_format  TEXT NOT NULL
 );
-CREATE TABLE schema_migrations (
-    version INTEGER PRIMARY KEY,
-    applied_at INTEGER NOT NULL
-);
 CREATE TABLE transfer_queue (
     content_id TEXT PRIMARY KEY,
     enqueued_at INTEGER NOT NULL
