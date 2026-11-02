@@ -9,8 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	fusefs "github.com/kamichidu/go-nando/adapters/fuse"
 	"github.com/kamichidu/go-nando/controlrpc"
-	fusefs "github.com/kamichidu/go-nando/fuse"
 	"github.com/kamichidu/go-nando/runtimeconfig"
 )
 

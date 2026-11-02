@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kamichidu/go-nando/adapters/webdav/internal/adapter"
 	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/runtimeconfig"
-	"github.com/kamichidu/go-nando/webdav/internal/adapter"
 )
 
 func main() {

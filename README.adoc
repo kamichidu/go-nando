@@ -38,6 +38,8 @@ Install the latest published Go module version with:
 [source,bash]
 ----
 go install github.com/kamichidu/go-nando/cmd/nando@latest
+go install github.com/kamichidu/go-nando/adapters/fuse/cmd/nando-fuse@latest
+go install github.com/kamichidu/go-nando/adapters/webdav/cmd/nando-webdav@latest
 ----
 
 Ensure the Go binary directory is on `PATH`. To build from a checkout instead, run `go build ./cmd/nando` from the repository root. For Debian packages and the systemd user service, see the link:packaging/README.md[package and service guide].

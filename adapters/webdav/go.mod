@@ -1,4 +1,4 @@
-module github.com/kamichidu/go-nando/webdav
+module github.com/kamichidu/go-nando/adapters/webdav
 
 go 1.25.1
 
@@ -9,4 +9,4 @@ require (
 
 require github.com/BurntSushi/toml v1.6.0 // indirect
 
-replace github.com/kamichidu/go-nando => ..
+replace github.com/kamichidu/go-nando => ../..

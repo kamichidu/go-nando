@@ -110,4 +110,4 @@ The supplied repository workflow names `docs/index.adoc`, but it was absent when
 
 == WebDAV G5
 
-`e2e/run.sh` also builds and lint-checks the separate `webdav/` module at G0 and runs G5 on the Linux/WSL host. G5 starts the daemon and WebDAV executable natively and uses curl to check OPTIONS, GET/HEAD, PUT conditional validators, MKCOL/PROPFIND, MOVE, file COPY to an absent destination, DELETE, and explicit 501 responses for LOCK and PROPPATCH. It does not claim full DAV compliance; unsupported LOCK/dead-property/replacement semantics are documented in `webdav-phase-a.adoc`.
+`e2e/run.sh` also builds and lint-checks the separate `adapters/webdav/` module at G0 and runs G5 on the Linux/WSL host. G5 starts the daemon and WebDAV executable natively and uses curl to check OPTIONS, GET/HEAD, PUT conditional validators, MKCOL/PROPFIND, MOVE, file COPY to an absent destination, DELETE, and explicit 501 responses for LOCK and PROPPATCH. It does not claim full DAV compliance; unsupported LOCK/dead-property/replacement semantics are documented in `webdav-phase-a.adoc`.

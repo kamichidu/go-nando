@@ -1,4 +1,4 @@
-module github.com/kamichidu/go-nando/fuse
+module github.com/kamichidu/go-nando/adapters/fuse
 
 go 1.25.1
 
@@ -12,4 +12,4 @@ require (
 	golang.org/x/sys v0.46.0 // indirect
 )
 
-replace github.com/kamichidu/go-nando => ..
+replace github.com/kamichidu/go-nando => ../..

@@ -1,6 +1,6 @@
 = WebDAV Phase A
 
-The adapter in `webdav/` is a separate Go module and executable process, parallel to FUSE. It depends on the public `controlrpc` contract only. File bytes move through daemon-issued local `file://` Resources; all namespace mutations and commits remain daemon-owned.
+The adapter in `adapters/webdav/` is a separate Go module and executable process, parallel to `adapters/fuse/`. It depends on the public `controlrpc` contract only. File bytes move through daemon-issued local `file://` Resources; all namespace mutations and commits remain daemon-owned.
 
 == Runtime boundary
 

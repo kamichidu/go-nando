@@ -38,7 +38,7 @@ The trace below treats system requirements and designs as obligations where appl
 
 Evidence checked:
 
-* Source and tests under `internal/`, `controlrpc/`, `fuse/`, `webdav/`, `cmd/`, `e2e/`, and the repository documentation.
+* Source and tests under `internal/`, `controlrpc/`, `adapters/fuse/`, `adapters/webdav/`, `cmd/`, `e2e/`, and the repository documentation.
 * The original host gate was rerun as `e2e/run.sh --stress` on the reviewed main revision. PA-01 follow-up reran it on the implementation worktree. Follow-up evidence directory: `{pa-01-evidence}`.
 * A separate native HTTP PROPFIND request against a temporary Local repository confirmed a WebDAV live-property inconsistency described below. The response included `DAV:supportedlock` although the adapter returns 501 for LOCK/UNLOCK.
 * `litmus` and `cadaver` were not installed (`command -v` returned no executable). No full WebDAV compliance claim is made.
@@ -149,7 +149,7 @@ The accepted security boundary is single-user local-host operation. Unix socket 
 
 === FUSE adapter
 
-`DES-ADAPTERS-FILESYSTEM`, `REQ-FUSE-DURABILITY`, and `REQ-FUSE-FILE-HANDLES` map to `fuse/filesystem.go` and its tests. The adapter is a separate read-write process/module using daemon RPC and shared `file://` resources. Source and tests cover stable Entry-ID rename, shared serialized writer session, atomic append, Fsync/final-close commit, terminal CAS failure, O_TRUNC staging, open-handle unlink/tombstones, no hard links, direct I/O/zero cache TTL, metadata refresh, and errno conversion.
+`DES-ADAPTERS-FILESYSTEM`, `REQ-FUSE-DURABILITY`, and `REQ-FUSE-FILE-HANDLES` map to `adapters/fuse/filesystem.go` and its tests. The adapter is a separate read-write process/module using daemon RPC and shared `file://` resources. Source and tests cover stable Entry-ID rename, shared serialized writer session, atomic append, Fsync/final-close commit, terminal CAS failure, O_TRUNC staging, open-handle unlink/tombstones, no hard links, direct I/O/zero cache TTL, metadata refresh, and errno conversion.
 
 G1 exercised a real host kernel FUSE mount for CRUD, commit durability, multiple writers, rename, unlink, and CAS; G3 exercised daemon/FUSE crash/restart and recovery; optional G4 exercised a 2 MiB random-offset multi-handle stress file with independent final digest. Current run: *G1 PASS, G3 PASS, G4 PASS*. Unit/race results are in G0.
 

@@ -17,7 +17,7 @@ sed \
 (
 	cd "$ROOT"
 	go build -o "$BUILD_DIR/nando" ./cmd/nando
-	(cd fuse && go build -o "$BUILD_DIR/nando-fuse" ./cmd/nando-fuse)
-	(cd webdav && go build -o "$BUILD_DIR/nando-webdav" ./cmd/nando-webdav)
+	(cd adapters/fuse && go build -o "$BUILD_DIR/nando-fuse" ./cmd/nando-fuse)
+	(cd adapters/webdav && go build -o "$BUILD_DIR/nando-webdav" ./cmd/nando-webdav)
 	nfpm package --config "$NFPM_CONFIG" --packager deb --target "$BUILD_DIR"
 )
