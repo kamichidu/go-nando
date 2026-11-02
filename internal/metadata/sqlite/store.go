@@ -140,12 +140,6 @@ func (s *Store) Initialize(ctx context.Context, repoFormat repositoryformat.Form
 	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (4, ?)", int64(now)); err != nil {
 		return fmt.Errorf("failed to record schema migration 4: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, MigrationV5); err != nil {
-		return fmt.Errorf("failed to apply schema migration 5: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (5, ?)", int64(now)); err != nil {
-		return fmt.Errorf("failed to record schema migration 5: %w", err)
-	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit SQLite schema migration: %w", err)
 	}
@@ -259,8 +253,6 @@ func (s *Store) Migrate(ctx context.Context) error {
 			migration = MigrationV3
 		case 4:
 			migration = MigrationV4
-		case 5:
-			migration = MigrationV5
 		default:
 			return fmt.Errorf("%w: no migration implementation for version %d", ErrMigrationsUnsupported, version)
 		}
@@ -275,33 +267,6 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return fmt.Errorf("commit SQLite migrations: %w", err)
 	}
 	return nil
-}
-
-// SetRepositoryIdentity stores the durable Metadata identity exactly once.
-func (s *Store) SetRepositoryIdentity(ctx context.Context, identity string) error {
-	if identity == "" {
-		return errors.New("repository metadata identity is required")
-	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO repository_identity(singleton,identity) VALUES(1,?) ON CONFLICT(singleton) DO NOTHING`, identity)
-	if err != nil {
-		return fmt.Errorf("store repository metadata identity: %w", err)
-	}
-	var stored string
-	if err := s.db.QueryRowContext(ctx, `SELECT identity FROM repository_identity WHERE singleton=1`).Scan(&stored); err != nil {
-		return err
-	}
-	if stored != identity {
-		return errors.New("repository metadata identity does not match SQLite")
-	}
-	return nil
-}
-
-func (s *Store) RepositoryIdentity(ctx context.Context) (string, error) {
-	var identity string
-	if err := s.db.QueryRowContext(ctx, `SELECT identity FROM repository_identity WHERE singleton=1`).Scan(&identity); err != nil {
-		return "", err
-	}
-	return identity, nil
 }
 
 func (s *Store) scanEntry(scanner interface{ Scan(dest ...any) error }) (metadata.Entry, error) {

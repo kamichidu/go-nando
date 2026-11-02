@@ -33,7 +33,6 @@ type gcsAPI interface {
 	Attrs(context.Context, string) (apiAttrs, error)
 	Open(context.Context, string) (io.ReadCloser, error)
 	List(context.Context) ([]apiAttrs, error)
-	Delete(context.Context, string, int64) error
 }
 
 // Store implements the remote immutable-replica operations for one bucket.
@@ -157,16 +156,6 @@ func (s *Store) ListReplicas(ctx context.Context) ([]objectstore.ReplicaInfo, er
 	return result, nil
 }
 
-func (s *Store) DeleteReplica(ctx context.Context, id content.ID, generation int64) error {
-	if err := id.Validate(); err != nil {
-		return err
-	}
-	if generation <= 0 {
-		return fmt.Errorf("GCS deletion requires an observed generation")
-	}
-	return s.api.Delete(ctx, objectName(id), generation)
-}
-
 type storageAPI struct{ bucket *storage.BucketHandle }
 
 func (a *storageAPI) Upload(ctx context.Context, name string, id content.ID, size int64, expectedMD5 []byte, src io.Reader) (apiAttrs, error) {
@@ -243,12 +232,4 @@ func (a *storageAPI) List(ctx context.Context) ([]apiAttrs, error) {
 		}
 		result = append(result, convertAttrs(name, attrs))
 	}
-}
-
-func (a *storageAPI) Delete(ctx context.Context, name string, generation int64) error {
-	err := a.bucket.Object(name).If(storage.Conditions{GenerationMatch: generation}).Delete(ctx)
-	if errors.Is(err, storage.ErrObjectNotExist) {
-		return ErrObjectNotFound
-	}
-	return err
 }

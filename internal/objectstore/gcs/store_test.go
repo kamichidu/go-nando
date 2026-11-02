@@ -18,7 +18,6 @@ type fakeAPI struct {
 	uploadErr  error
 	uploadSize int64
 	bytes      string
-	deletes    int
 	consume    int64
 }
 
@@ -64,8 +63,7 @@ func (a *fakeAPI) Attrs(_ context.Context, name string) (apiAttrs, error) {
 func (a *fakeAPI) Open(context.Context, string) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader(a.bytes)), nil
 }
-func (a *fakeAPI) List(context.Context) ([]apiAttrs, error)    { return []apiAttrs{a.attrs}, nil }
-func (a *fakeAPI) Delete(context.Context, string, int64) error { a.deletes++; return nil }
+func (a *fakeAPI) List(context.Context) ([]apiAttrs, error) { return []apiAttrs{a.attrs}, nil }
 
 func TestUploadTargetsFinalNameAndUsesAPIAttributesForAmbiguousResponse(t *testing.T) {
 	id, err := content.ParseID("sha256-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")

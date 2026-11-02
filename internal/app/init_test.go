@@ -16,7 +16,7 @@ func TestInitRepositoryPersistsDeliverySettingsAndDoesNotReconfigure(t *testing.
 		t.Fatalf("init GCS repository: %v", err)
 	}
 	got, err := LoadRepositorySettings(root)
-	if err != nil || got.DeliveryMode != want.DeliveryMode || got.GCSBucket != want.GCSBucket || got.MetadataIdentity == "" {
+	if err != nil || got.DeliveryMode != want.DeliveryMode || got.GCSBucket != want.GCSBucket {
 		t.Fatalf("load settings: got=%+v err=%v", got, err)
 	}
 	changed := repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "bucket-b"}
@@ -24,7 +24,7 @@ func TestInitRepositoryPersistsDeliverySettingsAndDoesNotReconfigure(t *testing.
 		t.Fatal("init unexpectedly reconfigured an existing repository")
 	}
 	got, err = LoadRepositorySettings(root)
-	if err != nil || got.DeliveryMode != want.DeliveryMode || got.GCSBucket != want.GCSBucket || got.MetadataIdentity == "" {
+	if err != nil || got.DeliveryMode != want.DeliveryMode || got.GCSBucket != want.GCSBucket {
 		t.Fatalf("existing settings changed: got=%+v err=%v", got, err)
 	}
 }

@@ -33,7 +33,6 @@ type fakeReplicaStore struct {
 	calls      int
 	stored     map[content.ID][]byte
 	listed     []objectstore.ReplicaInfo
-	deleted    []objectstore.ReplicaInfo
 	attrsErr   error
 	attrsMD5   []byte
 	generation int64
@@ -89,11 +88,6 @@ func (s *fakeReplicaStore) ReplicaAttrs(_ context.Context, id content.ID) (objec
 func (s *fakeReplicaStore) ListReplicas(context.Context) ([]objectstore.ReplicaInfo, error) {
 	return append([]objectstore.ReplicaInfo(nil), s.listed...), nil
 }
-func (s *fakeReplicaStore) DeleteReplica(_ context.Context, id content.ID, generation int64) error {
-	s.deleted = append(s.deleted, objectstore.ReplicaInfo{ID: id, Generation: generation})
-	return nil
-}
-
 func TestResourceLeasesProtectPutAndReadsFromGC(t *testing.T) {
 	ctx := context.Background()
 	tempDir := t.TempDir()
@@ -244,9 +238,6 @@ func TestGCLeavesUnreferencedGCSReplicaUntouched(t *testing.T) {
 	if err != nil || deleted != 0 {
 		t.Fatalf("GC unexpectedly removed an unreferenced GCS replica: deleted=%d err=%v", deleted, err)
 	}
-	if len(replica.deleted) != 0 {
-		t.Fatalf("ordinary GC deleted GCS content: %+v", replica.deleted)
-	}
 	if err := metaStore.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -262,15 +253,12 @@ func TestGCLeavesUnreferencedGCSReplicaUntouched(t *testing.T) {
 	if _, err := repo.GC(ctx); err == nil {
 		t.Fatal("GC unexpectedly succeeded after Metadata loss")
 	}
-	if err := repo.DeleteGCSOrphan(ctx, id, 73); err == nil {
-		t.Fatal("explicit GCS deletion proceeded without a Metadata identity witness")
-	}
-	if len(replica.deleted) != 0 {
-		t.Fatalf("Metadata loss triggered GCS deletion: %+v", replica.deleted)
+	if _, err := repo.RestoreGCSOrphans(ctx); err == nil {
+		t.Fatal("GCS recovery unexpectedly used an uninitialized Metadata database")
 	}
 }
 
-func TestExplicitGCSOrphanDeletionRequiresVerifiedCandidateAndCurrentGeneration(t *testing.T) {
+func TestGCSOrphanRecoveryRestoresRecyclebinEntryIdempotently(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	hasher := content.NewHasher()
@@ -292,28 +280,74 @@ func TestExplicitGCSOrphanDeletionRequiresVerifiedCandidateAndCurrentGeneration(
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := &fakeReplicaStore{listed: []objectstore.ReplicaInfo{{ID: id, Size: 3, Generation: 41}}, stored: map[content.ID][]byte{id: []byte("abc")}}
-	if err := metaStore.SetRepositoryIdentity(ctx, "metadata-identity-test"); err != nil {
+	sum := md5.Sum([]byte("abc"))
+	remote := &fakeReplicaStore{listed: []objectstore.ReplicaInfo{{ID: id, Size: 3, Generation: 41, MD5: sum[:]}}, stored: map[content.ID][]byte{id: []byte("abc")}}
+	repo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "test"})
+	if recovered, err := repo.RestoreGCSOrphans(ctx); err != nil || recovered != 1 {
+		t.Fatalf("recovered=%d err=%v", recovered, err)
+	}
+	entry, err := repo.ResolvePath(ctx, "/recyclebin/"+id.String())
+	if err != nil || entry.Kind != metadata.EntryKindFile || entry.ObjectID == nil || *entry.ObjectID != id || entry.Size != 3 || !bytes.Equal(entry.MD5, remote.listed[0].MD5) {
+		t.Fatalf("restored Entry=%+v err=%v", entry, err)
+	}
+	if recovered, err := repo.RestoreGCSOrphans(ctx); err != nil || recovered != 0 {
+		t.Fatalf("second recovery recovered=%d err=%v", recovered, err)
+	}
+	if string(remote.stored[id]) != "abc" {
+		t.Fatalf("recovery changed GCS object bytes: %q", remote.stored[id])
+	}
+}
+
+func TestGCSOrphanRecoveryPreservesConflictingRecyclebinPath(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(root, "objects"), filepath.Join(root, "temp"), hasher)
+	if err != nil {
 		t.Fatal(err)
 	}
-	repo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "test", MetadataIdentity: "metadata-identity-test"})
-	candidates, err := repo.GCSOrphanCandidates(ctx)
-	if err != nil || len(candidates) != 1 || candidates[0].ID != id {
-		t.Fatalf("candidate dry-run=%+v err=%v", candidates, err)
+	coordinator, err := coordinatorsqlite.Open(filepath.Join(root, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	remote.generation = 42
-	if err := repo.DeleteGCSOrphan(ctx, id, candidates[0].Generation); err == nil {
-		t.Fatal("deletion accepted a changed GCS generation")
+	defer func() {
+		if err := coordinator.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	}()
+	id, err := content.ParseID("sha256-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(remote.deleted) != 0 {
-		t.Fatalf("changed generation was deleted: %+v", remote.deleted)
+	otherID, err := content.ParseID("sha256-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+	if err != nil {
+		t.Fatal(err)
 	}
-	remote.generation = 41
-	if err := repo.DeleteGCSOrphan(ctx, id, candidates[0].Generation); err != nil {
-		t.Fatalf("explicit generation-matched delete: %v", err)
+	repo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(metaStore), objects, &fakeReplicaStore{listed: []objectstore.ReplicaInfo{{ID: id, Size: 3, Generation: 41}}}, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeGCS, GCSBucket: "test"})
+	if err := repo.Mkdir(ctx, "/recyclebin", 0755); err != nil {
+		t.Fatal(err)
 	}
-	if len(remote.deleted) != 1 || remote.deleted[0].Generation != 41 {
-		t.Fatalf("delete did not use verified generation: %+v", remote.deleted)
+	parent, err := repo.ResolvePath(ctx, "/recyclebin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootID := parent.ID
+	otherMD5 := md5.Sum([]byte("hello"))
+	now := metadata.TimestampFromTime(time.Now().UTC())
+	if _, err := metaStore.Create(ctx, metadata.Entry{ID: "collision", ParentID: &rootID, Name: id.String(), Kind: metadata.EntryKindFile, ObjectID: &otherID, MD5: otherMD5[:], Size: 5, Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := repo.ResolvePath(ctx, "/recyclebin/"+id.String())
+	if err != nil || before.ObjectID == nil || *before.ObjectID != otherID {
+		t.Fatalf("setup conflicting Entry=%+v err=%v", before, err)
+	}
+	if recovered, err := repo.RestoreGCSOrphans(ctx); err == nil || recovered != 0 {
+		t.Fatalf("conflicting path recovery count=%d err=%v", recovered, err)
+	}
+	after, err := repo.ResolvePath(ctx, "/recyclebin/"+id.String())
+	if err != nil || after.ID != before.ID || after.ObjectID == nil || *after.ObjectID != otherID {
+		t.Fatalf("conflicting Entry changed: before=%+v after=%+v err=%v", before, after, err)
 	}
 }
 

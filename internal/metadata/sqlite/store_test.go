@@ -2639,7 +2639,6 @@ func TestMetadataV3MigrationNormalizesMD5ByContentID(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, `ALTER TABLE entries ADD COLUMN object_md5 BLOB;
 		UPDATE entries SET object_md5=(SELECT md5 FROM content_metadata WHERE content_id=entries.object_id);
 		DROP TABLE content_metadata;
-		DROP TABLE repository_identity;
 		DELETE FROM schema_migrations WHERE version>=4`); err != nil {
 		t.Fatal(err)
 	}

@@ -48,7 +48,7 @@ nodes:
   - id: REQ-PUT-GC-EXCLUSION
     level: system_requirement
     kind: concurrency-invariant
-    statement: A single Lease model MUST protect resources identified by resource ID and operation ID and MUST carry an RLock or WLock mode, expiry, and extensible information. One operation MAY hold Leases for multiple resources. RLocks are shared; a WLock is exclusive against all RLocks and WLocks for the same resource. Local and GCS operations use the same Lease contract and state transitions. Lease state changes MUST be atomic in SQLite transactions. Put, Get, upload, and download MUST hold RLocks; physical GC deletion MUST hold and renew a WLock, then re-evaluate metadata references, replica state, and other deletion eligibility while holding it. Heartbeat renewal failure or expiry MUST stop the operation and prohibit subsequent Local Publish, Metadata Commit, or transfer-state confirmation. Long-running I/O MUST NOT hold Repository-wide exclusive coordination. I/O already sent before expiry MAY complete late; this is a documented availability boundary, not a reason to add fencing, deletion states, or storage-specific transitions.
+    statement: A single Lease model MUST protect resources identified by resource ID and operation ID and MUST carry an RLock or WLock mode, expiry, and extensible information. One operation MAY hold Leases for multiple resources. RLocks are shared; a WLock is exclusive against all RLocks and WLocks for the same resource. Local and GCS operations use the same Lease contract and state transitions. Lease state changes MUST be atomic in SQLite transactions. Put, Get, upload, and download MUST hold RLocks; physical Local GC deletion MUST hold and renew a WLock, then re-evaluate metadata references and other deletion eligibility while holding it. Heartbeat renewal failure or expiry MUST stop the operation and prohibit subsequent Local Publish, Metadata Commit, or transfer-state confirmation. Long-running I/O MUST NOT hold Repository-wide exclusive coordination. I/O already sent before expiry MAY complete late; this is a documented availability boundary, not a reason to add fencing, deletion states, or storage-specific transitions.
     provenance:
       origin: imported
   - id: REQ-READ-GC-EXCLUSION
@@ -154,7 +154,7 @@ nodes:
   - id: REQ-LOCAL-CAPACITY-GC
     level: system_requirement
     kind: garbage-collection-invariant
-    statement: Capacity GC and local invalid-orphan GC MUST be distinct maintenance operations. Capacity GC MUST operate on Local storage only, inspect configured capacity policy, and reclaim eligible Local cache copies only when needed; it MUST NOT delete GCS Objects, Local authoritative Objects in Local mode, untransferred GCS-mode Objects, or RLock-protected resources. Local orphan cleanup MUST preserve every content ID with an uncompleted GCS delivery obligation and recheck that obligation under the content WLock immediately before deletion. Ordinary/scheduled Repository GC MUST NOT enumerate or delete GCS Objects, including valid unreferenced GCS Objects. SQLite reference absence alone MUST never trigger GCS deletion, because Metadata loss is an accepted failure while GCS content loss is not. GCS orphan candidates may be listed only by a dedicated CLI operator command. That command MUST support listing and dry-run, and explicit deletion MUST require complete trustworthy Metadata integrity evidence, revalidate the candidate and its exact observed generation immediately before deletion, and issue a generation-matched conditional delete. If Metadata integrity/completeness cannot be established, deletion MUST be refused. Put, Download, or another operation that encounters actual Local capacity exhaustion MUST fail with a capacity error; no reservation guarantee is required. No automated GC may intentionally delete the last known-good GCS content copy.
+    statement: Capacity GC and local invalid-orphan GC MUST be distinct maintenance operations. Capacity GC MUST operate on Local storage only, inspect configured capacity policy, and reclaim eligible Local cache copies only when needed; it MUST NOT delete GCS Objects, Local authoritative Objects in Local mode, untransferred GCS-mode Objects, or RLock-protected resources. Local orphan cleanup MUST preserve every content ID with an uncompleted GCS delivery obligation and recheck that obligation under the content WLock immediately before deletion. Ordinary and scheduled Repository GC MUST NOT enumerate or delete GCS Objects. The dedicated `nando gcs-orphans` recovery command MUST detect GCS Objects whose Content IDs have no SQLite Entry reference and create file Entries at `/recyclebin/<content-id>`. Original names are unknown and MUST NOT be guessed. Recovery MUST be idempotent, preserve any available GCS MD5 attribute, and leave GCS object names and bytes unchanged. Existing `/recyclebin/<content-id>` paths containing a different Entry MUST be left untouched and reported as conflicts. SQLite reference absence, including a valid initialized Metadata database with no Entry references for a GCS Content ID, MUST trigger Metadata recovery rather than GCS deletion. Put, Download, or another operation that encounters actual Local capacity exhaustion MUST fail with a capacity error; no reservation guarantee is required. No automated GC may intentionally delete the last known-good GCS content copy.
     provenance:
       origin: imported
   - id: REQ-READ-THROUGH
@@ -166,7 +166,7 @@ nodes:
   - id: REQ-LOCAL-GCS-IMMUTABILITY
     level: system_requirement
     kind: immutability-invariant
-    statement: Local and GCS publication for a content ID MUST be no-replace. Local pre-existing Objects MUST retain existing content-ID hash verification. GCS upload success follows the GCS API response contract; ambiguous completion and existing-name results are reconciled through object lookup and API attributes, with generation and required API metadata retained. GCS deletion is prohibited in automatic GC and is allowed only through the explicit CLI orphan workflow after Metadata integrity and reference checks; it MUST be conditional on the exact observed Object generation so a concurrent replacement cannot be deleted accidentally. Full-object GCS read-back hashing and detection of arbitrary external corruption are not required.
+    statement: Local and GCS publication for a content ID MUST be no-replace. Local pre-existing Objects MUST retain existing content-ID hash verification. GCS upload success follows the GCS API response contract; ambiguous completion and existing-name results are reconciled through object lookup and API attributes, with generation and required API metadata retained. GCS deletion is prohibited in Repository GC and CLI workflows. Full-object GCS read-back hashing and detection of arbitrary external corruption are not required.
     provenance:
       origin: imported
   - id: REQ-METADATA-PORTABILITY
@@ -186,15 +186,15 @@ nodes:
       origin: human-authored
   - id: REQ-GCS-ORPHAN-SAFETY
     level: system_requirement
-    kind: destructive-operation-safety
-    statement: GCS content MUST NOT be automatically deleted by ordinary or scheduled GC. SQLite reference absence, including complete SQLite database loss, is insufficient deletion evidence. Only a dedicated CLI operator workflow may delete GCS orphan candidates; it MUST enumerate candidates, provide a dry-run, require explicit deletion, establish complete Metadata integrity, verify the SQLite Metadata identity witness against the repository settings, recheck reference absence and the observed generation immediately before deletion, and use a generation-match conditional delete. Any uncertainty, missing/mismatched identity, or inability to prove Metadata completeness MUST refuse deletion. GCS content loss is prohibited; SQLite Metadata loss and Local cache loss are accepted.
+    kind: recovery-operation-safety
+    statement: GCS Objects MUST NOT be deleted by ordinary GC, scheduled GC, or CLI commands. The dedicated `nando gcs-orphans` command MUST detect GCS Objects whose Content IDs have no SQLite Entry reference and restore file Entries under `/recyclebin/<content-id>`. The original logical name is unknown; the Content ID is the recovery name. Recovery MUST be idempotent, preserve any available GCS MD5 attribute, and leave existing conflicting paths untouched and reported. It MUST preserve GCS object bytes and names. SQLite reference absence, including complete SQLite database loss, MUST cause Metadata recovery rather than GCS deletion. GCS content loss is prohibited; SQLite Metadata loss and Local cache loss are accepted.
     attributes:
-      automatic_gcs_deletion: prohibited
-      metadata_integrity_required: true
-      metadata_identity_witness: repository-settings-and-sqlite-match; required-for-new-repositories
-      legacy_without_witness: candidate-list-only; deletion-refused
-      generation_match_required: true
-      final_recheck_required: true
+      gcs_deletion: prohibited-in-Repository-GC-and-CLI
+      recovery_path: /recyclebin/<content-id>
+      recovery_idempotent: true
+      gcs_object_mutation: prohibited
+      md5_preservation: when-GCS-attribute-is-available
+      path_conflict: preserve-existing-entry-and-report
     provenance:
       origin: human-authored
   - id: REQ-METADATA-BACKUP-RESPONSIBILITY
@@ -592,7 +592,7 @@ nodes:
   - id: DES-RESOURCE-LEASES
     level: system_design
     kind: gc-protection-protocol
-    statement: A single Resource Lease model uses resource ID, operation ID, RLock/WLock mode, expiry, and extensible information; one operation may protect multiple resource IDs. RLocks are shared and WLocks exclusive for the same resource. Local and GCS use identical Lease states and transitions. The dedicated resource-lock area is managed atomically with SQLite transactions and is the sole GC protection mechanism. Leases default to a configurable 30-second TTL and 5-second heartbeat; SQLite database time is the expiry comparison basis. Put obtains a temporary-resource RLock before Stage creation, then a content-ID RLock after hashing while retaining the first through Local Publish and Metadata Commit. Get, Cat, upload, and download hold and heartbeat RLocks through resource use. GC obtains and heartbeats a WLock, then rechecks references, replica status, and deletion eligibility before physical removal. All locks release when their operation completes. Renewal failure or expiry stops further Publish, Commit, or state confirmation; an I/O request sent before expiry may still complete late. This may make an object unavailable (including a read 404); that is a localized operation failure and does not mutate Metadata. No fencing token, deleting state, storage-specific transition, or long Coordinator lock is required.
+    statement: A single Resource Lease model uses resource ID, operation ID, RLock/WLock mode, expiry, and extensible information; one operation may protect multiple resource IDs. RLocks are shared and WLocks exclusive for the same resource. Local and GCS use identical Lease states and transitions. The dedicated resource-lock area is managed atomically with SQLite transactions and is the sole GC protection mechanism. Leases default to a configurable 30-second TTL and 5-second heartbeat; SQLite database time is the expiry comparison basis. Put obtains a temporary-resource RLock before Stage creation, then a content-ID RLock after hashing while retaining the first through Local Publish and Metadata Commit. Get, Cat, upload, and download hold and heartbeat RLocks through resource use. Local GC obtains and heartbeats a WLock, then rechecks references and deletion eligibility before physical removal. All locks release when their operation completes. Renewal failure or expiry stops further Publish, Commit, or state confirmation; an I/O request sent before expiry may still complete late. This may make an object unavailable (including a read 404); that is a localized operation failure and does not mutate Metadata. No fencing token, deleting state, storage-specific transition, or long Coordinator lock is required.
     attributes:
       lock_scope: resource-ID-content-or-temporary-ID
       lock_modes: [RLock-for-Put-Get-Cat-upload-download, WLock-for-GC-physical-delete]
@@ -609,16 +609,17 @@ nodes:
   - id: DES-GC-CLASSES
     level: system_design
     kind: garbage-collection-model
-    statement: Capacity GC and local orphan/invalid GC are separate subtasks under the maintenance scheduler. Capacity GC reads Repository capacity settings and reclaims Local cache space only when required; it preserves Local-mode authority, untransferred GCS-mode Objects, and RLock-protected resources. If an operation encounters actual capacity exhaustion, it returns a capacity error without requiring a reservation guarantee. Local orphan/invalid GC reconciles malformed, corrupt, or unreferenced Local artifacts while respecting pending delivery obligations and resource leases. Ordinary/scheduled GC never enumerates or deletes GCS Objects. A dedicated CLI operator workflow lists GCS orphan candidates and supports dry-run; explicit deletion requires successful Metadata integrity validation, checks references and transfer obligations under a resource WLock, rechecks the exact GCS generation immediately before conditional deletion, and refuses deletion when validation fails. GCS content is retained when Metadata completeness is uncertain.
+    statement: Capacity GC and local orphan/invalid GC are separate subtasks under the maintenance scheduler. Capacity GC reads Repository capacity settings and reclaims Local cache space only when required; it preserves Local-mode authority, untransferred GCS-mode Objects, and RLock-protected resources. If an operation encounters actual capacity exhaustion, it returns a capacity error without requiring a reservation guarantee. Local orphan/invalid GC reconciles malformed, corrupt, or unreferenced Local artifacts while respecting pending delivery obligations and resource leases. Ordinary/scheduled GC never enumerates or deletes GCS Objects. The dedicated `nando gcs-orphans` CLI command lists GCS objects with no SQLite reference and restores file Entries under `/recyclebin/<content-id>`, preserving available MD5 attributes. Recovery is idempotent, reports and preserves conflicting paths, and does not move, copy, or delete GCS objects. GCS content is retained when Metadata is absent or incomplete.
     attributes:
       capacity_gc: [GCS-mode-only-eviction-of-confirmed-Local-cache-replicas, resource-RLock-aware]
       invalid_orphan_gc: [Local-invalid, Local-unreferenced, resource-WLock-before-physical-delete]
-      GCS_orphan_management: CLI-only-list-and-dry-run; explicit-generation-conditional-delete; metadata-completeness-required
+      GCS_orphan_management: CLI-only-metadata-recovery-to-recyclebin; idempotent; GCS-objects-unchanged
       Local_mode: no-capacity-eviction-of-authoritative-Objects
       last_known_good_copy: protected-from-Repository-GC
-      gcs_delete: excluded-from-automatic-GC; explicit-CLI-only; generation-conditional-with-immediate-recheck
+      gcs_delete: prohibited
+      GCS_recovery: create-entry-at-recyclebin-content-id; preserve-md5-when-available; collision-safe
       metadata_loss: GCS-content-preserved; SQLite-metadata-loss-accepted; Local-cache-loss-accepted
-      delayed_delete_after_expiry: allowed;availability-risk-recorded
+      delayed_local_delete_after_expiry: allowed;availability-risk-recorded
       shared_protection_authority: resource-RWLock-only
     provenance:
       origin: imported
@@ -836,7 +837,7 @@ nodes:
         - existing-name and ambiguous upload responses converge through final-object API attributes; GCS generation and required API metadata are used for conditional operations
         - GCS-mode Get/Cat prefer Local; a miss downloads to shared temporary storage and publishes only complete content verified against its ID
         - Local capacity GC retains unconfirmed content and RLock-protected resources, and evicts only eligible confirmed replicas under a resource WLock
-        - scheduled invalid-orphan GC applies only to Local artifacts; GCS orphan candidates and explicit generation-matched deletion use a dedicated CLI workflow after Metadata integrity checks
+        - scheduled invalid-orphan GC applies only to Local artifacts; `nando gcs-orphans` restores missing Metadata Entries under /recyclebin/<content-id> without changing GCS objects
         - periodic Capacity GC checks Repository capacity settings and reclaims only needed eligible space; a Put/Download that encounters actual capacity exhaustion returns a capacity error without a reservation guarantee
         - MetadataStore conformance semantics include atomic revisions, namespace uniqueness, parent validation, and cycle rejection without SQL/API leakage
         - resource RLocks protect Put/Get/upload/download and resource WLocks protect GC physical deletion; lock state is managed atomically in SQLite and no second GC protection mechanism exists
@@ -1450,11 +1451,11 @@ open_items:
     status: open
     related_refs: [DES-EXPLICIT-DIRECTORY-MODEL]
   - id: OPEN-GCS-GENERATION-AND-BUCKET-POLICY
-    statement: GCS generation and required API metadata are retained for conditional operations. Define behavior under bucket versioning, soft delete, retention, external overwrite/delete, bucket/prefix changes, and object recreation, including how noncurrent generations affect availability. Arbitrary external GCS corruption is not guaranteed to be detected.
+    statement: GCS generation and required API metadata are retained for upload reconciliation and observation. Define behavior under bucket versioning, soft delete, retention, external overwrite/delete, bucket/prefix changes, and object recreation, including how noncurrent generations affect recovery. Arbitrary external GCS corruption is not guaranteed to be detected.
     status: open
     related_refs: [REQ-GCS-PUBLICATION, REQ-LOCAL-GCS-IMMUTABILITY, DES-GC-CLASSES]
   - id: OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS
-    statement: Define Doctor health in GCS mode when Local cache is missing/corrupt, replication remains pending, or the GCS Object is missing/corrupt; distinguish valid unreferenced content from invalid orphans without making Doctor destructive. Cat may have written a response prefix before writer failure. A read 404 after delayed delete is a localized read error and does not change Metadata; revision-change policy remains independent from GC safety.
+    statement: Define Doctor health in GCS mode when Local cache is missing/corrupt, replication remains pending, or the GCS Object is missing/corrupt; distinguish valid unreferenced content from invalid orphans without making Doctor destructive. Cat may have written a response prefix before writer failure. A read 404 after external GCS object removal is a localized read error and does not change Metadata; revision-change policy remains independent from GC safety.
     status: open
     related_refs: [REQ-READ-THROUGH, REQ-DOCTOR-NONDESTRUCTIVE, DES-DOCTOR, DES-GCS-READ-THROUGH, OPEN-READ-REVISION-CHANGE]
   - id: OPEN-DELIVERY-MODE-MIGRATION

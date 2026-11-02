@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/google/uuid"
-
 	coordinatorsqlite "github.com/kamichidu/go-nando/internal/coordinator/sqlite"
 	"github.com/kamichidu/go-nando/internal/metadata/sqlite"
 	"github.com/kamichidu/go-nando/internal/repository"
@@ -55,18 +53,12 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 		} else if err != nil {
 			return fmt.Errorf("read repository settings: %w", err)
 		} else {
-			requested, comparablePersisted := settings, persisted
-			requested.MetadataIdentity, comparablePersisted.MetadataIdentity = "", ""
-			if settings != repository.DefaultSettings() && requested != comparablePersisted {
+			if settings != repository.DefaultSettings() && settings != persisted {
 				return fmt.Errorf("existing repository settings cannot be changed by init")
 			}
 			settings = persisted
 		}
 	}
-	if !dbExists && settings.MetadataIdentity == "" {
-		settings.MetadataIdentity = uuid.NewString()
-	}
-
 	// 2. Validate any existing database before adding repository directories.
 	store, err := sqlite.NewStore(dbPath)
 	if err != nil {
@@ -97,12 +89,6 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	if err := store.Initialize(ctx, repoFormat); err != nil {
 		return fmt.Errorf("failed to initialize metadata schema: %w", err)
 	}
-	if settings.MetadataIdentity != "" {
-		if err := store.SetRepositoryIdentity(ctx, settings.MetadataIdentity); err != nil {
-			return fmt.Errorf("initialize repository metadata identity: %w", err)
-		}
-	}
-
 	// 3. Create object and staging directories after format acceptance.
 	objectsDir := filepath.Join(repoDir, "objects")
 	if err := os.MkdirAll(objectsDir, 0755); err != nil {

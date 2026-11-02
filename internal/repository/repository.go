@@ -316,103 +316,101 @@ func (r *Repository) GC(ctx context.Context) (int, error) {
 	return deletedCount, err
 }
 
-// GCSOrphanCandidates lists remote content IDs that have no current reference
-// or pending transfer. Doctor must establish a structurally complete Metadata
-// view before the result is presented as a deletion candidate list.
-func (r *Repository) GCSOrphanCandidates(ctx context.Context) ([]objectstore.ReplicaInfo, error) {
+// RestoreGCSOrphans recreates Metadata Entries for remote objects whose
+// Content IDs have no current SQLite reference. GCS objects are only read;
+// their names and bytes are never changed. Restored Entries use the Content ID
+// as their name under /recyclebin because their original names are unknown.
+func (r *Repository) RestoreGCSOrphans(ctx context.Context) (int, error) {
 	if r.replica == nil {
-		return nil, errors.New("GCS orphan inspection requires a replica store")
-	}
-	if err := r.doctor(ctx); err != nil {
-		return nil, fmt.Errorf("metadata integrity check failed; GCS orphan candidates are unsafe: %w", err)
+		return 0, errors.New("GCS orphan recovery requires a replica store")
 	}
 	refs, err := r.metaStore.ReferencedObjectIDs(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list Metadata references: %w", err)
+		return 0, fmt.Errorf("list Metadata references: %w", err)
 	}
 	refSet := make(map[string]bool, len(refs))
 	for _, id := range refs {
 		refSet[id.String()] = true
 	}
-	pending, err := r.metaStore.PendingTransfers(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list pending transfers: %w", err)
-	}
-	for _, id := range pending {
-		refSet[id.String()] = true
-	}
 	all, err := r.replica.ListReplicas(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list GCS replicas: %w", err)
+		return 0, fmt.Errorf("list GCS objects: %w", err)
 	}
-	candidates := make([]objectstore.ReplicaInfo, 0)
+	parent, err := r.ensureRecyclebin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	recovered := 0
 	for _, replica := range all {
 		if replica.ID.Validate() != nil || replica.Generation <= 0 {
 			continue
 		}
-		if !refSet[replica.ID.String()] {
-			candidates = append(candidates, replica)
+		if refSet[replica.ID.String()] {
+			continue
 		}
+		name := replica.ID.String()
+		existing, err := r.metaStore.GetChild(ctx, parent.ID, name)
+		if err == nil {
+			if existing.Kind == metadata.EntryKindFile && existing.ObjectID != nil && *existing.ObjectID == replica.ID {
+				continue
+			}
+			return recovered, fmt.Errorf("recyclebin path /recyclebin/%s is occupied by another Entry", name)
+		}
+		if !errors.Is(err, metadata.ErrEntryNotFound) {
+			return recovered, fmt.Errorf("check recyclebin path for %s: %w", name, err)
+		}
+		now := metadata.TimestampFromTime(time.Now().UTC())
+		objectID := replica.ID
+		var objectMD5 []byte
+		if len(replica.MD5) == 16 {
+			objectMD5 = append([]byte(nil), replica.MD5...)
+		}
+		_, err = r.metaStore.Create(ctx, metadata.Entry{
+			ID: metadata.EntryID(uuid.NewString()), ParentID: &parent.ID, Name: name,
+			Kind: metadata.EntryKindFile, ObjectID: &objectID, MD5: objectMD5,
+			Size: replica.Size, Mtime: now, Mode: 0644, ContentType: "application/octet-stream",
+			Revision: 1, CreatedAt: now, UpdatedAt: now,
+		})
+		if errors.Is(err, metadata.ErrEntryConflict) {
+			existing, getErr := r.metaStore.GetChild(ctx, parent.ID, name)
+			if getErr == nil && existing.Kind == metadata.EntryKindFile && existing.ObjectID != nil && *existing.ObjectID == replica.ID {
+				continue
+			}
+		}
+		if err != nil {
+			return recovered, fmt.Errorf("restore GCS object %s into /recyclebin: %w", name, err)
+		}
+		recovered++
 	}
-	return candidates, nil
+	return recovered, nil
 }
 
-// DeleteGCSOrphan explicitly deletes one operator-selected GCS generation.
-// It revalidates complete Metadata and reference absence under the content WLock.
-func (r *Repository) DeleteGCSOrphan(ctx context.Context, id content.ID, generation int64) error {
-	if r.replica == nil {
-		return errors.New("GCS orphan deletion requires a replica store")
+func (r *Repository) ensureRecyclebin(ctx context.Context) (metadata.Entry, error) {
+	root, err := r.metaStore.Root(ctx)
+	if err != nil {
+		return metadata.Entry{}, err
 	}
-	if r.settings.MetadataIdentity == "" {
-		return errors.New("repository has no Metadata identity witness; refusing GCS deletion")
+	entry, err := r.metaStore.GetChild(ctx, root.ID, "recyclebin")
+	if err == nil {
+		if entry.Kind != metadata.EntryKindDirectory {
+			return metadata.Entry{}, errors.New("/recyclebin exists and is not a directory")
+		}
+		return entry, nil
 	}
-	if err := id.Validate(); err != nil {
-		return err
+	if !errors.Is(err, metadata.ErrEntryNotFound) {
+		return metadata.Entry{}, err
 	}
-	if generation <= 0 {
-		return errors.New("GCS orphan deletion requires an observed generation")
+	if err := r.Mkdir(ctx, "/recyclebin", 0755); err != nil && !errors.Is(err, metadata.ErrEntryConflict) {
+		return metadata.Entry{}, fmt.Errorf("create /recyclebin: %w", err)
 	}
-	return r.withResourceLease(ctx, contentResourceID(id.String()), coordinator.WLock, func(leaseCtx context.Context, operationID string) error {
-		identity, err := r.metaStore.RepositoryIdentity(leaseCtx)
-		if err != nil {
-			return fmt.Errorf("repository Metadata identity is missing; refusing GCS deletion: %w", err)
-		}
-		if identity != r.settings.MetadataIdentity {
-			return errors.New("repository Metadata identity mismatches settings; refusing GCS deletion")
-		}
-		refs, err := r.metaStore.ReferencedObjectIDs(leaseCtx)
-		if err != nil {
-			return fmt.Errorf("recheck Metadata references: %w", err)
-		}
-		for _, ref := range refs {
-			if ref == id {
-				return fmt.Errorf("GCS object %s is referenced by Metadata", id)
-			}
-		}
-		pending, err := r.metaStore.PendingTransfers(leaseCtx)
-		if err != nil {
-			return fmt.Errorf("recheck pending transfers: %w", err)
-		}
-		for _, queued := range pending {
-			if queued == id {
-				return fmt.Errorf("GCS object %s has a pending transfer obligation", id)
-			}
-		}
-		if err := r.doctor(leaseCtx); err != nil {
-			return fmt.Errorf("metadata integrity check failed; refusing GCS deletion: %w", err)
-		}
-		current, err := r.replica.ReplicaAttrs(leaseCtx, id)
-		if err != nil {
-			return fmt.Errorf("recheck GCS generation immediately before deletion: %w", err)
-		}
-		if current.ID != id || current.Generation != generation {
-			return fmt.Errorf("GCS generation changed for %s: observed %d, current %d", id, generation, current.Generation)
-		}
-		if err := r.validateLease(leaseCtx, operationID); err != nil {
-			return err
-		}
-		return r.replica.DeleteReplica(leaseCtx, id, generation)
-	})
+	entry, err = r.metaStore.GetChild(ctx, root.ID, "recyclebin")
+	if err != nil {
+		return metadata.Entry{}, err
+	}
+	if entry.Kind != metadata.EntryKindDirectory {
+		return metadata.Entry{}, errors.New("/recyclebin exists and is not a directory")
+	}
+	return entry, nil
 }
 
 func (r *Repository) gc(ctx context.Context) (int, error) {

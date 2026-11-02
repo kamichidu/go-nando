@@ -56,7 +56,4 @@ HAVING count(DISTINCT hex(object_md5)) = 1 AND min(length(object_md5)) = 16;
 ALTER TABLE entries DROP COLUMN object_md5;
 `
 
-// MigrationV5 adds a metadata identity witness shared with repository.json.
-const MigrationV5 = `CREATE TABLE repository_identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), identity TEXT NOT NULL);`
-
-const CurrentSchemaVersion = 5
+const CurrentSchemaVersion = 4

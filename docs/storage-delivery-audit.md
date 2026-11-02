@@ -60,6 +60,7 @@ The corresponding current-source facts and comparisons are recorded in `docs/des
 * If renewal fails or a Lease expires, the operation stops and performs no later Publish, Metadata Commit, or queue confirmation. Already-sent I/O may finish late. This can make an Object unavailable: a read 404 fails locally and does not mutate Entry Metadata or propagate a repository-wide state change. No fencing token, Deleting state, Local/GCS-specific transition, or long Coordinator critical section is required. This is an accepted availability boundary, not an implementation blocker.
 * One periodic Maintenance Job starts/schedules three independent subtasks: transfer queue processing, Capacity GC, and Orphan/Invalid GC. Scheduling is the only shared behavior; each subtask owns its failures, and transfer failure cannot stop either GC.
 * Capacity GC uses Repository capacity settings and runs periodically, reclaiming eligible Local space only when needed. It preserves Local authority, untransferred GCS-mode content, and RLock-protected resources. Actual capacity exhaustion ends Put/Download with a capacity error; there is no required reservation or preflight space guarantee. The two GC classes remain distinct. Physical deletion rechecks eligibility under WLock and does not intentionally delete the last known-good copy. An already-sent delete may still finish late after expiry.
+* Ordinary and scheduled GC operate on Local objects only. The explicit `nando gcs-orphans` command detects GCS objects whose Content IDs have no SQLite Entry reference and restores metadata at `/recyclebin/<content-id>`. Original names are unknown. Recovery is idempotent, collision-safe, retains available GCS MD5, and never moves, copies, or deletes a GCS object.
 * Local/GCS mode, bucket, and capacity policy are Repository settings. No general settings framework is implied. Existing-repository compatibility and mode migration remain open.
 * The persistent queue is content-ID keyed, idempotently enqueued in the same Metadata transaction as Put, rediscovered after restart, and retried periodically from complete Local content. GCS API-contract completion (including API-attribute reconciliation of ambiguous/existing-name results) deletes the queue row. It is not a Pending Entry or resumed Put; no retry state machine is needed. Metadata backups remain an operator responsibility.
 
@@ -67,7 +68,7 @@ The corresponding current-source facts and comparisons are recorded in `docs/des
 
 These are the unresolved decisions retained as `OPEN-*` nodes in the IR; resolved Lease/fencing/read-back/session questions have been removed.
 
-. **GCS bucket policy:** define behavior under versioning, soft delete, retention, external overwrite/delete, bucket or prefix changes, and object recreation. Generation retention and conditional operations are required; arbitrary external corruption detection is not.
+. **GCS bucket policy:** define behavior under versioning, soft delete, retention, external overwrite/delete, bucket or prefix changes, and object recreation. Generation observations support reconciliation; GCS deletion is not a Repository operation.
 . **Capacity policy values:** Repository settings own capacity policy, periodic GC consults it, and actual exhaustion returns a capacity error. Exact configurable thresholds and eviction priority are operational details not specified here; no reservation guarantee is required.
 . **Doctor and Cat:** define GCS-mode Doctor findings for missing Local cache, pending transfer, or missing/corrupt GCS content. Cat can leave an already-written response prefix after downstream writer failure.
 . **Mode migration:** current config has no mode or bucket. Decide persistent location, Local-to-GCS prefill, bucket changes, GCS-to-Local recovery, rollback, and safe behavior for existing repositories.
@@ -75,7 +76,7 @@ These are the unresolved decisions retained as `OPEN-*` nodes in the IR; resolve
 . **Backup/restore:** define the recoverable set and quiescence boundary for Metadata, Repository Format, delivery configuration, transfer queue, and Local objects.
 . **Read revision policy:** decide whether a revision change during streaming returns the opened content or retries; this remains independent from Lease/GC safety.
 
-The GCS JSON API supports resumable insert with `ifGenerationMatch` and generation-matched deletion preconditions. These mechanisms support no-replace and conditional-delete behavior; they do not promise detection of arbitrary external corruption: [Objects: insert](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/insert), [request preconditions](https://docs.cloud.google.com/storage/docs/request-preconditions), [Objects: delete](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/delete).
+The GCS JSON API supports resumable insert with `ifGenerationMatch`, which supports no-replace publication but does not promise detection of arbitrary external corruption: [Objects: insert](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/insert), [request preconditions](https://docs.cloud.google.com/storage/docs/request-preconditions).
 
 == Implementation readiness
 
@@ -90,7 +91,7 @@ This sequence maps dependencies; it does not authorize implementation in this de
 . **Add the MetadataStore queue contract:** atomically mutate the Put Entry and enqueue its content ID. SQLite uses the existing Metadata DB transaction. Add migration and adapter-neutral semantic operations; Firestore conformance must use native transaction semantics.
 . **Implement content-ID uploader:** retry unconfirmed queue IDs from complete Local objects; publish directly to final GCS key with resumable API and no-replace precondition. Treat success responses as authoritative and reconcile ambiguous/precondition responses through final-object API attributes. Persist generation/required API metadata.
 . **Implement Local-first GCS reads:** hold content/temp RLocks, hydrate via shared temp, hash-verify bytes, and Local-publish without replacement before serving. Preserve Get atomic destination behavior. 404 remains a local operation failure; Cat may have emitted a prefix on downstream error.
-. **Implement GC classes:** capacity eviction of confirmed Local cache only; automatic invalid/orphan reconciliation is Local-only. GCS orphan candidate listing and explicit deletion use a dedicated CLI command, require Metadata integrity validation, and recheck references and exact generation under WLock immediately before deletion. Add invalid-raw Local deletion APIs only with explicit ownership checks.
+. **Implement GC classes:** capacity eviction of confirmed Local cache only; automatic invalid/orphan reconciliation is Local-only. GCS orphan metadata recovery uses `nando gcs-orphans` to restore missing Entries under `/recyclebin/<content-id>` without changing GCS objects. Add invalid-raw Local deletion APIs only with explicit ownership checks.
 . **Resolve remaining operation/config choices:** existing-repository mode migration, bucket policy, Doctor/Cat output, backups, and Firestore deployment/coordination.
 . **Compatibility gate:** retain current Local CAS, migration, atomic Get, Doctor, CLI, and Metadata semantics tests where still normative. Rewrite full-operation lock timing assertions only to match the decided Lease semantics; add delayed-I/O/404 tests that assert no Metadata mutation.
 
@@ -148,13 +149,13 @@ This sequence maps dependencies; it does not authorize implementation in this de
 | Local hit never calls GCS; Local miss complete download/hash mismatch/short read/cancel/retry; duplicate downloads; GC racing download/publication; no partial object becomes visible; Get destination remains old on fetch failure and atomically changes on success; read 404 is local and does not mutate Metadata; Cat writer failure may leave a response prefix.
 
 | GC/Doctor
-| Local invalid raw names and malformed files; referenced missing/corrupt objects; valid unreferenced Local object; GCS orphan dry-run and explicit CLI delete; shared content ID referenced by several entries; active upload/download/read RLocks and GC WLock; GCS generation changed before delete; Metadata integrity failure; Doctor behavior per mode and pending delivery. Automatic GC never deletes GCS objects.
+| Local invalid raw names and malformed files; referenced missing/corrupt objects; valid unreferenced Local object; GCS orphan metadata recovery into `/recyclebin/<content-id>`; idempotent rerun; conflicting path preservation; available MD5 preservation; shared content ID referenced by several entries; active upload/download/read RLocks and Local GC WLock; Metadata integrity failure; Doctor behavior per mode and pending delivery. No GC or CLI operation deletes GCS objects.
 
 | Metadata adapter conformance
 | SQLite migration and golden compatibility; atomic expected-revision Create/Update/Move/Delete; sibling uniqueness; parent kind/existence; ancestry cycle; consistent ReferencedObjectIDs under GC; Firestore conformance and cross-host Coordinator test only if that deployment is approved.
 
 | Backup/restore and CLI
-| restore preserves format, delivery mode, content-ID queue/verification state and reference IDs; GCS/local missing replica diagnosis; delayed-delete 404 remains local and leaves Metadata unchanged; capacity error mapping; transfer visibility/output stability; no credentials or bucket secrets persisted to logs.
+| restore preserves format, delivery mode, content-ID queue/verification state and reference IDs; GCS/local missing replica diagnosis; external-removal 404 remains local and leaves Metadata unchanged; capacity error mapping; transfer visibility/output stability; no credentials or bucket secrets persisted to logs.
 |===
 
 == Validation during this design task

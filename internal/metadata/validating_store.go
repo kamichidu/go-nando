@@ -149,10 +149,6 @@ func (s *ValidatingStore) ContentMD5(ctx context.Context, id content.ID) ([]byte
 	return s.next.ContentMD5(ctx, id)
 }
 
-func (s *ValidatingStore) RepositoryIdentity(ctx context.Context) (string, error) {
-	return s.next.RepositoryIdentity(ctx)
-}
-
 // ListAll delegates to the next store.
 func (s *ValidatingStore) ListAll(ctx context.Context) ([]Entry, error) {
 	return s.next.ListAll(ctx)

@@ -35,6 +35,5 @@ type MetadataStore interface {
 	CompleteTransfer(ctx context.Context, id content.ID) error
 	ReferencedObjectIDs(ctx context.Context) ([]content.ID, error)
 	ContentMD5(ctx context.Context, id content.ID) ([]byte, error)
-	RepositoryIdentity(ctx context.Context) (string, error)
 	ListAll(ctx context.Context) ([]Entry, error)
 }

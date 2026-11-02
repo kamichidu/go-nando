@@ -48,7 +48,6 @@ type ReplicaStore interface {
 	ReplicaExists(context.Context, content.ID) (bool, error)
 	ReplicaAttrs(context.Context, content.ID) (ReplicaInfo, error)
 	ListReplicas(context.Context) ([]ReplicaInfo, error)
-	DeleteReplica(context.Context, content.ID, int64) error
 }
 
 // StagedObject is an immutable backend-owned handle produced by Stage.
