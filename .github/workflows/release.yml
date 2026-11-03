@@ -69,7 +69,7 @@ jobs:
             local staging="dist/staging-$goos-$goarch"
             mkdir -p "$staging"
             for item in "$@"; do cp "dist/$item" "$staging/"; done
-            cp README.md LICENSE "$staging/"
+            cp README.adoc LICENSE "$staging/"
             local base="nando_${VERSION}_${goos}_${goarch}"
             if [[ "$goos" == windows ]]; then
               (cd "$staging" && zip -q -r "../$base.zip" .)
@@ -104,7 +104,6 @@ jobs:
             -e 's|\${NFPM_ARCH}|amd64|g' \
             packaging/nfpm.yaml > .build/deb/nfpm.yaml
           nfpm package --config .build/deb/nfpm.yaml --packager deb --target "$GITHUB_WORKSPACE/dist"
-          cp .build/deb/*.deb dist/
           PACKAGE=$(find dist -maxdepth 1 -type f -name '*.deb' -print -quit)
           test -n "$PACKAGE"
           dpkg-deb --contents "$PACKAGE"

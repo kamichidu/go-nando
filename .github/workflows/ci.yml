@@ -78,7 +78,7 @@ jobs:
             local staging="dist/staging-$goos-$goarch"
             mkdir -p "$staging"
             for item in "$@"; do cp "dist/$item" "$staging/"; done
-            cp README.md LICENSE "$staging/"
+            cp README.adoc LICENSE "$staging/"
             local base="nando_ci_${goos}_${goarch}"
             if [[ "$goos" == windows ]]; then
               (cd "$staging" && zip -q -r "../$base.zip" .)
