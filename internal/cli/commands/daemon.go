@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/internal/app"
@@ -37,6 +38,10 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
+	repoDir, err = filepath.Abs(repoDir)
+	if err != nil {
+		return fmt.Errorf("resolve absolute repository path: %w", err)
+	}
 	cfg, err := cli.ResolveConfigFromContext(ctx)
 	if err != nil {
 		return err
@@ -52,7 +57,7 @@ func (c *DaemonCommand) Run(ctx context.Context, args []string) (runErr error) {
 	}
 	defer func() { runErr = errors.Join(runErr, unlock()) }()
 
-	application, _, cleanup, err := cli.NewAppFromContext(ctx)
+	application, _, cleanup, err := cli.NewAppAtRepository(ctx, repoDir)
 	if err != nil {
 		return err
 	}

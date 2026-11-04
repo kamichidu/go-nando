@@ -23,6 +23,22 @@ jobs:
         with:
           go-version-file: .go-version
           cache: false
+      - name: Verify workspace developer install commands
+        run: |
+          set -euo pipefail
+          test "$(go env GOWORK)" = "$GITHUB_WORKSPACE/go.work"
+          export GOBIN="$RUNNER_TEMP/workspace-bin"
+          mkdir -p "$GOBIN"
+          go install ./...
+          test -x "$GOBIN/nando"
+          test ! -e "$GOBIN/nando-fuse"
+          test ! -e "$GOBIN/nando-webdav"
+          go install ./cmd/nando
+          go install ./adapters/fuse/cmd/nando-fuse
+          go install ./adapters/webdav/cmd/nando-webdav
+          test -x "$GOBIN/nando"
+          test -x "$GOBIN/nando-fuse"
+          test -x "$GOBIN/nando-webdav"
       - name: Test root module
         run: go test ./...
       - name: Race test root module

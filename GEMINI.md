@@ -452,6 +452,31 @@ golangci-lint run ./...
 go test ./...
 ```
 
-The reproducible host gate is `e2e/run.sh`. It runs the root and FUSE-module tests and race tests, lint, native builds, Design IR validation, and the host-native E2E scenarios. Docker Compose manages only the fake GCS dependency; the daemon, FUSE mount, WebDAV adapter, runner, and fault proxy run on the host. Review [docs/e2e-gates.md](docs/e2e-gates.md) for host requirements, scenario coverage, fake-GCS limits, cleanup behavior, and retained evidence. The optional bounded stress profile is `e2e/run.sh --stress`.
+The reproducible host gate is `e2e/run.sh`. It runs root, FUSE, and WebDAV module tests and race tests, lint, workspace install targets, native builds, Design IR validation, and the host-native E2E scenarios. Docker Compose manages only the fake GCS dependency; the daemon, FUSE mount, WebDAV adapter, runner, and fault proxy run on the host. Review [docs/e2e-gates.md](docs/e2e-gates.md) for host requirements, scenario coverage, fake-GCS limits, cleanup behavior, and retained evidence. The optional bounded stress profile is `e2e/run.sh --stress`.
 
 Do not claim a real FUSE gate passed when the host cannot mount FUSE. Preserve the gate's explicit PASS, FAIL, and SKIP outcomes and its cleanup evidence. For documentation-only changes, run relevant format and link checks; run Go tests only when requested or when the change affects executable behavior.
+
+## 19. Go Workspace and Distribution
+
+The committed `go.work` is the supported developer workspace and includes the
+root, FUSE, and WebDAV modules. From a repository checkout, install binaries
+with:
+
+```sh
+go install ./cmd/nando
+go install ./adapters/fuse/cmd/nando-fuse
+go install ./adapters/webdav/cmd/nando-webdav
+```
+
+Root-level `go install ./...` does not cover nested workspace modules. Adapter
+modules must not use local filesystem `replace` directives for the root
+module. `go.work` maps their current
+unreleased `v0.0.0` root-module requirement to the checked-out root module; do
+not invent a version tag to make an unpublished module appear available. Any
+future standalone Go module distribution must use real published module
+versions and be verified outside the workspace before it is claimed as
+supported.
+
+General users install from GitHub Releases archives or the Debian package.
+README Installation must point to these release artifacts and must not
+recommend `go install @latest`.

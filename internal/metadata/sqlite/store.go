@@ -112,13 +112,13 @@ func (s *Store) Initialize(ctx context.Context, repoFormat repositoryformat.Form
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fmt.Errorf("read SQLite schema version: %w", err)
 	}
-	var existingTables int
-	err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&existingTables)
+	var existingObjects int
+	err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(&existingObjects)
 	if err != nil {
-		return fmt.Errorf("failed to inspect uninitialized SQLite database: %w", err)
+		return fmt.Errorf("failed to inspect uninitialized SQLite schema objects: %w", err)
 	}
-	if version != 0 || existingTables != 0 {
-		return fmt.Errorf("%w: init creates a new database only (user_version=%d, application tables=%d)", ErrSchemaVersionUnsupported, version, existingTables)
+	if version != 0 || existingObjects != 0 {
+		return fmt.Errorf("%w: init creates a new database only (user_version=%d, application schema objects=%d)", ErrSchemaVersionUnsupported, version, existingObjects)
 	}
 	tx, err := s.beginTx(ctx)
 	if err != nil {
@@ -127,14 +127,14 @@ func (s *Store) Initialize(ctx context.Context, repoFormat repositoryformat.Form
 	defer tx.Rollback()
 	// Recheck under the SQLite writer lock so two concurrent init commands
 	// cannot both accept the same initially empty database.
-	var lockedVersion, lockedTables int
+	var lockedVersion, lockedObjects int
 	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&lockedVersion); err != nil {
 		return fmt.Errorf("read SQLite schema version during initialization: %w", err)
 	}
-	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&lockedTables); err != nil {
-		return fmt.Errorf("inspect SQLite schema during initialization: %w", err)
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(&lockedObjects); err != nil {
+		return fmt.Errorf("inspect SQLite schema objects during initialization: %w", err)
 	}
-	if lockedVersion != 0 || lockedTables != 0 {
+	if lockedVersion != 0 || lockedObjects != 0 {
 		return fmt.Errorf("%w: database became initialized before schema creation", ErrSchemaVersionUnsupported)
 	}
 	if _, err := tx.ExecContext(ctx, V1Schema); err != nil {
@@ -203,18 +203,22 @@ func (s *Store) CheckMigrations(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fmt.Errorf("failed to read SQLite schema version: %w", err)
 	}
-	var tables int
-	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil {
+	var schemaObjects int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(&schemaObjects); err != nil {
 		return fmt.Errorf("inspect SQLite schema tables: %w", err)
 	}
 	if version == 0 {
-		if tables == 0 {
+		if schemaObjects == 0 {
 			return ErrSchemaUninitialized
 		}
-		return fmt.Errorf("%w: nonempty database has user_version=0 (legacy or unknown schema)", ErrSchemaVersionUnsupported)
+		return fmt.Errorf("%w: database has user_version=0 and %d application schema objects (legacy or unknown schema)", ErrSchemaVersionUnsupported, schemaObjects)
 	}
 	if version != CurrentSchemaVersion {
 		return fmt.Errorf("%w: database is version %d; this release supports version %d", ErrSchemaVersionUnsupported, version, CurrentSchemaVersion)
+	}
+	var tables int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil {
+		return fmt.Errorf("inspect SQLite schema tables: %w", err)
 	}
 	if tables != 4 {
 		return fmt.Errorf("%w: v1 schema has %d application tables, expected 4", ErrSchemaVersionUnsupported, tables)

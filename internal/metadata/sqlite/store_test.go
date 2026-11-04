@@ -827,6 +827,27 @@ func TestSQLiteStore(t *testing.T) {
 		}
 	})
 
+	t.Run("Version-zero database with a view is not pristine", func(t *testing.T) {
+		store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		if _, err := store.db.ExecContext(ctx, "CREATE VIEW existing_view AS SELECT 1 AS value"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CheckMigrations(ctx); !errors.Is(err, ErrSchemaVersionUnsupported) {
+			t.Fatalf("database with a user schema object reported pristine: %v", err)
+		}
+		if err := store.Initialize(ctx, repositoryformat.Current()); !errors.Is(err, ErrSchemaVersionUnsupported) {
+			t.Fatalf("initialization accepted a database with a user schema object: %v", err)
+		}
+		var views int
+		if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='view' AND name='existing_view'").Scan(&views); err != nil || views != 1 {
+			t.Fatalf("existing view changed: count=%d err=%v", views, err)
+		}
+	})
+
 	t.Run("Nonempty legacy ledger with user_version zero is rejected", func(t *testing.T) {
 		store, _ := setupStore(t)
 		defer store.Close()

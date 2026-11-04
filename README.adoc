@@ -82,13 +82,23 @@ to the configured bucket. Local repositories do not require cloud credentials.
 
 == Installation
 
-Install the three independent Go modules with:
+For general use, install a prebuilt archive or Debian package from
+link:https://github.com/kamichidu/go-nando/releases/latest[GitHub Releases].
+Each release lists supported operating systems and architectures. Linux amd64
+releases include a Debian package; archives are available for Linux amd64/arm64,
+macOS amd64/arm64, and Windows amd64/arm64. See
+link:packaging/README.md[the package and service guide] for Debian package and
+systemd user service details.
+
+To build from source, clone the repository. The committed `go.work` includes
+the root, FUSE, and WebDAV modules. From the repository root, install all three
+executables with:
 
 [source,bash]
 ----
-go install github.com/kamichidu/go-nando/cmd/nando@latest
-go install github.com/kamichidu/go-nando/adapters/fuse/cmd/nando-fuse@latest
-go install github.com/kamichidu/go-nando/adapters/webdav/cmd/nando-webdav@latest
+go install ./cmd/nando
+go install ./adapters/fuse/cmd/nando-fuse
+go install ./adapters/webdav/cmd/nando-webdav
 ----
 
 Ensure the Go binary directory is on `PATH`. `go install` places all three
@@ -102,10 +112,9 @@ nando webdav --help
 ----
 
 `nando` finds `nando-fuse` and `nando-webdav` beside its own resolved
-executable. It does not search `PATH` for adapters. To build from a checkout
-instead, run `go build ./cmd/nando` from the repository root. For Debian
-packages and the systemd user service, see the
-link:packaging/README.md[package and service guide].
+executable. It does not search `PATH` for adapters. Running `go install ./...`
+from the repository root only installs packages from the root module; it does
+not include the two nested adapter modules.
 
 The Debian package exposes only `nando` in `/usr/bin`; run the optional
 adapters as `nando fuse` and `nando webdav`. The resolved executable lives in

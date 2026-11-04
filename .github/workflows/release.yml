@@ -26,6 +26,8 @@ jobs:
         with:
           go-version-file: .go-version
           cache: false
+      - name: Verify committed Go workspace
+        run: test "$(go env GOWORK)" = "$GITHUB_WORKSPACE/go.work"
       - name: Install Debian package tools
         run: |
           sudo apt-get update

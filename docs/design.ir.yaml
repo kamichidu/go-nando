@@ -116,7 +116,7 @@ nodes:
     level: system_requirement
     kind: verification-invariant
     statement: >-
-      The repository MUST provide one host-command G0-G3 verification gate with isolated temporary repository state, recorded scenario evidence, bounded readiness/operation deadlines, strict terminal PASS/FAIL/SKIP outcomes, and unconditional project-scoped cleanup. Docker Compose MUST manage only external dependency services; the nando daemon, real FUSE mount, and E2E runner MUST execute natively on the Linux/WSL host. G0 MUST run root and FUSE module tests, race tests, lint, native binary builds, and Design IR validation. G1 MUST use a real kernel FUSE mount in Local mode without GCS and verify CRUD, fsync/final-close durability, multiple writers, stable-Entry rename, open-handle unlink, and CAS conflict/recovery. G2 MUST use a pinned fake GCS JSON API emulator and verify local-before-remote commit, a directly observed emulator outage plus the corresponding repository transport error, retry after emulator restart, and idempotent duplicate content delivery through external object API observations. G2 MUST inject an upload-response hold after the emulator has persisted an object, crash the daemon before transfer acknowledgement, then verify restart retries the pending obligation without changing object generation or creating another object. Recovery retry MUST use the original durable CAS expectation: an absent-path session MAY commit only while the path remains absent; an existing Entry session MUST commit only while its observed identity and content remain valid (allowing namespace-only rename under the stable-Entry contract). A retry that succeeds MUST remove the recovery obligation only after committed content is externally readable and byte-identical; a genuine conflict MUST retain staging and the original expectation, identify the conflict, and MUST NOT overwrite the winning Entry. Recovery verification MUST invoke retry and compare the committed bytes with the exact expected payload and SHA-256, not infer content from record metadata. G3 MUST crash and restart daemon and FUSE processes, verify uncommitted staging Recovery, and verify successful-fsync data persistence. Child processes MUST be tracked in isolated process groups; timeout and abnormal exit cleanup MUST inspect run-scoped FUSE mounts and processes, report uninterruptible D-state processes, and make any cleanup failure fail the gate. A missing FUSE device or denied mount MUST be reported as SKIP or FAIL and MUST NOT count as a passing real-mount gate. G4 stress MAY run separately and MUST remain bounded; when enabled it MUST verify large binary content, truncation, deterministic random-offset writes through concurrent handles to one file, and final bytes by SHA-256. The emulator MUST NOT be treated as evidence of IAM, ACL, or complete production GCS semantics.
+      The repository MUST provide one host-command G0-G3 verification gate with isolated temporary repository state, recorded scenario evidence, bounded readiness/operation deadlines, strict terminal PASS/FAIL/SKIP outcomes, and unconditional project-scoped cleanup. Docker Compose MUST manage only external dependency services; the nando daemon, real FUSE mount, and E2E runner MUST execute natively on the Linux/WSL host. G0 MUST run root and FUSE module tests, race tests, lint, native binary builds, and Design IR validation. G1 MUST use a real kernel FUSE mount in Local mode without GCS and verify CRUD, fsync/final-close durability, multiple writers, stable-Entry rename, open-handle unlink, CAS conflict/recovery, and a relative daemon repository root supporting CLI put/cat and FUSE copy/cat with byte-identical results. G2 MUST use a pinned fake GCS JSON API emulator and verify local-before-remote commit, a directly observed emulator outage plus the corresponding repository transport error, retry after emulator restart, and idempotent duplicate content delivery through external object API observations. G2 MUST inject an upload-response hold after the emulator has persisted an object, crash the daemon before transfer acknowledgement, then verify restart retries the pending obligation without changing object generation or creating another object. Recovery retry MUST use the original durable CAS expectation: an absent-path session MAY commit only while the path remains absent; an existing Entry session MUST commit only while its observed identity and content remain valid (allowing namespace-only rename under the stable-Entry contract). A retry that succeeds MUST remove the recovery obligation only after committed content is externally readable and byte-identical; a genuine conflict MUST retain staging and the original expectation, identify the conflict, and MUST NOT overwrite the winning Entry. Recovery verification MUST invoke retry and compare the committed bytes with the exact expected payload and SHA-256, not infer content from record metadata. G3 MUST crash and restart daemon and FUSE processes, verify uncommitted staging Recovery, and verify successful-fsync data persistence. Child processes MUST be tracked in isolated process groups; timeout and abnormal exit cleanup MUST inspect run-scoped FUSE mounts and processes, report uninterruptible D-state processes, and make any cleanup failure fail the gate. A missing FUSE device or denied mount MUST be reported as SKIP or FAIL and MUST NOT count as a passing real-mount gate. G4 stress MAY run separately and MUST remain bounded; when enabled it MUST verify large binary content, truncation, deterministic random-offset writes through concurrent handles to one file, and final bytes by SHA-256. The emulator MUST NOT be treated as evidence of IAM, ACL, or complete production GCS semantics.
     provenance:
       origin: human-authored
   - id: REQ-RESOURCE-SESSIONS
@@ -239,6 +239,40 @@ nodes:
       unsupported_state_policy: explicit-error-no-mutation-no-deletion
       current_gcs_backend: supported
       current_remote_backend_value: gcs
+    provenance:
+      origin: human-authored
+  - id: REQ-RELEASE-DISTRIBUTION-AND-DEVELOPMENT-WORKSPACE
+    level: system_requirement
+    kind: distribution-and-development-contract
+    statement: >-
+      GitHub Releases prebuilt archives and the Debian package are the official
+      installation path for general users. README Installation MUST direct
+      users to those release assets and MUST NOT recommend `go install
+      @latest`. Developers cloning the repository MUST use the committed Go
+      workspace containing the root, FUSE, and WebDAV modules. From the
+      repository root, the supported source installation commands are `go
+      install ./cmd/nando`, `go install ./adapters/fuse/cmd/nando-fuse`, and
+      `go install ./adapters/webdav/cmd/nando-webdav`. Adapter go.mod files MUST
+      NOT use local filesystem replace directives for the root module. A root
+      `go install ./...` covers only root-module packages, so workspace-aware
+      build gates MUST explicitly cover all three installation targets.
+      Release, CI, and E2E builds MUST resolve the checked-out modules through
+      the committed workspace, including a workspace-scoped local replacement
+      for the adapters' unreleased root-module requirement. A dependency on an
+      unpublished project module MUST NOT be made to appear valid by inventing
+      a release tag.
+    attributes:
+      general_user_installation: GitHub-Releases-archives-and-Debian-package
+      readme_go_install_at_latest: prohibited
+      developer_workspace_modules: [root, adapters/fuse, adapters/webdav]
+      developer_install_targets:
+        - ./cmd/nando
+        - ./adapters/fuse/cmd/nando-fuse
+        - ./adapters/webdav/cmd/nando-webdav
+      local_adapter_replace: prohibited
+      workspace_root_dependency_replacement: "github.com/kamichidu/go-nando v0.0.0 => ."
+      root_go_install_all_includes_nested_modules: false
+      unpublished_module_tag_invention: prohibited
     provenance:
       origin: human-authored
   - id: REQ-SQLITE-SCHEMA-VERSIONING
@@ -1574,6 +1608,10 @@ observations:
         role: inspected-source
 
 open_items:
+  - id: OPEN-STANDALONE-ADAPTER-MODULE-VERSIONS
+    statement: The FUSE and WebDAV modules currently require the unpublished root module at v0.0.0 and rely on the committed workspace for checkout builds. Decide whether standalone Go module consumption is supported; if so, establish real root and nested-module publication tags and update requirements before claiming that route. Do not invent a tag. GitHub Releases archives and the Debian package remain the general-user installation path.
+    status: open
+    related_refs: [REQ-RELEASE-DISTRIBUTION-AND-DEVELOPMENT-WORKSPACE]
   - id: OPEN-SHA1-FORMAT-TRANSITION
     statement: Decide how repositories with current plain SHA-1 identifiers transition to the Phase 1 SHA-256 algorithm-namespaced format without silently reinterpreting existing IDs.
     status: open

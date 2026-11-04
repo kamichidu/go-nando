@@ -328,6 +328,15 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func() error, err
 	if err != nil {
 		return nil, "", nil, err
 	}
+	return NewAppAtRepository(ctx, repoDir)
+}
+
+// NewAppAtRepository initializes the App layer using the supplied repository root.
+// Daemon composition passes an absolute root so file:// Resources are valid for clients.
+func NewAppAtRepository(ctx context.Context, repoDir string) (*app.App, string, func() error, error) {
+	if !filepath.IsAbs(repoDir) {
+		return nil, "", nil, fmt.Errorf("repository path must be absolute: %q", repoDir)
+	}
 
 	dbPath := filepath.Join(repoDir, "metadata.sqlite")
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {

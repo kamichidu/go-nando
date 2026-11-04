@@ -55,6 +55,7 @@ ACTIVE_MOUNTS: set[str] = set()
 PROCESS_LOG = ARTIFACTS / "processes.jsonl"
 ACTION_SCENARIOS = {
     "g1": ["G1-01", "G1-02", "G1-03", "G1-04", "G1-05", "G1-06"],
+    "relative-repository": ["G1-07"],
     "g2-init": ["G2-00"],
     "g2-normal": ["G2-01", "G2-04"],
     "g2-outage": ["G2-02"],
@@ -624,6 +625,61 @@ def g1() -> None:
             return "fsync returned EAGAIN; competing revision remains visible; failed staging remains in Recovery"
 
         scenario("G1-06", "CAS conflict is reported and retains original staging without overwriting winner", cas_conflict)
+
+
+def _relative_repository_operation() -> str:
+    source = Path(__file__).resolve().parents[1] / "README.adoc"
+    expected = source.read_bytes()
+    repo_parent = ARTIFACTS / "relative-repository"
+    repo_parent.mkdir(parents=True, exist_ok=True)
+    repository = repo_parent / "repository"
+    socket = ARTIFACTS / "run" / "relative-repository.sock"
+    init = subprocess.run([NANDO_BIN, "--repository", str(repository), "init"], capture_output=True, timeout=20)
+    if init.returncode != 0:
+        raise GateFailure(f"initialize relative-path E2E repository: {init.stderr.decode(errors='replace')}")
+
+    global REPOSITORY, SOCKET, ENDPOINT
+    previous = REPOSITORY, SOCKET, ENDPOINT
+    REPOSITORY, SOCKET, ENDPOINT = str(repository), str(socket), f"unix://{socket}"
+    daemon = subprocess.Popen(
+        [NANDO_BIN, "--repository", "./repository", "--daemon-listen", ENDPOINT, "daemon"],
+        cwd=repo_parent,
+        stdout=(ARTIFACTS / "daemon-relative-repository.log").open("wb"),
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    register_process(daemon, "daemon with relative repository path")
+    try:
+        daemon_ready()
+        source_copy = ARTIFACTS / "README.adoc"
+        source_copy.write_bytes(expected)
+        nando("put", str(source_copy), "/README.adoc")
+        actual = cat_bytes("/README.adoc")
+        if actual != expected:
+            raise GateFailure("daemon cat bytes differ after put against relative repository")
+
+        with fuse_mount("relative-repository") as mountpoint:
+            with source.open("rb") as src, open(os.path.join(mountpoint, "README-copy.adoc"), "xb") as dst:
+                dst.write(src.read())
+                dst.flush()
+                os.fsync(dst.fileno())
+            actual = cat_bytes("/README-copy.adoc")
+            if actual != expected:
+                raise GateFailure("daemon cat bytes differ after FUSE copy against relative repository")
+        return "put/cat bytes and FUSE copy/cat bytes match README.adoc"
+    finally:
+        if daemon.poll() is None:
+            terminate_process_group(daemon, "daemon with relative repository path")
+        ACTIVE_PROCESSES.pop(daemon.pid, None)
+        REPOSITORY, SOCKET, ENDPOINT = previous
+
+
+def relative_repository() -> None:
+    scenario(
+        "G1-07",
+        "daemon started with relative repository returns accessible Resource URIs for put/cat and FUSE copy/cat",
+        _relative_repository_operation,
+    )
 
 
 def request_json(url: str, method: str = "GET", body: dict | None = None, timeout: float = 3.0):
@@ -1222,6 +1278,8 @@ def main() -> int:
             print("runner ready; daemon ping passed; /dev/fuse accessible")
         elif action == "g1":
             g1()
+        elif action == "relative-repository":
+            relative_repository()
         elif action == "g2-init":
             g2_init()
         elif action == "g2-proxy-ready":

@@ -41,7 +41,7 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	if err != nil {
 		return fmt.Errorf("open repository initialization lock: %w", err)
 	}
-	defer initLock.Close()
+	defer func() { retErr = errors.Join(retErr, initLock.Close()) }()
 	if err := unix.Flock(int(initLock.Fd()), unix.LOCK_EX); err != nil {
 		return fmt.Errorf("lock repository initialization: %w", err)
 	}
@@ -66,12 +66,45 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 		settings = persisted
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect repository settings path: %w", err)
-	}
-	// Interrupted publication may leave a complete private temporary file.
-	// It is never authoritative; remove recognized regular temp files while
-	// holding the init lock and regenerate from the selected settings.
-	if err := removeRepositorySettingsTemps(repoDir); err != nil {
-		return err
+	} else if _, statErr := os.Stat(dbPath); statErr == nil {
+		store, openErr := sqlite.NewExistingStore(dbPath)
+		if openErr != nil {
+			return fmt.Errorf("repository settings are missing and existing metadata state is unknown; existing data was left unchanged: %w", openErr)
+		}
+		checkErr := store.CheckMigrations(ctx)
+		closeErr := store.Close()
+		if !errors.Is(checkErr, sqlite.ErrSchemaUninitialized) {
+			return errors.Join(
+				fmt.Errorf("%w: repository.json is missing while initialized metadata.sqlite exists; repository settings are unknown and existing data was left unchanged", repositoryformat.ErrUnsupported),
+				checkErr,
+				closeErr,
+			)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close metadata store while checking missing settings: %w", closeErr)
+		}
+		for _, name := range []string{"objects", "temp"} {
+			path := filepath.Join(repoDir, name)
+			info, statErr := os.Lstat(path)
+			if errors.Is(statErr, os.ErrNotExist) {
+				continue
+			}
+			if statErr != nil {
+				return fmt.Errorf("inspect %s while checking missing settings: %w", name, statErr)
+			}
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("%w: %s is not a regular directory while repository settings are missing", repositoryformat.ErrUnsupported, name)
+			}
+			children, readErr := os.ReadDir(path)
+			if readErr != nil {
+				return fmt.Errorf("inspect %s while checking missing settings: %w", name, readErr)
+			}
+			if len(children) != 0 {
+				return fmt.Errorf("%w: repository.json is missing and %s contains data; existing repository settings are unknown and data was left unchanged", repositoryformat.ErrUnsupported, name)
+			}
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("inspect metadata database path: %w", statErr)
 	}
 	dbExists := false
 	if info, err := os.Stat(dbPath); err == nil {
@@ -92,6 +125,23 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 			isSettingsTemp := strings.HasPrefix(name, ".repository.json-") && strings.HasSuffix(name, ".tmp")
 			if name != "objects" && name != "temp" && !isSettingsTemp {
 				return fmt.Errorf("%w: repository state without metadata.sqlite is not a recognized initialization state", repositoryformat.ErrUnsupported)
+			}
+			if name == "objects" || name == "temp" {
+				path := filepath.Join(repoDir, name)
+				info, err := os.Lstat(path)
+				if err != nil {
+					return fmt.Errorf("inspect %s without metadata.sqlite: %w", name, err)
+				}
+				if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+					return fmt.Errorf("%w: %s without metadata.sqlite is not a regular directory", repositoryformat.ErrUnsupported, name)
+				}
+				children, err := os.ReadDir(path)
+				if err != nil {
+					return fmt.Errorf("inspect %s without metadata.sqlite: %w", name, err)
+				}
+				if len(children) != 0 {
+					return fmt.Errorf("%w: %s contains data without metadata.sqlite; existing data was left unchanged", repositoryformat.ErrUnsupported, name)
+				}
 			}
 		}
 	}
@@ -116,33 +166,51 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	if err != nil {
 		return fmt.Errorf("failed to open metadata store: %w", err)
 	}
-	defer store.Close()
+	defer func() { retErr = errors.Join(retErr, store.Close()) }()
 	repoFormat := repositoryformat.Current()
 	if err := repoFormat.Validate(); err != nil {
 		return err
 	}
-	if dbExists {
-		if err := store.CheckMigrations(ctx); errors.Is(err, sqlite.ErrSchemaUninitialized) {
-			if err := store.Initialize(ctx, repoFormat); err != nil {
-				return fmt.Errorf("initialize empty metadata database: %w", err)
-			}
-		} else if err != nil {
-			return fmt.Errorf("existing metadata database is not a supported initialized repository: %w", err)
-		} else {
-			persistedFormat, found, err := store.RepositoryFormat(ctx)
-			if err != nil {
+	if err := store.CheckMigrations(ctx); errors.Is(err, sqlite.ErrSchemaUninitialized) {
+		// Publish the selected settings before initializing Metadata. If the
+		// process stops after this point, a retry can recover the same settings
+		// rather than guessing from an initialized database with no settings.
+		if err := removeRepositorySettingsTemps(repoDir); err != nil {
+			return err
+		}
+		if _, err := os.Lstat(settingsPath); errors.Is(err, os.ErrNotExist) {
+			if err := publishRepositorySettings(repoDir, settings); err != nil {
 				return err
 			}
-			if !found || persistedFormat != repoFormat {
-				return fmt.Errorf("%w: metadata database has missing or incompatible repository format", repositoryformat.ErrUnsupported)
-			}
-			root, err := store.GetByID(ctx, "root")
-			if err != nil || root.Name != "" || root.Kind != "directory" || root.ParentID != nil {
-				return fmt.Errorf("%w: metadata database has an invalid root entry: %v", repositoryformat.ErrUnsupported, err)
-			}
+		} else if err != nil {
+			return fmt.Errorf("inspect repository settings path: %w", err)
 		}
-	} else if err := store.Initialize(ctx, repoFormat); err != nil {
-		return fmt.Errorf("failed to initialize metadata schema: %w", err)
+		if err := store.Initialize(ctx, repoFormat); err != nil {
+			if dbExists {
+				return fmt.Errorf("initialize empty metadata database: %w", err)
+			}
+			return fmt.Errorf("failed to initialize metadata schema: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("existing metadata database is not a supported initialized repository: %w", err)
+	} else {
+		if !dbExists {
+			return fmt.Errorf("metadata database appeared during initialization")
+		}
+		persistedFormat, found, err := store.RepositoryFormat(ctx)
+		if err != nil {
+			return err
+		}
+		if !found || persistedFormat != repoFormat {
+			return fmt.Errorf("%w: metadata database has missing or incompatible repository format", repositoryformat.ErrUnsupported)
+		}
+		root, err := store.GetByID(ctx, "root")
+		if err != nil || root.Name != "" || root.Kind != "directory" || root.ParentID != nil {
+			return fmt.Errorf("%w: metadata database has an invalid root entry: %v", repositoryformat.ErrUnsupported, err)
+		}
+		if err := removeRepositorySettingsTemps(repoDir); err != nil {
+			return err
+		}
 	}
 	// Complete each remaining durable component idempotently after validation.
 	objectsDir := filepath.Join(repoDir, "objects")
@@ -165,11 +233,7 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 		return fmt.Errorf("close repository coordinator: %w", err)
 	}
 
-	if _, err := os.Lstat(settingsPath); errors.Is(err, os.ErrNotExist) {
-		if err := publishRepositorySettings(repoDir, settings); err != nil {
-			return err
-		}
-	} else if err != nil {
+	if _, err := os.Lstat(settingsPath); err != nil {
 		return fmt.Errorf("inspect repository settings path: %w", err)
 	}
 	return nil

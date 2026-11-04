@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/kamichidu/go-nando/internal/metadata/sqlite"
 	"github.com/kamichidu/go-nando/internal/repository"
 )
 
@@ -257,6 +258,71 @@ func TestInitRepositoryCompletesEmptyMetadataDatabaseFromPartialState(t *testing
 	}
 }
 
+func TestInitRepositoryResumesAfterSettingsPublicationBeforeSchemaInitialization(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://resume-after-settings"}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishRepositorySettings(root, want); err != nil {
+		t.Fatalf("publish settings for interrupted initialization state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "metadata.sqlite"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := InitRepository(context.Background(), root); err != nil {
+		t.Fatalf("resume initialization without changing published settings: %v", err)
+	}
+	got, err := LoadRepositorySettings(root)
+	if err != nil || got != want {
+		t.Fatalf("resumed settings: got=%+v err=%v", got, err)
+	}
+	store, err := sqlite.NewExistingStore(filepath.Join(root, "metadata.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.CheckMigrations(context.Background()); err != nil {
+		t.Fatalf("resumed schema is not valid: %v", err)
+	}
+}
+
+func TestInitRepositoryRejectsUnknownMetadataSchemaWithoutMutation(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(root, "metadata.sqlite")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE VIEW preserved_view AS SELECT 1 AS value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := InitRepository(context.Background(), root); err == nil {
+		t.Fatal("init accepted a user_version=0 database with a schema view")
+	}
+	if got, err := os.ReadFile(dbPath); err != nil || string(got) != string(before) {
+		t.Fatalf("unknown metadata schema changed: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "repository.json")); !os.IsNotExist(err) {
+		t.Fatalf("settings were published for unknown metadata: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "objects")); !os.IsNotExist(err) {
+		t.Fatalf("objects directory was created for unknown metadata: %v", err)
+	}
+}
+
 func TestInitRepositoryRejectsUnknownPartialStateWithoutMutation(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -272,6 +338,50 @@ func TestInitRepositoryRejectsUnknownPartialStateWithoutMutation(t *testing.T) {
 	bytes, err := os.ReadFile(unknown)
 	if err != nil || string(bytes) != "preserve" {
 		t.Fatalf("unknown state changed: %q err=%v", bytes, err)
+	}
+}
+
+func TestInitRepositoryRejectsObjectsWithoutMetadataWithoutMutation(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	object := filepath.Join(root, "objects", "sha256-existing")
+	if err := os.MkdirAll(filepath.Dir(object), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(object, []byte("preserve committed object"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := InitRepository(context.Background(), root); err == nil {
+		t.Fatal("init accepted existing object data without metadata.sqlite")
+	}
+	if got, err := os.ReadFile(object); err != nil || string(got) != "preserve committed object" {
+		t.Fatalf("existing object changed: %q err=%v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "metadata.sqlite")); !os.IsNotExist(err) {
+		t.Fatalf("metadata was created despite existing object data: %v", err)
+	}
+}
+
+func TestInitRepositoryRejectsMetadataWithoutSettingsWithoutMutation(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := InitRepositoryWithSettings(context.Background(), root, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://original"}); err != nil {
+		t.Fatal(err)
+	}
+	metadata := filepath.Join(root, "metadata.sqlite")
+	before, err := os.ReadFile(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "repository.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := InitRepository(context.Background(), root); err == nil {
+		t.Fatal("init accepted metadata with unknown repository settings")
+	}
+	if got, err := os.ReadFile(metadata); err != nil || string(got) != string(before) {
+		t.Fatalf("metadata changed: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "repository.json")); !os.IsNotExist(err) {
+		t.Fatalf("missing settings were recreated with a default: %v", err)
 	}
 }
 

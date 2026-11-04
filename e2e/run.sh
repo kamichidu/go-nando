@@ -85,7 +85,7 @@ fi
 if ! command -v golangci-lint >/dev/null; then echo "FAIL: golangci-lint required" >&2; exit 2; fi
 
 compose_started=1
-if ! run_gate G0 "native root/FUSE tests, race, lint and pinned Design IR validation" 1800 bash -c '
+if ! run_gate G0 "native module checks, workspace install targets, lint and pinned Design IR validation" 1800 bash -c '
   set -Eeuo pipefail
   compose=(docker compose --project-directory "$1" -f "$1/e2e/compose.yaml" -p "$2")
   "${compose[@]}" up -d fake-gcs
@@ -102,6 +102,7 @@ if ! run_gate G1 "host-native real FUSE CRUD/fsync/rename/unlink/writers/CAS" 48
   python3 "$5/e2e/runner.py" health
   python3 "$5/e2e/runner.py" g1
   kill -TERM "$daemon"; wait "$daemon" || true
+  python3 "$5/e2e/runner.py" relative-repository
 ' _ "$E2E_NANDO_BIN" "$E2E_REPOSITORY" "$E2E_SOCKET" "$ARTIFACTS" "$ROOT"; then exit 1; fi
 
 if ! run_gate G2 "host-native real FUSE with fake GCS outage/retry/idempotency" 600 bash -c '

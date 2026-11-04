@@ -21,6 +21,16 @@ overwritten by initialization. `.go-version` pins goenv to the same version as
 the `go` directive in `go.mod`; init fails if they disagree. Init installs
 the pinned nfpm Go tool into `.local/bin` for local Debian package builds.
 
+The committed root `go.work` includes the root, FUSE, and WebDAV modules. G0
+checks that root `go install ./...` produces only root-module executables, then
+installs `nando`, `nando-fuse`, and `nando-webdav` with the three documented
+workspace package targets. CI repeats those install commands and both CI and
+release jobs assert that Go selected the committed workspace. Adapter modules
+have no local filesystem `replace`; `go.work` maps their unreleased `v0.0.0`
+root requirement to the checked-out root module. Their `v0.0.0` root dependency
+is not a published version, so standalone module consumption remains
+unsupported until real publication tags are chosen.
+
 The public Taskfile commands are `init`, `build`, `test`, `lint`, `check`,
 `e2e`, `package`, and `clean`. `check` runs tests and lint. `package` builds a
 local Debian package using `packaging/build-deb.sh` and requires `nfpm` and
@@ -30,7 +40,7 @@ local Debian package using `packaging/build-deb.sh` and requires `nfpm` and
 
 The host needs Go 1.25.1, Python 3, curl, Docker Compose v2, `golangci-lint`, `fusermount3`, and a readable/writable `/dev/fuse` that permits a real host mount. The validator checkout must be at commit `455ed318b7bc409d3e1da320620ef92d457042b9`; set `DESIGN_IR_REPO` to its path if it is not `../design-ir`.
 
-Every run creates an isolated temporary evidence and repository directory and a unique Compose project. The command starts fake GCS, then G0 runs root and FUSE-module unit and race tests, the repository lint configuration and lint checks for both modules, native binary builds, and the pinned Design IR validator. G1 uses only a Local-mode repository and makes no GCS requests. G2 uses a project-scoped named volume and loopback-only host port to test fake GCS delivery, outage, restart, and retry. A host-only HTTP fault proxy holds the successful upload response after fake GCS has durably accepted one object; the gate kills the daemon before the response can acknowledge transfer completion, restarts it, and verifies an actual replay keeps the same generation and single object name. The proxy is test infrastructure only; it adds no production hook. Native binaries use the isolated repositories and Unix sockets. Exit cleanup discovers only processes whose executable arguments refer to that run's artifact directory, terminates their process groups or recorded proxy PID with deadlines, unmounts only mounts under that directory, reports D-state processes, captures Compose status and logs, and runs `docker compose down --volumes --remove-orphans`. Any remaining process, mount, or cleanup failure makes the command fail. Evidence remains under the printed `/tmp/go-nando-e2e.*` path. No existing repository state or volume is reused.
+Every run creates an isolated temporary evidence and repository directory and a unique Compose project. The command starts fake GCS, then G0 runs root, FUSE, and WebDAV module unit and race tests, workspace install targets, the repository lint configuration and checks for all modules, native binary builds, and the pinned Design IR validator. G1 uses only a Local-mode repository and makes no GCS requests. G2 uses a project-scoped named volume and loopback-only host port to test fake GCS delivery, outage, restart, and retry. A host-only HTTP fault proxy holds the successful upload response after fake GCS has durably accepted one object; the gate kills the daemon before the response can acknowledge transfer completion, restarts it, and verifies an actual replay keeps the same generation and single object name. The proxy is test infrastructure only; it adds no production hook. Native binaries use the isolated repositories and Unix sockets. Exit cleanup discovers only processes whose executable arguments refer to that run's artifact directory, terminates their process groups or recorded proxy PID with deadlines, unmounts only mounts under that directory, reports D-state processes, captures Compose status and logs, and runs `docker compose down --volumes --remove-orphans`. Any remaining process, mount, or cleanup failure makes the command fail. Evidence remains under the printed `/tmp/go-nando-e2e.*` path. No existing repository state or volume is reused.
 
 Missing FUSE prerequisites produce G1-G3 `SKIP` and a nonzero overall result. A failed or unavailable real mount never becomes PASS. Each scenario has a 45-second deadline; readiness and eventual conditions poll against monotonic deadlines, and each gate has an outer timeout. Logs include `gates.tsv`, per-gate command output, `scenarios.jsonl`, `scenarios.log`, native daemon/FUSE logs, and Compose logs. If a kernel operation becomes uninterruptible, the gate fails, attempts unmount and process cleanup, and leaves the evidence directory for diagnosis.
 
@@ -41,7 +51,7 @@ Missing FUSE prerequisites produce G1-G3 `SKIP` and a nonzero overall result. A 
 
 |G0 `G0-static`
 |Native static and module checks
-|Root, FUSE, and WebDAV module tests and race tests, lint configuration and checks, native binary builds, and pinned Design IR validation all succeed.
+|Root, FUSE, and WebDAV module tests and race tests, committed-workspace install targets, lint configuration and checks, native binary builds, and pinned Design IR validation all succeed.
 
 |G1 `G1-01`
 |CRUD and namespace
@@ -66,6 +76,10 @@ Missing FUSE prerequisites produce G1-G3 `SKIP` and a nonzero overall result. A 
 |G1 `G1-06`
 |CAS conflict
 |Competing daemon put wins; stale FUSE fsync returns EAGAIN and failed staging remains in Recovery.
+
+|G1 `G1-07`
+|Relative daemon repository root
+|A daemon started with `--repository ./repository` supports CLI put/cat and FUSE copy/cat; both reads return bytes identical to `README.adoc`.
 
 |G2 `G2-00`
 |Bucket setup
