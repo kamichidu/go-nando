@@ -88,7 +88,9 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 			return err
 		}
 		for _, entry := range entries {
-			if entry.Name() != "objects" && entry.Name() != "temp" && !(strings.HasPrefix(entry.Name(), ".repository.json-") && strings.HasSuffix(entry.Name(), ".tmp")) {
+			name := entry.Name()
+			isSettingsTemp := strings.HasPrefix(name, ".repository.json-") && strings.HasSuffix(name, ".tmp")
+			if name != "objects" && name != "temp" && !isSettingsTemp {
 				return fmt.Errorf("%w: repository state without metadata.sqlite is not a recognized initialization state", repositoryformat.ErrUnsupported)
 			}
 		}
