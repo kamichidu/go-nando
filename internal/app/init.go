@@ -35,13 +35,13 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 		return fmt.Errorf("failed to create repository root directory: %w", err)
 	}
 	// Serialize provisioning across processes before inspecting or creating any
-	// repository component. flock is advisory and released automatically after
-	// crashes, so an interrupted init remains resumable.
+	// repository component. The lock file is stable across path aliases and is
+	// released automatically after crashes, so interrupted init remains resumable.
 	initLock, err := os.Open(repoDir)
 	if err != nil {
 		return fmt.Errorf("open repository initialization lock: %w", err)
 	}
-	defer func() { retErr = errors.Join(retErr, initLock.Close()) }()
+	defer initLock.Close()
 	if err := unix.Flock(int(initLock.Fd()), unix.LOCK_EX); err != nil {
 		return fmt.Errorf("lock repository initialization: %w", err)
 	}
@@ -67,6 +67,12 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect repository settings path: %w", err)
 	}
+	// Interrupted publication may leave a complete private temporary file.
+	// It is never authoritative; remove recognized regular temp files while
+	// holding the init lock and regenerate from the selected settings.
+	if err := removeRepositorySettingsTemps(repoDir); err != nil {
+		return err
+	}
 	dbExists := false
 	if info, err := os.Stat(dbPath); err == nil {
 		if !info.Mode().IsRegular() {
@@ -82,7 +88,7 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 			return err
 		}
 		for _, entry := range entries {
-			if entry.Name() != "objects" && entry.Name() != "temp" && !isTemporaryRepositorySettings(entry.Name()) {
+			if entry.Name() != "objects" && entry.Name() != "temp" && !(strings.HasPrefix(entry.Name(), ".repository.json-") && strings.HasSuffix(entry.Name(), ".tmp")) {
 				return fmt.Errorf("%w: repository state without metadata.sqlite is not a recognized initialization state", repositoryformat.ErrUnsupported)
 			}
 		}
@@ -205,14 +211,38 @@ func publishRepositorySettings(repoDir string, settings repository.Settings) (re
 	return nil
 }
 
+func removeRepositorySettingsTemps(repoDir string) error {
+	entries, err := os.ReadDir(repoDir)
+	if err != nil {
+		return fmt.Errorf("inspect temporary repository settings: %w", err)
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".repository.json-") || !strings.HasSuffix(entry.Name(), ".tmp") {
+			continue
+		}
+		path := filepath.Join(repoDir, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%w: temporary repository settings path is not a regular file", repositoryformat.ErrUnsupported)
+		}
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("remove interrupted temporary repository settings: %w", err)
+		}
+	}
+	return nil
+}
+
 func validateInitRoot(repoDir string) error {
-	allowed := map[string]bool{"metadata.sqlite": true, "coordination.db": true, "objects": true, "temp": true, "repository.json": true}
+	allowed := map[string]bool{"metadata.sqlite": true, "coordination.db": true, "objects": true, "temp": true, "repository.json": true, ".init.lock": true}
 	entries, err := os.ReadDir(repoDir)
 	if err != nil {
 		return fmt.Errorf("inspect repository directory: %w", err)
 	}
 	for _, entry := range entries {
-		if isTemporaryRepositorySettings(entry.Name()) {
+		if strings.HasPrefix(entry.Name(), ".repository.json-") && strings.HasSuffix(entry.Name(), ".tmp") {
 			info, err := os.Lstat(filepath.Join(repoDir, entry.Name()))
 			if err != nil {
 				return err
@@ -236,10 +266,6 @@ func validateInitRoot(repoDir string) error {
 	return nil
 }
 
-func isTemporaryRepositorySettings(name string) bool {
-	return strings.HasPrefix(name, ".repository.json-") && strings.HasSuffix(name, ".tmp")
-}
-
 func validateCoordinationDatabase(path string) error {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -251,35 +277,42 @@ func validateCoordinationDatabase(path string) error {
 		return err
 	}
 	defer db.Close()
-	var objects int
-	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type IN ('table','index','trigger','view') AND name NOT LIKE 'sqlite_%'").Scan(&objects); err != nil {
+	var tables int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil {
 		return fmt.Errorf("inspect repository coordinator database: %w", err)
 	}
-	if objects == 0 {
+	if tables == 0 {
+		var objects int
+		if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(&objects); err != nil {
+			return err
+		}
+		if objects != 0 {
+			return fmt.Errorf("%w: coordination database has schema objects without resource_locks", repositoryformat.ErrUnsupported)
+		}
 		return nil
 	}
+	var objects int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type IN ('table','index','trigger','view') AND name NOT LIKE 'sqlite_%'").Scan(&objects); err != nil {
+		return fmt.Errorf("inspect repository coordinator objects: %w", err)
+	}
 	if objects != 1 {
-		return fmt.Errorf("%w: coordination database has unknown tables", repositoryformat.ErrUnsupported)
+		return fmt.Errorf("%w: coordination database has unknown schema objects", repositoryformat.ErrUnsupported)
 	}
 	var name string
 	if err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&name); err != nil || name != "resource_locks" {
 		return fmt.Errorf("%w: coordination database has an unknown schema", repositoryformat.ErrUnsupported)
-	}
-	var ddl string
-	if err := db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='resource_locks'").Scan(&ddl); err != nil {
-		return fmt.Errorf("%w: coordination database has an invalid resource_locks definition: %v", repositoryformat.ErrUnsupported, err)
-	}
-	canonical := "CREATE TABLE resource_locks ( resource_id TEXT NOT NULL, operation_id TEXT NOT NULL, mode TEXT NOT NULL CHECK (mode IN ('R','W')), expires_at INTEGER NOT NULL, PRIMARY KEY (resource_id, operation_id) )"
-	normalize := func(s string) string { return strings.Join(strings.Fields(strings.ToUpper(s)), " ") }
-	if normalize(ddl) != normalize(canonical) {
-		return fmt.Errorf("%w: coordination database resource_locks definition is incompatible", repositoryformat.ErrUnsupported)
 	}
 	rows, err := db.Query("PRAGMA table_info(resource_locks)")
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	columns := map[string]bool{}
+	type column struct {
+		typ              string
+		notNull, primary int
+		defaultValue     sql.NullString
+	}
+	columns := map[string]column{}
 	for rows.Next() {
 		var cid, notNull, primary int
 		var col, typ string
@@ -287,21 +320,92 @@ func validateCoordinationDatabase(path string) error {
 		if err := rows.Scan(&cid, &col, &typ, &notNull, &def, &primary); err != nil {
 			return err
 		}
-		columns[col] = true
+		columns[col] = column{typ: strings.ToUpper(typ), notNull: notNull, primary: primary, defaultValue: def}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	expected := map[string]bool{"resource_id": true, "operation_id": true, "mode": true, "expires_at": true}
+	expected := map[string]column{
+		"resource_id":  {typ: "TEXT", notNull: 1, primary: 1},
+		"operation_id": {typ: "TEXT", notNull: 1, primary: 2},
+		"mode":         {typ: "TEXT", notNull: 1},
+		"expires_at":   {typ: "INTEGER", notNull: 1},
+	}
 	if len(columns) != len(expected) {
 		return fmt.Errorf("%w: coordination database has unexpected resource_locks columns", repositoryformat.ErrUnsupported)
 	}
-	for col := range expected {
-		if !columns[col] {
+	for col, want := range expected {
+		got, ok := columns[col]
+		if !ok {
 			return fmt.Errorf("%w: coordination database is missing column %s", repositoryformat.ErrUnsupported, col)
 		}
+		if got.typ != want.typ || got.notNull != want.notNull || got.primary != want.primary || got.defaultValue.Valid {
+			return fmt.Errorf("%w: coordination database column %s has incompatible type or constraints", repositoryformat.ErrUnsupported, col)
+		}
+	}
+	var modeCheck bool
+	if err := db.QueryRow("SELECT instr(upper(sql), \"CHECK (MODE IN ('R','W'))\") > 0 FROM sqlite_master WHERE type='table' AND name='resource_locks'").Scan(&modeCheck); err != nil || !modeCheck {
+		return fmt.Errorf("%w: coordination database resource_locks mode constraint is missing", repositoryformat.ErrUnsupported)
+	}
+	indexRows, err := db.Query("PRAGMA index_list(resource_locks)")
+	if err != nil {
+		return err
+	}
+	for indexRows.Next() {
+		var seq, unique, partial int
+		var name, origin string
+		if err := indexRows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			indexRows.Close()
+			return err
+		}
+		// The primary-key autoindex is required. Additional indexes indicate an
+		// unrecognized schema that init must leave untouched.
+		if origin != "pk" || unique != 1 || partial != 0 {
+			indexRows.Close()
+			return fmt.Errorf("%w: coordination database has an unexpected resource_locks index", repositoryformat.ErrUnsupported)
+		}
+		indexCols, err := db.Query("PRAGMA index_info(" + quoteSQLiteIdentifier(name) + ")")
+		if err != nil {
+			indexRows.Close()
+			return err
+		}
+		got := make([]string, 0, 2)
+		for indexCols.Next() {
+			var seq, cid int
+			var col string
+			if err := indexCols.Scan(&seq, &cid, &col); err != nil {
+				indexCols.Close()
+				indexRows.Close()
+				return err
+			}
+			got = append(got, col)
+		}
+		if err := indexCols.Err(); err != nil {
+			indexCols.Close()
+			indexRows.Close()
+			return err
+		}
+		if err := indexCols.Close(); err != nil {
+			indexRows.Close()
+			return err
+		}
+		if len(got) != 2 || got[0] != "resource_id" || got[1] != "operation_id" {
+			indexRows.Close()
+			return fmt.Errorf("%w: coordination database primary key is incompatible", repositoryformat.ErrUnsupported)
+		}
+	}
+	if err := indexRows.Err(); err != nil {
+		indexRows.Close()
+		return err
+	}
+	if err := indexRows.Close(); err != nil {
+		return err
 	}
 	return nil
+}
+
+func quoteSQLiteIdentifier(value string) string {
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 }
 
 func ensureInitDirectory(path string) error {

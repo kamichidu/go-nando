@@ -66,6 +66,29 @@ func TestInitRepositoryResumesValidatedPartialRepository(t *testing.T) {
 	}
 }
 
+func TestInitRepositoryKeepsExistingSettingsFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://keep-existing"}
+	if err := InitRepositoryWithSettings(context.Background(), root, want); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "repository.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := InitRepository(context.Background(), root); err != nil {
+		t.Fatalf("repeat init: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("repository settings changed: before=%q after=%q", before, after)
+	}
+}
+
 func TestInitRepositoryRejectsIncompatibleCoordinationSchemaWithoutMutation(t *testing.T) {
 	root := t.TempDir()
 	db, err := sql.Open("sqlite", filepath.Join(root, "coordination.db"))
@@ -116,6 +139,84 @@ func TestInitRepositoryConcurrentCalls(t *testing.T) {
 	if _, err := LoadRepositorySettings(root); err != nil {
 		t.Fatalf("concurrent init did not publish valid settings: %v", err)
 	}
+	if err := InitRepository(context.Background(), root); err != nil {
+		t.Fatalf("repeat init with persistent lock file: %v", err)
+	}
+}
+
+func TestInitRepositoryResumesInterruptedSettingsPublication(t *testing.T) {
+	root := t.TempDir()
+	tmp := filepath.Join(root, ".repository.json-interrupted.tmp")
+	if err := os.WriteFile(tmp, []byte(`{"partial":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://resumed"}
+	if err := InitRepositoryWithSettings(context.Background(), root, want); err != nil {
+		t.Fatalf("resume interrupted settings publication: %v", err)
+	}
+	got, err := LoadRepositorySettings(root)
+	if err != nil || got != want {
+		t.Fatalf("resumed settings: got=%+v err=%v", got, err)
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Fatalf("interrupted temp remains: %v", err)
+	}
+}
+
+func TestInitRepositoryRejectsUnexpectedCoordinatorIndexWithoutMutation(t *testing.T) {
+	root := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(root, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE resource_locks (
+		resource_id TEXT NOT NULL, operation_id TEXT NOT NULL, mode TEXT NOT NULL CHECK (mode IN ('R','W')),
+		expires_at INTEGER NOT NULL, PRIMARY KEY(resource_id, operation_id)); CREATE INDEX extra_lock_index ON resource_locks(mode);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := InitRepository(context.Background(), root); err == nil {
+		t.Fatal("unexpected coordinator index was accepted")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "coordination.db" {
+		t.Fatalf("unsupported state was mutated: %v", entries)
+	}
+}
+
+func TestInitRepositoryRejectsCoordinatorSchemaContractVariants(t *testing.T) {
+	tests := map[string]string{
+		"wrong type":              `CREATE TABLE resource_locks (resource_id BLOB NOT NULL, operation_id TEXT NOT NULL, mode TEXT NOT NULL CHECK (mode IN ('R','W')), expires_at INTEGER NOT NULL, PRIMARY KEY(resource_id,operation_id))`,
+		"wrong primary key":       `CREATE TABLE resource_locks (resource_id TEXT NOT NULL, operation_id TEXT NOT NULL, mode TEXT NOT NULL CHECK (mode IN ('R','W')), expires_at INTEGER NOT NULL, PRIMARY KEY(operation_id,resource_id))`,
+		"missing mode constraint": `CREATE TABLE resource_locks (resource_id TEXT NOT NULL, operation_id TEXT NOT NULL, mode TEXT NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY(resource_id,operation_id))`,
+	}
+	for name, ddl := range tests {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			db, err := sql.Open("sqlite", filepath.Join(root, "coordination.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(ddl); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := InitRepository(context.Background(), root); err == nil {
+				t.Fatal("incompatible coordinator schema was accepted")
+			}
+			if _, err := os.Stat(filepath.Join(root, "metadata.sqlite")); !os.IsNotExist(err) {
+				t.Fatalf("metadata was created for unsupported state: %v", err)
+			}
+		})
+	}
 }
 
 func TestPublishRepositorySettingsDoesNotReplaceExistingFile(t *testing.T) {
@@ -131,22 +232,6 @@ func TestPublishRepositorySettingsDoesNotReplaceExistingFile(t *testing.T) {
 	}
 	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != string(original) {
 		t.Fatalf("existing settings changed: %q err=%v", got, readErr)
-	}
-}
-
-func TestInitRepositoryRetriesAfterSettingsTemporaryFileFailure(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "missing-repository-directory")
-	if err := publishRepositorySettings(root, repository.DefaultSettings()); err == nil {
-		t.Fatal("temporary settings creation unexpectedly succeeded in a missing directory")
-	}
-	if _, err := os.Stat(filepath.Join(root, "repository.json")); !os.IsNotExist(err) {
-		t.Fatalf("failed settings write left a published file: %v", err)
-	}
-	if err := InitRepository(context.Background(), root); err != nil {
-		t.Fatalf("retry init after settings write failure: %v", err)
-	}
-	if _, err := LoadRepositorySettings(root); err != nil {
-		t.Fatalf("retry did not publish valid settings: %v", err)
 	}
 }
 
