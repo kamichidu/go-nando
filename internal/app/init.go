@@ -9,11 +9,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	coordinatorsqlite "github.com/kamichidu/go-nando/internal/coordinator/sqlite"
 	"github.com/kamichidu/go-nando/internal/metadata/sqlite"
 	"github.com/kamichidu/go-nando/internal/repository"
 	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
+	"golang.org/x/sys/unix"
 )
 
 // InitRepository initializes the directory structure and schema for a new nando repository.
@@ -23,7 +25,7 @@ func InitRepository(ctx context.Context, repoDir string) error {
 
 // InitRepositoryWithSettings initializes a repository with its delivery settings.
 // Existing repositories are never silently reconfigured.
-func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings repository.Settings) error {
+func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings repository.Settings) (retErr error) {
 	if err := settings.Validate(); err != nil {
 		return fmt.Errorf("invalid repository settings: %w", err)
 	}
@@ -32,6 +34,22 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create repository root directory: %w", err)
 	}
+	// Serialize provisioning across processes before inspecting or creating any
+	// repository component. flock is advisory and released automatically after
+	// crashes, so an interrupted init remains resumable.
+	initLock, err := os.Open(repoDir)
+	if err != nil {
+		return fmt.Errorf("open repository initialization lock: %w", err)
+	}
+	defer func() { retErr = errors.Join(retErr, initLock.Close()) }()
+	if err := unix.Flock(int(initLock.Fd()), unix.LOCK_EX); err != nil {
+		return fmt.Errorf("lock repository initialization: %w", err)
+	}
+	defer func() {
+		if err := unix.Flock(int(initLock.Fd()), unix.LOCK_UN); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("unlock repository initialization: %w", err))
+		}
+	}()
 	if err := validateInitRoot(repoDir); err != nil {
 		return err
 	}
@@ -64,16 +82,24 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 			return err
 		}
 		for _, entry := range entries {
-			if entry.Name() != "objects" && entry.Name() != "temp" {
+			if entry.Name() != "objects" && entry.Name() != "temp" && !isTemporaryRepositorySettings(entry.Name()) {
 				return fmt.Errorf("%w: repository state without metadata.sqlite is not a recognized initialization state", repositoryformat.ErrUnsupported)
 			}
 		}
+	}
+	coordPath := filepath.Join(repoDir, "coordination.db")
+	if info, err := os.Stat(coordPath); err == nil && !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: coordination.db is not a regular file", repositoryformat.ErrUnsupported)
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := validateCoordinationDatabase(coordPath); err != nil {
+		return err
 	}
 	// Existing databases are accepted only when they are a complete supported
 	// v1 schema with the expected format and root entry. SQLite schema creation
 	// itself remains transactional and is attempted only for an empty database.
 	var store *sqlite.Store
-	var err error
 	if dbExists {
 		store, err = sqlite.NewExistingStore(dbPath)
 	} else {
@@ -120,15 +146,6 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
-	coordPath := filepath.Join(repoDir, "coordination.db")
-	if info, err := os.Stat(coordPath); err == nil && !info.Mode().IsRegular() {
-		return fmt.Errorf("%w: coordination.db is not a regular file", repositoryformat.ErrUnsupported)
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err := validateCoordinationDatabase(coordPath); err != nil {
-		return err
-	}
 	coordinator, err := coordinatorsqlite.Open(coordPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository coordinator: %w", err)
@@ -140,16 +157,50 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 		return fmt.Errorf("close repository coordinator: %w", err)
 	}
 
-	if _, err := os.Stat(settingsPath); errors.Is(err, os.ErrNotExist) {
-		file, err := os.OpenFile(settingsPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if err != nil {
-			return fmt.Errorf("create repository settings: %w", err)
+	if _, err := os.Lstat(settingsPath); errors.Is(err, os.ErrNotExist) {
+		if err := publishRepositorySettings(repoDir, settings); err != nil {
+			return err
 		}
-		encodeErr := json.NewEncoder(file).Encode(settings)
-		closeErr := file.Close()
-		if err := errors.Join(encodeErr, closeErr); err != nil {
-			return fmt.Errorf("write repository settings: %w", err)
+	} else if err != nil {
+		return fmt.Errorf("inspect repository settings path: %w", err)
+	}
+	return nil
+}
+
+func publishRepositorySettings(repoDir string, settings repository.Settings) (retErr error) {
+	tmp, err := os.CreateTemp(repoDir, ".repository.json-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary repository settings: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		if err := os.Remove(tmpName); err != nil && !errors.Is(err, os.ErrNotExist) {
+			retErr = errors.Join(retErr, fmt.Errorf("remove temporary repository settings: %w", err))
 		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return errors.Join(fmt.Errorf("set repository settings permissions: %w", err), tmp.Close())
+	}
+	if err := json.NewEncoder(tmp).Encode(settings); err != nil {
+		return errors.Join(fmt.Errorf("write temporary repository settings: %w", err), tmp.Close())
+	}
+	if err := tmp.Sync(); err != nil {
+		return errors.Join(fmt.Errorf("sync temporary repository settings: %w", err), tmp.Close())
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary repository settings: %w", err)
+	}
+	// Link publishes atomically and fails if the destination already exists.
+	// Both paths are on the same filesystem because the temp file is in repoDir.
+	if err := os.Link(tmpName, filepath.Join(repoDir, "repository.json")); err != nil {
+		return fmt.Errorf("publish repository settings without replacement: %w", err)
+	}
+	dir, err := os.Open(repoDir)
+	if err != nil {
+		return fmt.Errorf("open repository directory for sync: %w", err)
+	}
+	if err := errors.Join(dir.Sync(), dir.Close()); err != nil {
+		return fmt.Errorf("sync repository settings directory: %w", err)
 	}
 	return nil
 }
@@ -161,6 +212,16 @@ func validateInitRoot(repoDir string) error {
 		return fmt.Errorf("inspect repository directory: %w", err)
 	}
 	for _, entry := range entries {
+		if isTemporaryRepositorySettings(entry.Name()) {
+			info, err := os.Lstat(filepath.Join(repoDir, entry.Name()))
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("%w: temporary repository settings path is not a regular file", repositoryformat.ErrUnsupported)
+			}
+			continue
+		}
 		if !allowed[entry.Name()] {
 			return fmt.Errorf("%w: unknown repository path %q; existing data was left unchanged", repositoryformat.ErrUnsupported, entry.Name())
 		}
@@ -175,6 +236,10 @@ func validateInitRoot(repoDir string) error {
 	return nil
 }
 
+func isTemporaryRepositorySettings(name string) bool {
+	return strings.HasPrefix(name, ".repository.json-") && strings.HasSuffix(name, ".tmp")
+}
+
 func validateCoordinationDatabase(path string) error {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -186,19 +251,28 @@ func validateCoordinationDatabase(path string) error {
 		return err
 	}
 	defer db.Close()
-	var tables int
-	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil {
+	var objects int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type IN ('table','index','trigger','view') AND name NOT LIKE 'sqlite_%'").Scan(&objects); err != nil {
 		return fmt.Errorf("inspect repository coordinator database: %w", err)
 	}
-	if tables == 0 {
+	if objects == 0 {
 		return nil
 	}
-	if tables != 1 {
+	if objects != 1 {
 		return fmt.Errorf("%w: coordination database has unknown tables", repositoryformat.ErrUnsupported)
 	}
 	var name string
 	if err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&name); err != nil || name != "resource_locks" {
 		return fmt.Errorf("%w: coordination database has an unknown schema", repositoryformat.ErrUnsupported)
+	}
+	var ddl string
+	if err := db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='resource_locks'").Scan(&ddl); err != nil {
+		return fmt.Errorf("%w: coordination database has an invalid resource_locks definition: %v", repositoryformat.ErrUnsupported, err)
+	}
+	canonical := "CREATE TABLE resource_locks ( resource_id TEXT NOT NULL, operation_id TEXT NOT NULL, mode TEXT NOT NULL CHECK (mode IN ('R','W')), expires_at INTEGER NOT NULL, PRIMARY KEY (resource_id, operation_id) )"
+	normalize := func(s string) string { return strings.Join(strings.Fields(strings.ToUpper(s)), " ") }
+	if normalize(ddl) != normalize(canonical) {
+		return fmt.Errorf("%w: coordination database resource_locks definition is incompatible", repositoryformat.ErrUnsupported)
 	}
 	rows, err := db.Query("PRAGMA table_info(resource_locks)")
 	if err != nil {
@@ -218,9 +292,13 @@ func validateCoordinationDatabase(path string) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for _, required := range []string{"resource_id", "operation_id", "mode", "expires_at"} {
-		if !columns[required] {
-			return fmt.Errorf("%w: coordination database is missing column %s", repositoryformat.ErrUnsupported, required)
+	expected := map[string]bool{"resource_id": true, "operation_id": true, "mode": true, "expires_at": true}
+	if len(columns) != len(expected) {
+		return fmt.Errorf("%w: coordination database has unexpected resource_locks columns", repositoryformat.ErrUnsupported)
+	}
+	for col := range expected {
+		if !columns[col] {
+			return fmt.Errorf("%w: coordination database is missing column %s", repositoryformat.ErrUnsupported, col)
 		}
 	}
 	return nil

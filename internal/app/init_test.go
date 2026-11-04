@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/kamichidu/go-nando/internal/repository"
@@ -38,10 +40,17 @@ func TestInitRepositoryResumesValidatedPartialRepository(t *testing.T) {
 	if err := InitRepositoryWithSettings(context.Background(), root, want); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"coordination.db", "objects", "temp"} {
+	object := filepath.Join(root, "objects", "keep")
+	if err := os.WriteFile(object, []byte("committed object"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"coordination.db", "temp"} {
 		if err := os.RemoveAll(filepath.Join(root, name)); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if got, err := os.ReadFile(object); err != nil || string(got) != "committed object" {
+		t.Fatalf("existing object changed: %q err=%v", got, err)
 	}
 	if err := InitRepositoryWithSettings(context.Background(), root, repository.DefaultSettings()); err != nil {
 		t.Fatalf("resume valid partial repository: %v", err)
@@ -54,6 +63,90 @@ func TestInitRepositoryResumesValidatedPartialRepository(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(root, name)); err != nil {
 			t.Errorf("resumed repository missing %s: %v", name, err)
 		}
+	}
+}
+
+func TestInitRepositoryRejectsIncompatibleCoordinationSchemaWithoutMutation(t *testing.T) {
+	root := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(root, "coordination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE resource_locks (resource_id TEXT NOT NULL, operation_id TEXT NOT NULL, mode TEXT NOT NULL, expires_at INTEGER NOT NULL)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := InitRepository(context.Background(), root); err == nil {
+		t.Fatal("incompatible coordinator schema was accepted")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "coordination.db" {
+		t.Fatalf("unsupported state was mutated: entries=%v", entries)
+	}
+}
+
+func TestInitRepositoryConcurrentCalls(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	const callers = 8
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, callers)
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- InitRepository(context.Background(), root)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent init: %v", err)
+		}
+	}
+	if _, err := LoadRepositorySettings(root); err != nil {
+		t.Fatalf("concurrent init did not publish valid settings: %v", err)
+	}
+}
+
+func TestPublishRepositorySettingsDoesNotReplaceExistingFile(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "repository.json")
+	original := []byte("preserve me")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := publishRepositorySettings(root, repository.DefaultSettings())
+	if err == nil {
+		t.Fatal("publish unexpectedly replaced an existing settings file")
+	}
+	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != string(original) {
+		t.Fatalf("existing settings changed: %q err=%v", got, readErr)
+	}
+}
+
+func TestInitRepositoryRetriesAfterSettingsTemporaryFileFailure(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing-repository-directory")
+	if err := publishRepositorySettings(root, repository.DefaultSettings()); err == nil {
+		t.Fatal("temporary settings creation unexpectedly succeeded in a missing directory")
+	}
+	if _, err := os.Stat(filepath.Join(root, "repository.json")); !os.IsNotExist(err) {
+		t.Fatalf("failed settings write left a published file: %v", err)
+	}
+	if err := InitRepository(context.Background(), root); err != nil {
+		t.Fatalf("retry init after settings write failure: %v", err)
+	}
+	if _, err := LoadRepositorySettings(root); err != nil {
+		t.Fatalf("retry did not publish valid settings: %v", err)
 	}
 }
 
