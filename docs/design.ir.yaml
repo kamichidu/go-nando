@@ -288,6 +288,28 @@ nodes:
       rationale: bound-migration-state-space-and-test-combinatorics
     provenance:
       origin: human-authored
+  - id: REQ-INIT-RESUMABLE-NO-REPLACE
+    level: system_requirement
+    kind: initialization-invariant
+    statement: >-
+      Repository initialization MUST serialize concurrent initializers across
+      processes and MUST validate existing repository components before
+      mutating them. Initialization MAY resume only recognized incomplete
+      provisioning states; unsupported or unknown state MUST fail without
+      modifying existing data. Repository-owned settings MUST be fully written,
+      synced, and closed in a same-directory temporary file before atomic
+      publication that never replaces an existing repository.json. A failed or
+      interrupted settings publication MUST leave no partial repository.json
+      and MUST allow a later initialization to resume. Existing valid v1
+      settings, metadata, coordination state, and object data MUST be preserved
+      by repeated initialization.
+    attributes:
+      settings_publication: same-directory-temp-sync-close-atomic-no-replace
+      concurrent_initialization: cross-process-serialized
+      unsupported_state: reject-without-mutation
+      retry_after_interruption: supported
+    provenance:
+      origin: human-authored
   - id: REQ-ENTRY-ID
     level: system_requirement
     kind: identity-invariant

@@ -66,6 +66,29 @@ func TestInitRepositoryResumesValidatedPartialRepository(t *testing.T) {
 	}
 }
 
+func TestInitRepositoryKeepsExistingSettingsFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://keep-existing"}
+	if err := InitRepositoryWithSettings(context.Background(), root, want); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "repository.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := InitRepository(context.Background(), root); err != nil {
+		t.Fatalf("repeat init: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("repository settings changed: before=%q after=%q", before, after)
+	}
+}
+
 func TestInitRepositoryRejectsIncompatibleCoordinationSchemaWithoutMutation(t *testing.T) {
 	root := t.TempDir()
 	db, err := sql.Open("sqlite", filepath.Join(root, "coordination.db"))
@@ -86,7 +109,7 @@ func TestInitRepositoryRejectsIncompatibleCoordinationSchemaWithoutMutation(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 || entries[0].Name() != ".init.lock" || entries[1].Name() != "coordination.db" {
+	if len(entries) != 1 || entries[0].Name() != "coordination.db" {
 		t.Fatalf("unsupported state was mutated: entries=%v", entries)
 	}
 }
@@ -162,7 +185,7 @@ func TestInitRepositoryRejectsUnexpectedCoordinatorIndexWithoutMutation(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 || entries[0].Name() != ".init.lock" || entries[1].Name() != "coordination.db" {
+	if len(entries) != 1 || entries[0].Name() != "coordination.db" {
 		t.Fatalf("unsupported state was mutated: %v", entries)
 	}
 }

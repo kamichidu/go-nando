@@ -37,14 +37,11 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	// Serialize provisioning across processes before inspecting or creating any
 	// repository component. The lock file is stable across path aliases and is
 	// released automatically after crashes, so interrupted init remains resumable.
-	initLock, err := os.OpenFile(filepath.Join(repoDir, ".init.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	initLock, err := os.Open(repoDir)
 	if err != nil {
 		return fmt.Errorf("open repository initialization lock: %w", err)
 	}
 	defer initLock.Close()
-	if err := initLock.Chmod(0o600); err != nil {
-		return fmt.Errorf("set repository initialization lock permissions: %w", err)
-	}
 	if err := unix.Flock(int(initLock.Fd()), unix.LOCK_EX); err != nil {
 		return fmt.Errorf("lock repository initialization: %w", err)
 	}
@@ -91,7 +88,7 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 			return err
 		}
 		for _, entry := range entries {
-			if entry.Name() != ".init.lock" && entry.Name() != "objects" && entry.Name() != "temp" && !isSQLiteSidecar(repoDir, entry.Name()) && !(strings.HasPrefix(entry.Name(), ".repository.json-") && strings.HasSuffix(entry.Name(), ".tmp")) {
+			if entry.Name() != "objects" && entry.Name() != "temp" && !(strings.HasPrefix(entry.Name(), ".repository.json-") && strings.HasSuffix(entry.Name(), ".tmp")) {
 				return fmt.Errorf("%w: repository state without metadata.sqlite is not a recognized initialization state", repositoryformat.ErrUnsupported)
 			}
 		}
@@ -255,7 +252,7 @@ func validateInitRoot(repoDir string) error {
 			}
 			continue
 		}
-		if !allowed[entry.Name()] && !isSQLiteSidecar(repoDir, entry.Name()) {
+		if !allowed[entry.Name()] {
 			return fmt.Errorf("%w: unknown repository path %q; existing data was left unchanged", repositoryformat.ErrUnsupported, entry.Name())
 		}
 		info, err := os.Lstat(filepath.Join(repoDir, entry.Name()))
@@ -267,18 +264,6 @@ func validateInitRoot(repoDir string) error {
 		}
 	}
 	return nil
-}
-
-func isSQLiteSidecar(repoDir, name string) bool {
-	for _, base := range []string{"metadata.sqlite", "coordination.db"} {
-		for _, suffix := range []string{"-journal", "-wal", "-shm"} {
-			if name == base+suffix {
-				info, err := os.Lstat(filepath.Join(repoDir, name))
-				return err == nil && info.Mode().IsRegular()
-			}
-		}
-	}
-	return false
 }
 
 func validateCoordinationDatabase(path string) error {
