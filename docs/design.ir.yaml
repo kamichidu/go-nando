@@ -257,9 +257,11 @@ nodes:
       migration chain. Migration code in a release MUST cover only its immediate
       predecessor. `nando admin migrate` MUST be the sole explicit migration
       entry point. Normal startup and initialization MUST validate the schema
-      version and refuse mismatches without migration; initialization MUST
-      create a new database only and MUST NOT initialize or migrate an existing
-      database. Unknown, older, newer, and legacy schema/data states MUST be
+      version and refuse mismatches without migration; initialization MAY
+      complete a recognized interrupted repository provisioning state, but MUST
+      never migrate an existing database or modify an unsupported schema. A
+      valid existing v1 database MUST be validated and left unchanged. Unknown,
+      older, newer, and legacy schema/data states MUST be
       refused without mutation. A migration MUST apply schema changes and the
       new user_version in one transaction and roll back both on failure.
       Downgrade is unsupported. Operators upgrading across a schema change MUST
@@ -277,7 +279,8 @@ nodes:
       historical_migration_chain: unsupported
       migration_entry_point: nando-admin-migrate
       normal_startup_migration: prohibited
-      init_existing_database: prohibited
+      init_existing_database: validate-only-v1-and-resume-empty-schema
+      completed_init_rerun: idempotent-no-op
       unsupported_state_mutation: prohibited
       migration_atomicity: schema-and-user_version-same-transaction
       downgrade: unsupported
@@ -1099,7 +1102,7 @@ nodes:
   - id: IMP-SQLITE-SCHEMA-LIFECYCLE-GAP
     level: implementation
     kind: observed-implementation
-    statement: The current implementation uses PRAGMA user_version as the sole SQLite schema version authority and creates baseline version 1 transactionally with the v1 tables, root entry, and Repository Format. Application init refuses an existing metadata database; normal composition validates schema version and v1 table presence without migration. nando admin migrate opens only an existing database, validates schema and Repository Format, and reports a no-op for valid v1. Nonempty user_version=0 databases, including former schema_migrations databases, malformed/missing v1 tables, and unknown older/newer versions are refused without mutation. No v0-to-v1 migration exists. The generic future N-1-to-N transition is NOT implemented because v1 is the initial baseline and there is no predecessor schema to migrate; future schema-changing releases must implement only their immediate predecessor transition with transactional DDL and user_version update.
+    statement: The current implementation uses PRAGMA user_version as the sole SQLite schema version authority and creates baseline version 1 transactionally with the v1 tables, root entry, and Repository Format. Application init validates existing v1 metadata and resumes only recognized provisioning components; an empty uninitialized database may receive the transactional baseline, while unknown or malformed databases are refused without mutation. Completed init is idempotent and preserves repository settings. Normal composition validates schema version and v1 table presence without migration. nando admin migrate opens only an existing database, validates schema and Repository Format, and reports a no-op for valid v1. Nonempty user_version=0 databases, including former schema_migrations databases, malformed/missing v1 tables, and unknown older/newer versions are refused without mutation. No v0-to-v1 migration exists. The generic future N-1-to-N transition is NOT implemented because v1 is the initial baseline and there is no predecessor schema to migrate; future schema-changing releases must implement only their immediate predecessor transition with transactional DDL and user_version update.
     provenance:
       origin: observed
     artifact_refs:

@@ -12,17 +12,21 @@ import (
 )
 
 type fakeAPI struct {
-	name       string
-	names      []string
-	attrs      apiAttrs
-	attrsErr   error
-	uploadErr  error
-	uploadSize int64
-	bytes      string
-	consume    int64
+	name         string
+	names        []string
+	attrs        apiAttrs
+	attrsErr     error
+	attrsErrOnce bool
+	attrsCalls   int
+	uploadCalls  int
+	uploadErr    error
+	uploadSize   int64
+	bytes        string
+	consume      int64
 }
 
 func (a *fakeAPI) Upload(_ context.Context, name string, id content.ID, size int64, _ []byte, src io.Reader) (apiAttrs, error) {
+	a.uploadCalls++
 	a.name = name
 	a.names = append(a.names, name)
 	if a.uploadErr != nil && a.consume > 0 {
@@ -50,7 +54,7 @@ func TestAmbiguousUploadReconciliationDoesNotDependOnConsumedBytes(t *testing.T)
 		t.Fatal(err)
 	}
 	want := md5.Sum([]byte("abc"))
-	api := &fakeAPI{uploadErr: errors.New("response lost"), consume: 1}
+	api := &fakeAPI{uploadErr: errors.New("response lost"), consume: 1, attrsErr: ErrObjectNotFound, attrsErrOnce: true}
 	api.attrs = apiAttrs{Name: "objects/" + id.String(), ID: id, ContentID: id.String(), Size: 3, Generation: 22, MD5: want[:]}
 	store, err := NewStoreWithAPI("gs://bucket", api)
 	if err != nil {
@@ -61,9 +65,72 @@ func TestAmbiguousUploadReconciliationDoesNotDependOnConsumedBytes(t *testing.T)
 		t.Fatalf("partial upload reconciliation failed: replica=%+v err=%v", got, err)
 	}
 }
+
+func TestUploadChecksFinalObjectBeforeTransfer(t *testing.T) {
+	id, err := content.ParseID("sha256-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := md5.Sum([]byte("abc"))
+	wantAttrs := apiAttrs{Name: "objects/" + id.String(), ID: id, ContentID: id.String(), Size: 3, Generation: 22, MD5: sum[:]}
+	t.Run("existing match skips transfer", func(t *testing.T) {
+		api := &fakeAPI{attrs: wantAttrs}
+		store := NewStoreWithAPIAndPrefix("bucket", "", api)
+		info, err := store.Upload(context.Background(), id, 3, sum[:], strings.NewReader("abc"))
+		if err != nil || info.Generation != 22 || api.uploadCalls != 0 || api.attrsCalls != 1 {
+			t.Fatalf("info=%+v err=%v uploads=%d attrs=%d", info, err, api.uploadCalls, api.attrsCalls)
+		}
+	})
+	t.Run("only absent name uploads then reconciles", func(t *testing.T) {
+		api := &fakeAPI{}
+		store := NewStoreWithAPIAndPrefix("bucket", "", api)
+		if _, err := store.Upload(context.Background(), id, 3, sum[:], strings.NewReader("abc")); err != nil {
+			t.Fatal(err)
+		}
+		if api.uploadCalls != 1 || api.attrsCalls != 1 {
+			t.Fatalf("uploads=%d attrs=%d", api.uploadCalls, api.attrsCalls)
+		}
+		if len(api.names) < 2 || api.names[0] != api.names[1] {
+			t.Fatalf("unexpected call order/names: %v", api.names)
+		}
+	})
+	t.Run("attribute transport failure is not absence", func(t *testing.T) {
+		failure := errors.New("attrs unavailable")
+		api := &fakeAPI{attrsErr: failure}
+		store := NewStoreWithAPIAndPrefix("bucket", "", api)
+		if _, err := store.Upload(context.Background(), id, 3, sum[:], strings.NewReader("abc")); !errors.Is(err, failure) {
+			t.Fatalf("error=%v", err)
+		}
+		if api.uploadCalls != 0 {
+			t.Fatalf("uploaded after attribute communication failure: %d", api.uploadCalls)
+		}
+	})
+	t.Run("existing mismatch conflicts without transfer", func(t *testing.T) {
+		bad := wantAttrs
+		wrong := md5.Sum([]byte("bad"))
+		bad.MD5 = wrong[:]
+		api := &fakeAPI{attrs: bad}
+		store := NewStoreWithAPIAndPrefix("bucket", "", api)
+		if _, err := store.Upload(context.Background(), id, 3, sum[:], strings.NewReader("abc")); !errors.Is(err, ErrRemoteObjectConflict) {
+			t.Fatalf("error=%v", err)
+		}
+		if api.uploadCalls != 0 {
+			t.Fatalf("uploaded over an existing object: %d", api.uploadCalls)
+		}
+	})
+}
 func (a *fakeAPI) Attrs(_ context.Context, name string) (apiAttrs, error) {
+	a.attrsCalls++
 	a.name = name
 	a.names = append(a.names, name)
+	if a.attrsErrOnce {
+		err := a.attrsErr
+		a.attrsErr, a.attrsErrOnce = nil, false
+		return apiAttrs{}, err
+	}
+	if a.attrsErr == nil && a.attrs.Name == "" {
+		return apiAttrs{}, ErrObjectNotFound
+	}
 	return a.attrs, a.attrsErr
 }
 func (a *fakeAPI) Open(_ context.Context, name string) (io.ReadCloser, error) {
@@ -90,7 +157,7 @@ func TestUploadTargetsFinalNameAndUsesAPIAttributesForAmbiguousResponse(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	api := &fakeAPI{uploadErr: errors.New("response lost")}
+	api := &fakeAPI{uploadErr: errors.New("response lost"), attrsErr: ErrObjectNotFound, attrsErrOnce: true}
 	sum := md5.Sum([]byte("abc"))
 	api.attrs = apiAttrs{Name: "objects/" + id.String(), ID: id, ContentID: id.String(), Size: 3, Generation: 91, MD5: sum[:]}
 	store, err := NewStoreWithAPI("gs://bucket", api)

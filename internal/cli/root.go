@@ -15,7 +15,6 @@ import (
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/app"
-	"github.com/kamichidu/go-nando/internal/config"
 	"github.com/kamichidu/go-nando/internal/content"
 	coordinatorsqlite "github.com/kamichidu/go-nando/internal/coordinator/sqlite"
 	"github.com/kamichidu/go-nando/internal/metadata"
@@ -305,7 +304,7 @@ func ResolveRepositoryAndVerbose(ctx context.Context) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	resolvedPaths, err := config.DefaultPaths()
+	resolvedPaths, err := runtimeconfig.DefaultPaths()
 	if err != nil {
 		return "", false, fmt.Errorf("failed to determine XDG-style data directory: %w", err)
 	}

@@ -135,21 +135,32 @@ func (s *Store) Upload(ctx context.Context, id content.ID, size int64, expectedM
 	if len(expectedMD5) != md5.Size {
 		return objectstore.RemoteObjectInfo{}, fmt.Errorf("upload requires a precomputed MD5")
 	}
-	attrs, uploadErr := s.api.Upload(ctx, s.objectName(id), id, size, expectedMD5, src)
+	name := s.objectName(id)
+	attrs, attrsErr := s.api.Attrs(ctx, name)
+	if attrsErr == nil {
+		if matches(attrs, id, size, expectedMD5) {
+			return toRemoteObjectInfo(attrs), nil
+		}
+		return objectstore.RemoteObjectInfo{}, fmt.Errorf("%w: final name %q has incompatible API attributes", ErrRemoteObjectConflict, name)
+	}
+	if !errors.Is(attrsErr, ErrObjectNotFound) {
+		return objectstore.RemoteObjectInfo{}, fmt.Errorf("inspect final GCS object %q: %w", name, attrsErr)
+	}
+	attrs, uploadErr := s.api.Upload(ctx, name, id, size, expectedMD5, src)
 	if uploadErr == nil && matches(attrs, id, size, expectedMD5) {
 		return toRemoteObjectInfo(attrs), nil
 	}
 	if uploadErr == nil {
 		uploadErr = ErrRemoteObjectConflict
 	}
-	attrs, attrsErr := s.api.Attrs(ctx, s.objectName(id))
+	attrs, attrsErr = s.api.Attrs(ctx, name)
 	if attrsErr == nil && matches(attrs, id, size, expectedMD5) {
 		return toRemoteObjectInfo(attrs), nil
 	}
 	if attrsErr == nil {
-		return objectstore.RemoteObjectInfo{}, fmt.Errorf("%w: final name %q has incompatible API attributes", ErrRemoteObjectConflict, s.objectName(id))
+		return objectstore.RemoteObjectInfo{}, fmt.Errorf("%w: final name %q has incompatible API attributes", ErrRemoteObjectConflict, name)
 	}
-	return objectstore.RemoteObjectInfo{}, errors.Join(fmt.Errorf("resumable GCS upload %q: %w", s.objectName(id), uploadErr), attrsErr)
+	return objectstore.RemoteObjectInfo{}, errors.Join(fmt.Errorf("resumable GCS upload %q: %w", name, uploadErr), attrsErr)
 }
 
 func matches(attrs apiAttrs, id content.ID, size int64, localMD5 []byte) bool {

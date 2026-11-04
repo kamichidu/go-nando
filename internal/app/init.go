@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,78 +27,109 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	if err := settings.Validate(); err != nil {
 		return fmt.Errorf("invalid repository settings: %w", err)
 	}
-	// 1. Create root directory
+	// Create the root first; all subsequent steps are the same resumable sequence
+	// used for an existing partial initialization.
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create repository root directory: %w", err)
 	}
-	if _, err := os.Stat(filepath.Join(repoDir, "repository.json")); errors.Is(err, os.ErrNotExist) {
-		entries, readErr := os.ReadDir(repoDir)
-		if readErr != nil {
-			return fmt.Errorf("failed to inspect repository directory: %w", readErr)
-		}
-		if len(entries) != 0 {
-			return fmt.Errorf("%w: repository settings are missing; existing data was left unchanged", repositoryformat.ErrUnsupported)
-		}
-	} else if err != nil {
-		return fmt.Errorf("failed to inspect repository settings path: %w", err)
+	if err := validateInitRoot(repoDir); err != nil {
+		return err
 	}
 	dbPath := filepath.Join(repoDir, "metadata.sqlite")
-	dbExists := true
-	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
-		dbExists = false
-		entries, readErr := os.ReadDir(repoDir)
-		if readErr != nil {
-			return fmt.Errorf("failed to inspect repository directory: %w", readErr)
-		}
-		if len(entries) != 0 {
-			return fmt.Errorf("%w: non-empty directory has no repository format metadata", repositoryformat.ErrUnsupported)
-		}
-	} else if err != nil {
-		return fmt.Errorf("failed to inspect metadata database path: %w", err)
-	}
 	settingsPath := filepath.Join(repoDir, "repository.json")
-	if dbExists {
+	if _, err := os.Stat(settingsPath); err == nil {
 		persisted, err := LoadRepositorySettings(repoDir)
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("unsupported pre-v1 repository: repository.json is missing; existing data was left unchanged")
-		} else if err != nil {
+		if err != nil {
 			return fmt.Errorf("unsupported or invalid repository settings; existing data was left unchanged: %w", err)
-		} else {
-			if settings != repository.DefaultSettings() && settings != persisted {
-				return fmt.Errorf("existing repository settings cannot be changed by init")
+		}
+		if settings != repository.DefaultSettings() && settings != persisted {
+			return fmt.Errorf("existing repository settings cannot be changed by init")
+		}
+		settings = persisted
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect repository settings path: %w", err)
+	}
+	dbExists := false
+	if info, err := os.Stat(dbPath); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%w: metadata.sqlite is not a regular file", repositoryformat.ErrUnsupported)
+		}
+		dbExists = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect metadata database path: %w", err)
+	}
+	if !dbExists {
+		entries, err := os.ReadDir(repoDir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.Name() != "objects" && entry.Name() != "temp" {
+				return fmt.Errorf("%w: repository state without metadata.sqlite is not a recognized initialization state", repositoryformat.ErrUnsupported)
 			}
-			settings = persisted
 		}
 	}
-	// 2. Validate any existing database before adding repository directories.
-	store, err := sqlite.NewStore(dbPath)
+	// Existing databases are accepted only when they are a complete supported
+	// v1 schema with the expected format and root entry. SQLite schema creation
+	// itself remains transactional and is attempted only for an empty database.
+	var store *sqlite.Store
+	var err error
+	if dbExists {
+		store, err = sqlite.NewExistingStore(dbPath)
+	} else {
+		store, err = sqlite.NewStore(dbPath)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to open metadata store: %w", err)
 	}
 	defer store.Close()
-
 	repoFormat := repositoryformat.Current()
 	if err := repoFormat.Validate(); err != nil {
 		return err
 	}
 	if dbExists {
-		return fmt.Errorf("repository already has a metadata database; init creates new repositories only")
-	}
-
-	if err := store.Initialize(ctx, repoFormat); err != nil {
+		if err := store.CheckMigrations(ctx); errors.Is(err, sqlite.ErrSchemaUninitialized) {
+			if err := store.Initialize(ctx, repoFormat); err != nil {
+				return fmt.Errorf("initialize empty metadata database: %w", err)
+			}
+		} else if err != nil {
+			return fmt.Errorf("existing metadata database is not a supported initialized repository: %w", err)
+		} else {
+			persistedFormat, found, err := store.RepositoryFormat(ctx)
+			if err != nil {
+				return err
+			}
+			if !found || persistedFormat != repoFormat {
+				return fmt.Errorf("%w: metadata database has missing or incompatible repository format", repositoryformat.ErrUnsupported)
+			}
+			root, err := store.GetByID(ctx, "root")
+			if err != nil || root.Name != "" || root.Kind != "directory" || root.ParentID != nil {
+				return fmt.Errorf("%w: metadata database has an invalid root entry: %v", repositoryformat.ErrUnsupported, err)
+			}
+		}
+	} else if err := store.Initialize(ctx, repoFormat); err != nil {
 		return fmt.Errorf("failed to initialize metadata schema: %w", err)
 	}
-	// 3. Create object and staging directories after format acceptance.
+	// Complete each remaining durable component idempotently after validation.
 	objectsDir := filepath.Join(repoDir, "objects")
-	if err := os.MkdirAll(objectsDir, 0o755); err != nil {
+	if err := ensureInitDirectory(objectsDir); err != nil {
 		return fmt.Errorf("failed to create objects directory: %w", err)
 	}
 	tempDir := filepath.Join(repoDir, "temp")
-	if err := os.MkdirAll(tempDir, 0o755); err != nil {
+	if err := ensureInitDirectory(tempDir); err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
-	coordinator, err := coordinatorsqlite.Open(filepath.Join(repoDir, "coordination.db"))
+	coordPath := filepath.Join(repoDir, "coordination.db")
+	if info, err := os.Stat(coordPath); err == nil && !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: coordination.db is not a regular file", repositoryformat.ErrUnsupported)
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := validateCoordinationDatabase(coordPath); err != nil {
+		return err
+	}
+	coordinator, err := coordinatorsqlite.Open(coordPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository coordinator: %w", err)
 	}
@@ -108,7 +140,7 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 		return fmt.Errorf("close repository coordinator: %w", err)
 	}
 
-	if !dbExists {
+	if _, err := os.Stat(settingsPath); errors.Is(err, os.ErrNotExist) {
 		file, err := os.OpenFile(settingsPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
 			return fmt.Errorf("create repository settings: %w", err)
@@ -118,6 +150,95 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 		if err := errors.Join(encodeErr, closeErr); err != nil {
 			return fmt.Errorf("write repository settings: %w", err)
 		}
+	}
+	return nil
+}
+
+func validateInitRoot(repoDir string) error {
+	allowed := map[string]bool{"metadata.sqlite": true, "coordination.db": true, "objects": true, "temp": true, "repository.json": true}
+	entries, err := os.ReadDir(repoDir)
+	if err != nil {
+		return fmt.Errorf("inspect repository directory: %w", err)
+	}
+	for _, entry := range entries {
+		if !allowed[entry.Name()] {
+			return fmt.Errorf("%w: unknown repository path %q; existing data was left unchanged", repositoryformat.ErrUnsupported, entry.Name())
+		}
+		info, err := os.Lstat(filepath.Join(repoDir, entry.Name()))
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: repository path %q is a symlink", repositoryformat.ErrUnsupported, entry.Name())
+		}
+	}
+	return nil
+}
+
+func validateCoordinationDatabase(path string) error {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var tables int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil {
+		return fmt.Errorf("inspect repository coordinator database: %w", err)
+	}
+	if tables == 0 {
+		return nil
+	}
+	if tables != 1 {
+		return fmt.Errorf("%w: coordination database has unknown tables", repositoryformat.ErrUnsupported)
+	}
+	var name string
+	if err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&name); err != nil || name != "resource_locks" {
+		return fmt.Errorf("%w: coordination database has an unknown schema", repositoryformat.ErrUnsupported)
+	}
+	rows, err := db.Query("PRAGMA table_info(resource_locks)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, primary int
+		var col, typ string
+		var def sql.NullString
+		if err := rows.Scan(&cid, &col, &typ, &notNull, &def, &primary); err != nil {
+			return err
+		}
+		columns[col] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, required := range []string{"resource_id", "operation_id", "mode", "expires_at"} {
+		if !columns[required] {
+			return fmt.Errorf("%w: coordination database is missing column %s", repositoryformat.ErrUnsupported, required)
+		}
+	}
+	return nil
+}
+
+func ensureInitDirectory(path string) error {
+	info, err := os.Stat(path)
+	if err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("%w: %s is not a directory", repositoryformat.ErrUnsupported, path)
+		}
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Mkdir(path, 0o755); err != nil {
+		return err
 	}
 	return nil
 }

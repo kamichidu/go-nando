@@ -62,6 +62,12 @@ type RemoteSchedulerSettings struct {
 	Parallelism                                      int
 }
 
+// ResolvedPaths contains the shared user configuration and data locations.
+type ResolvedPaths struct {
+	ConfigFile string
+	DataDir    string
+}
+
 func (c Config) HasRemoteSchedulerSettings() bool {
 	return c.Remote.SyncIdleInterval != "" || c.Remote.SyncPeriodicInterval != "" || c.Remote.MaxDeliveryDelay != "" || c.Remote.SyncParallelism != 0
 }
@@ -125,7 +131,7 @@ func LoadConfig(path string) (*Config, error) {
 			tokenSources++
 		}
 	}
-	if tokenSources > 1 {
+	if tokenSources > 1 || cfg.Daemon.Token != "" && cfg.Daemon.TokenFromFile != "" || cfg.Daemon.Token != "" && cfg.Daemon.TokenFromEnv != "" || cfg.Daemon.TokenFromFile != "" && cfg.Daemon.TokenFromEnv != "" {
 		return nil, errors.New("daemon token sources are mutually exclusive")
 	}
 	return &cfg, nil
@@ -153,18 +159,57 @@ func Load(explicitPath string) (*Config, string, error) {
 }
 
 func DefaultConfigPath() (string, error) {
-	configHome := os.Getenv("XDG_CONFIG_HOME")
-	if configHome == "" {
-		home := os.Getenv("HOME")
-		if runtime.GOOS == "windows" {
-			home = os.Getenv("USERPROFILE")
-		}
-		if home == "" {
-			return "", fmt.Errorf("home directory environment variable is required for %s", runtime.GOOS)
-		}
-		configHome = filepath.Join(home, ".config")
+	paths, err := DefaultPaths()
+	if err != nil {
+		return "", err
 	}
-	return filepath.Join(configHome, "nando", "config.toml"), nil
+	return paths.ConfigFile, nil
+}
+
+// DefaultPaths resolves the process-wide config and data roots.
+func DefaultPaths() (ResolvedPaths, error) {
+	return ResolvePaths(runtime.GOOS, currentEnvironment())
+}
+
+// ResolvePaths applies the shared XDG-style policy for an explicit platform
+// and environment. It is pure so callers can verify Windows paths everywhere.
+func ResolvePaths(goos string, env map[string]string) (ResolvedPaths, error) {
+	join := func(parts ...string) string { return filepath.Join(parts...) }
+	if goos == "windows" {
+		join = func(parts ...string) string {
+			if len(parts) == 0 {
+				return ""
+			}
+			return windowsJoin(parts[0], parts[1:]...)
+		}
+	}
+	configBase, dataBase := env["XDG_CONFIG_HOME"], env["XDG_DATA_HOME"]
+	home := env["HOME"]
+	if goos == "windows" {
+		home = env["USERPROFILE"]
+	}
+	if (configBase == "" || dataBase == "") && home == "" {
+		return ResolvedPaths{}, fmt.Errorf("home directory environment variable is required for %s", goos)
+	}
+	if configBase == "" {
+		configBase = join(home, ".config")
+	}
+	if dataBase == "" {
+		dataBase = join(home, ".local", "share")
+	}
+	return ResolvedPaths{ConfigFile: join(configBase, "nando", "config.toml"), DataDir: join(dataBase, "nando")}, nil
+}
+
+func currentEnvironment() map[string]string {
+	return map[string]string{"HOME": os.Getenv("HOME"), "USERPROFILE": os.Getenv("USERPROFILE"), "XDG_CONFIG_HOME": os.Getenv("XDG_CONFIG_HOME"), "XDG_DATA_HOME": os.Getenv("XDG_DATA_HOME")}
+}
+
+func windowsJoin(base string, parts ...string) string {
+	result := strings.TrimRight(strings.ReplaceAll(base, "/", `\`), `\`)
+	for _, part := range parts {
+		result += `\` + strings.Trim(part, `\/`)
+	}
+	return result
 }
 
 // ResolveRepositoryPath selects the CLI override, TOML path, or shared XDG
@@ -176,11 +221,11 @@ func ResolveRepositoryPath(cfg *Config, override string) (string, error) {
 	if cfg != nil && cfg.Repository.Path != "" {
 		return cfg.Repository.Path, nil
 	}
-	paths, err := resolveDataPath()
+	paths, err := DefaultPaths()
 	if err != nil {
 		return "", fmt.Errorf("resolve repository default: %w", err)
 	}
-	return paths, nil
+	return paths.DataDir, nil
 }
 
 // ClientOptions overrides common daemon client configuration from a CLI.
@@ -249,19 +294,4 @@ func ResolveClientConfig(cfg *Config, repositoryPath string, options ClientOptio
 		}
 	}
 	return controlrpc.ClientConfig{Endpoint: endpoint, Token: token, CACertPEM: caPEM}, nil
-}
-
-func resolveDataPath() (string, error) {
-	base := os.Getenv("XDG_DATA_HOME")
-	if base == "" {
-		home := os.Getenv("HOME")
-		if runtime.GOOS == "windows" {
-			home = os.Getenv("USERPROFILE")
-		}
-		if home == "" {
-			return "", fmt.Errorf("home directory environment variable is required for %s", runtime.GOOS)
-		}
-		base = filepath.Join(home, ".local", "share")
-	}
-	return filepath.Join(base, "nando"), nil
 }
