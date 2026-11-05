@@ -55,7 +55,7 @@ jobs:
       - name: Race test WebDAV module
         working-directory: adapters/webdav
         run: go test -race ./...
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.15.0
           args: --timeout=5m ./...
