@@ -129,6 +129,7 @@ type sessionManager struct {
 	recoveries map[string]*recoveryRecord
 	files      sessionFiles
 	done       chan struct{}
+	stopOnce   sync.Once
 	wg         sync.WaitGroup
 }
 
@@ -1060,7 +1061,7 @@ func (m *sessionManager) resolveManifestStage(record *recoveryRecord) error {
 }
 
 func (m *sessionManager) close() error {
-	close(m.done)
+	m.stopOnce.Do(func() { close(m.done) })
 	m.wg.Wait()
 	m.mu.Lock()
 	writeIDs := make([]string, 0, len(m.sessions))

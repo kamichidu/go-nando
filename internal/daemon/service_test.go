@@ -449,6 +449,11 @@ func TestBackgroundExpiryLoopSweepsAndStopsOnClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := sessions.close(); err != nil {
+			t.Errorf("cleanup session manager: %v", err)
+		}
+	})
 	result, err := sessions.beginWrite(context.Background(), "/background-expiry")
 	if err != nil {
 		t.Fatal(err)
@@ -457,7 +462,11 @@ func TestBackgroundExpiryLoopSweepsAndStopsOnClose(t *testing.T) {
 	sessions.sessions[result.SessionID].expiresAt = time.Unix(100, 0)
 	sessions.mu.Unlock()
 
-	ticker.channel <- time.Unix(101, 0)
+	select {
+	case ticker.channel <- time.Unix(101, 0):
+	case <-sessions.done:
+		t.Fatal("session manager stopped before expiry tick")
+	}
 	deadline := time.After(5 * time.Second)
 	for {
 		if records := sessions.listRecoveries(); len(records) == 1 && records[0].SessionID == result.SessionID {
