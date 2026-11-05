@@ -52,7 +52,8 @@ type RecoveryConfig struct {
 	Directory string `toml:"directory"`
 }
 type FuseConfig struct {
-	Mountpoint string `toml:"mountpoint"`
+	Mountpoint   string   `toml:"mountpoint"`
+	MountOptions []string `toml:"mount_options"`
 }
 type WebDAVConfig struct {
 	Listen string `toml:"listen"`

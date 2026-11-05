@@ -175,6 +175,14 @@ binaries. Pass it before `daemon` when setting a listener on the command line.
 FUSE and WebDAV settings use `[fuse].mountpoint` / `--fuse-mountpoint`
 and `[webdav].listen` / `--webdav-listen` respectively.
 
+FUSE mount options can be set in `[fuse].mount_options` or with repeatable
+`--fuse-mount-option` flags. CLI values replace the configured list. Only
+`allow_other` (allow access by other users; requires `user_allow_other` in
+`/etc/fuse.conf`) and `default_permissions` (kernel checks Unix mode bits) are
+supported; other values are rejected. Both are off by default. See
+link:samples/config.toml[the configuration sample] for these options and their
+requirements.
+
 A minimal configuration file is:
 
 [source,toml]
