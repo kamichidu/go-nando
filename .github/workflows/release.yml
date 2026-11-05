@@ -43,7 +43,7 @@ jobs:
           (cd adapters/fuse && go test -race ./...)
           (cd adapters/webdav && go test ./...)
           (cd adapters/webdav && go test -race ./...)
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.15.0
           args: --timeout=5m ./...
