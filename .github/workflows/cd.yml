@@ -33,24 +33,43 @@ jobs:
             adapters/webdav/go.sum
       - name: Verify committed Go workspace
         run: test "$(go env GOWORK)" = "$GITHUB_WORKSPACE/go.work"
-      - name: Require successful CI for this commit on main
+      - name: Wait for successful main CI for this commit
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          main_sha=$(git ls-remote origin refs/heads/main | cut -f1)
-          if [[ "$main_sha" != "$TAG_SHA" ]]; then
-            echo "Tagged commit $TAG_SHA is not current main HEAD ($main_sha)." >&2
-            exit 1
-          fi
-          run_id=$(gh run list --workflow ci.yml --branch main --commit "$TAG_SHA" --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
-          if [[ -z "$run_id" ]]; then
-            echo "No successful main CI run exists for tagged commit $TAG_SHA." >&2
-            exit 1
-          fi
-          echo "Found successful main CI run $run_id for $TAG_SHA."
+          deadline=$((SECONDS + 1800))
+          while (( SECONDS < deadline )); do
+            matching=$(gh api --paginate --slurp \
+              "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$TAG_SHA&per_page=100" \
+              --jq --arg sha "$TAG_SHA" '[.[] | .workflow_runs[]?
+                | select(.head_sha == $sha)
+                | select(.event == "push")
+                | select(.head_branch == "main")
+                | {id, status, conclusion, head_sha, head_branch, event}]
+                | sort_by(.id) | last // empty')
+            if [[ -n "$matching" ]]; then
+              run_id=$(jq -r '.id' <<<"$matching")
+              status=$(jq -r '.status' <<<"$matching")
+              conclusion=$(jq -r '.conclusion // ""' <<<"$matching")
+              if [[ "$status" == completed ]]; then
+                if [[ "$conclusion" == success ]]; then
+                  echo "Main CI run $run_id succeeded for tagged commit $TAG_SHA."
+                  exit 0
+                fi
+                echo "Main CI run $run_id for $TAG_SHA completed with conclusion '$conclusion'; refusing release." >&2
+                exit 1
+              fi
+              echo "Main CI run $run_id for $TAG_SHA is $status; waiting."
+            else
+              echo "No main push CI run is visible yet for tagged commit $TAG_SHA; waiting."
+            fi
+            sleep 15
+          done
+          echo "Timed out after 30 minutes waiting for successful main CI for tagged commit $TAG_SHA." >&2
+          exit 1
       - name: Install Debian package tools
         run: |
           set -euo pipefail

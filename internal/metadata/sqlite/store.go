@@ -871,6 +871,12 @@ func (s *Store) Move(ctx context.Context, entry metadata.Entry) (metadata.Entry,
 
 	tx, err := s.beginTx(ctx)
 	if err != nil {
+		// database/sql cancels an in-flight SQLite operation by interrupting
+		// its connection. Prefer the caller's cancellation cause when that
+		// interrupt is what ended writer-lock acquisition.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return metadata.Entry{}, fmt.Errorf("failed to begin transaction: %w", ctxErr)
+		}
 		return metadata.Entry{}, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
