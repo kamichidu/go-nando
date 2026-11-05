@@ -2,11 +2,16 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+
+	"github.com/hanwen/go-fuse/v2/fs"
+	"github.com/hanwen/go-fuse/v2/fuse"
 
 	"github.com/kamichidu/go-flagshim"
 	fusefs "github.com/kamichidu/go-nando/adapters/fuse"
@@ -14,8 +19,28 @@ import (
 	"github.com/kamichidu/go-nando/runtimeconfig"
 )
 
-type flags struct{ Config, Repository, DaemonListen, DaemonTokenFile, DaemonCACert, Mountpoint string }
+type flags struct {
+	Config, Repository, DaemonListen, DaemonTokenFile, DaemonCACert, Mountpoint string
+	MountOptions                                                                []string
+}
 type command struct{ options flags }
+
+type stringListValue []string
+
+func (v *stringListValue) String() string { return strings.Join(*v, ",") }
+func (v *stringListValue) Set(value string) error {
+	*v = append(*v, value)
+	return nil
+}
+
+var _ flag.Value = (*stringListValue)(nil)
+
+func resolveMountOptions(configured, commandLine []string) []string {
+	if commandLine != nil {
+		return append([]string(nil), commandLine...)
+	}
+	return append([]string(nil), configured...)
+}
 
 func (*command) Name() string { return "nando-fuse" }
 func (c *command) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) context.Context {
@@ -25,6 +50,7 @@ func (c *command) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) conte
 	fs.StringVar(&c.options.DaemonTokenFile, "daemon-token-file", "", "private bearer-token file")
 	fs.StringVar(&c.options.DaemonCACert, "daemon-ca-cert", "", "CA certificate PEM for daemon TLS")
 	fs.StringVar(&c.options.Mountpoint, "fuse-mountpoint", "", "directory to mount")
+	fs.Var((*stringListValue)(&c.options.MountOptions), "fuse-mount-option", "FUSE mount option (repeatable)")
 	return ctx
 }
 func (c *command) Run(ctx context.Context, args []string) error {
@@ -55,8 +81,14 @@ func (c *command) Run(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("create daemon client: %w", err)
 	}
-	server, err := fusefs.New(client).Mount(mountpoint, nil)
+	mountOptions := resolveMountOptions(cfg.Fuse.MountOptions, o.MountOptions)
+	server, err := fusefs.New(client).Mount(mountpoint, &fs.Options{MountOptions: fuse.MountOptions{Options: mountOptions}})
 	if err != nil {
+		for _, option := range mountOptions {
+			if option == "allow_other" {
+				return fmt.Errorf("mount FUSE filesystem: %w (allow_other may require user_allow_other in /etc/fuse.conf)", err)
+			}
+		}
 		return fmt.Errorf("mount FUSE filesystem: %w", err)
 	}
 	stopped := make(chan os.Signal, 1)

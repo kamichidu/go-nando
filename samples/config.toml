@@ -53,6 +53,8 @@
 # Adapter settings. CLI options override these values.
 [fuse]
 # mountpoint = "/mnt/nando"
+# Optional FUSE mount options. Empty by default; allow_other is opt-in.
+# mount_options = ["allow_other"]
 
 [webdav]
 # listen = "127.0.0.1:8080"

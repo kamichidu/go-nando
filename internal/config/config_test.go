@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -39,7 +40,7 @@ func TestResolvePathsUsesCrossPlatformXDGStyleLayout(t *testing.T) {
 func TestLoadOptionalConfigMissingExplicitMalformedAndDefault(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", "")
-	if cfg, _, err := LoadOptionalConfig(""); err != nil || *cfg != (Config{}) {
+	if cfg, _, err := LoadOptionalConfig(""); err != nil || !reflect.DeepEqual(*cfg, Config{}) {
 		t.Fatalf("missing implicit config: config=%+v err=%v", cfg, err)
 	}
 	if _, _, err := LoadOptionalConfig(filepath.Join(t.TempDir(), "missing.toml")); err == nil {
@@ -61,7 +62,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Config{}
-	if *cfg != want {
+	if !reflect.DeepEqual(*cfg, want) {
 		t.Fatalf("sample config=%+v, want empty configuration defaults %+v", *cfg, want)
 	}
 	sampleBytes, err := os.ReadFile(samplePath)

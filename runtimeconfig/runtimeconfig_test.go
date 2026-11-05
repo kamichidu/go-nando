@@ -3,6 +3,7 @@ package runtimeconfig
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ func TestLoadUsesSharedXDGPathAndExplicitMissingIsError(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", configHome)
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
-	if cfg, path, err := Load(""); err != nil || *cfg != (Config{}) || path != filepath.Join(configHome, "nando", "config.toml") {
+	if cfg, path, err := Load(""); err != nil || !reflect.DeepEqual(*cfg, Config{}) || path != filepath.Join(configHome, "nando", "config.toml") {
 		t.Fatalf("default config cfg=%+v path=%q err=%v", cfg, path, err)
 	}
 	missing := filepath.Join(home, "missing.toml")
@@ -67,5 +68,19 @@ func TestResolveClientConfigDefaultsToRepositorySocket(t *testing.T) {
 	}
 	if got.Endpoint != want {
 		t.Fatalf("default endpoint=%q, want %q", got.Endpoint, want)
+	}
+}
+
+func TestLoadConfigReadsFUSEMountOptions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[fuse]\nmount_options = [\"allow_other\", \"ro\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"allow_other", "ro"}; !reflect.DeepEqual(cfg.Fuse.MountOptions, want) {
+		t.Fatalf("mount options=%q, want %q", cfg.Fuse.MountOptions, want)
 	}
 }

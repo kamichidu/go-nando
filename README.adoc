@@ -175,6 +175,15 @@ binaries. Pass it before `daemon` when setting a listener on the command line.
 FUSE and WebDAV settings use `[fuse].mountpoint` / `--fuse-mountpoint`
 and `[webdav].listen` / `--webdav-listen` respectively.
 
+FUSE mount options can be set as a TOML string array in
+`[fuse].mount_options` or with repeatable `--fuse-mount-option` flags. CLI
+values replace the configured list. The default is empty, so `allow_other` is
+never enabled implicitly. To let other users, including Windows applications
+accessing a WSL2 mount, access the mount, explicitly configure
+`mount_options = ["allow_other"]` or pass `--fuse-mount-option allow_other`.
+FUSE may require `user_allow_other` enabled in `/etc/fuse.conf`; without it, a
+mount using `allow_other` fails with the underlying mount error.
+
 A minimal configuration file is:
 
 [source,toml]
