@@ -27,7 +27,10 @@ type CommitResult struct {
 
 // RemoteObjectInfo is API-observed metadata for one remote immutable object.
 type RemoteObjectInfo struct {
-	ID         content.ID
+	ID content.ID
+	// ContentID is the provider's raw content-ID metadata. It is retained when
+	// ID cannot be parsed so maintenance can report malformed remote objects.
+	ContentID  string
 	Size       int64
 	Generation int64
 	MD5        []byte

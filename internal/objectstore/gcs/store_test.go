@@ -288,14 +288,31 @@ func TestListRemoteObjectsEnforcesExactConfiguredNamespace(t *testing.T) {
 	api := &fakeListAPI{fakeAPI: fakeAPI{attrs: apiAttrs{ID: id, ContentID: id.String(), Generation: 1}}, listed: []apiAttrs{
 		{Name: "hoge/objects/" + id.String(), ID: id, ContentID: id.String(), Generation: 1},
 		{Name: "hoge/objects/" + id.String() + "suffix", ID: id, ContentID: id.String(), Generation: 1},
+		{Name: "hoge/objects/sha256-" + strings.Repeat("a", 64), ID: id, ContentID: id.String(), Generation: 1},
 	}}
 	store, err := NewStoreWithAPI("gs://bucket/hoge/", api)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := store.ListRemoteObjects(context.Background())
-	if err != nil || len(got) != 1 {
+	if err == nil || len(got) != 1 {
 		t.Fatalf("ListRemoteObjects=%+v err=%v", got, err)
+	}
+}
+
+func TestListRemoteObjectsReportsUnidentifiableCandidatesAndReturnsValidOnes(t *testing.T) {
+	id, err := content.ParseID("sha256-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &fakeListAPI{listed: []apiAttrs{
+		{Name: "objects/sha256-bad", ContentID: "", Generation: 2},
+		{Name: "objects/" + id.String(), ID: id, ContentID: id.String(), Generation: 3},
+	}}
+	store := NewStoreWithAPIAndPrefix("bucket", "", api)
+	got, err := store.ListRemoteObjects(context.Background())
+	if err == nil || len(got) != 1 || got[0].ID != id {
+		t.Fatalf("partial listing=%+v err=%v", got, err)
 	}
 }
 

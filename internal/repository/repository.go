@@ -334,14 +334,14 @@ func (r *Repository) RestoreRemoteOrphansTo(ctx context.Context, recoveryDirecto
 		return 0, fmt.Errorf("invalid remote recovery directory %q", recoveryDirectory)
 	}
 	all, err := r.remoteStore.ListRemoteObjects(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("list remote objects: %w", err)
-	}
 	recovered := 0
 	var failures []error
+	if err != nil {
+		failures = append(failures, fmt.Errorf("list remote objects (valid listed candidates will still be processed): %w", err))
+	}
 	for _, remoteObject := range all {
-		if err := remoteObject.ID.Validate(); err != nil || remoteObject.Generation <= 0 {
-			failures = append(failures, fmt.Errorf("invalid GCS API object record %q: require a valid Content ID and generation", remoteObject.ID))
+		if err := remoteObject.ID.Validate(); err != nil || remoteObject.Generation <= 0 || remoteObject.ContentID != "" && remoteObject.ContentID != remoteObject.ID.String() {
+			failures = append(failures, fmt.Errorf("invalid GCS API object record %q: require a valid Content ID and generation", remoteObject.ContentID))
 			continue
 		}
 		if len(remoteObject.MD5) != 16 {

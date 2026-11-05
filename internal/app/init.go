@@ -15,7 +15,6 @@ import (
 	"github.com/kamichidu/go-nando/internal/metadata/sqlite"
 	"github.com/kamichidu/go-nando/internal/repository"
 	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
-	"golang.org/x/sys/unix"
 )
 
 // InitRepository initializes the directory structure and schema for a new nando repository.
@@ -35,18 +34,18 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 		return fmt.Errorf("failed to create repository root directory: %w", err)
 	}
 	// Serialize provisioning across processes before inspecting or creating any
-	// repository component. The lock file is stable across path aliases and is
-	// released automatically after crashes, so interrupted init remains resumable.
+	// repository component. The root directory handle is stable across path
+	// aliases, and the OS releases its lock after a crash so init remains resumable.
 	initLock, err := os.Open(repoDir)
 	if err != nil {
 		return fmt.Errorf("open repository initialization lock: %w", err)
 	}
 	defer func() { retErr = errors.Join(retErr, initLock.Close()) }()
-	if err := unix.Flock(int(initLock.Fd()), unix.LOCK_EX); err != nil {
+	if err := lockInitFile(initLock); err != nil {
 		return fmt.Errorf("lock repository initialization: %w", err)
 	}
 	defer func() {
-		if err := unix.Flock(int(initLock.Fd()), unix.LOCK_UN); err != nil {
+		if err := unlockInitFile(initLock); err != nil {
 			retErr = errors.Join(retErr, fmt.Errorf("unlock repository initialization: %w", err))
 		}
 	}()

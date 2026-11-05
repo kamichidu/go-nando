@@ -168,7 +168,7 @@ func matches(attrs apiAttrs, id content.ID, size int64, localMD5 []byte) bool {
 }
 
 func toRemoteObjectInfo(attrs apiAttrs) objectstore.RemoteObjectInfo {
-	return objectstore.RemoteObjectInfo{ID: attrs.ID, Size: attrs.Size, Generation: attrs.Generation, MD5: append([]byte(nil), attrs.MD5...)}
+	return objectstore.RemoteObjectInfo{ID: attrs.ID, ContentID: attrs.ContentID, Size: attrs.Size, Generation: attrs.Generation, MD5: append([]byte(nil), attrs.MD5...)}
 }
 
 func (s *Store) RemoteAttrs(ctx context.Context, id content.ID) (objectstore.RemoteObjectInfo, error) {
@@ -216,13 +216,20 @@ func (s *Store) ListRemoteObjects(ctx context.Context) ([]objectstore.RemoteObje
 		return nil, err
 	}
 	result := make([]objectstore.RemoteObjectInfo, 0, len(attrs))
+	var failures []error
 	for _, item := range attrs {
 		keyPrefix := s.prefix + "objects/"
-		if strings.HasPrefix(item.Name, keyPrefix) && item.Name == keyPrefix+item.ID.String() && item.ID.Validate() == nil && item.ContentID == item.ID.String() && item.Generation > 0 {
-			result = append(result, toRemoteObjectInfo(item))
+		if !strings.HasPrefix(item.Name, keyPrefix+"sha256-") {
+			continue
 		}
+		nameID, nameErr := content.ParseID(strings.TrimPrefix(item.Name, keyPrefix))
+		if err := item.ID.Validate(); err != nil || nameErr != nil || nameID != item.ID || item.ContentID == "" || item.ContentID != item.ID.String() || item.Name != keyPrefix+item.ContentID || item.Generation <= 0 {
+			failures = append(failures, fmt.Errorf("GCS object %q has missing or invalid Content ID metadata or generation", item.Name))
+			continue
+		}
+		result = append(result, toRemoteObjectInfo(item))
 	}
-	return result, nil
+	return result, errors.Join(failures...)
 }
 
 type storageAPI struct {
@@ -270,13 +277,15 @@ func (a *storageAPI) Attrs(ctx context.Context, name string) (apiAttrs, error) {
 
 func convertAttrs(name string, attrs *storage.ObjectAttrs) apiAttrs {
 	var id content.ID
+	contentID := ""
 	if attrs.Metadata != nil {
-		parsed, err := content.ParseID(attrs.Metadata["nando-content-id"])
+		contentID = attrs.Metadata["nando-content-id"]
+		parsed, err := content.ParseID(contentID)
 		if err == nil {
 			id = parsed
 		}
 	}
-	return apiAttrs{Name: attrs.Name, ID: id, Size: attrs.Size, Generation: attrs.Generation, ContentID: id.String(), MD5: append([]byte(nil), attrs.MD5...)}
+	return apiAttrs{Name: attrs.Name, ID: id, Size: attrs.Size, Generation: attrs.Generation, ContentID: contentID, MD5: append([]byte(nil), attrs.MD5...)}
 }
 
 func (a *storageAPI) Open(ctx context.Context, name string) (io.ReadCloser, error) {
