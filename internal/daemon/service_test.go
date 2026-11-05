@@ -46,6 +46,15 @@ type blockingSessionFiles struct {
 	once          *sync.Once
 }
 
+type manualExpiryTicker struct {
+	channel chan time.Time
+	stopped chan struct{}
+	once    sync.Once
+}
+
+func (t *manualExpiryTicker) Chan() <-chan time.Time { return t.channel }
+func (t *manualExpiryTicker) Stop()                  { t.once.Do(func() { close(t.stopped) }) }
+
 func (f blockingSessionFiles) WriteAtomic(directory, path string, data []byte) error {
 	f.once.Do(func() {
 		close(f.started)
@@ -426,6 +435,53 @@ func TestExpirySweepClaimsSessionBeforePersistingRecovery(t *testing.T) {
 	<-swept
 	if records := sessions.listRecoveries(); len(records) != 1 || records[0].SessionID != result.SessionID {
 		t.Fatalf("concurrent sweep produced recovery records %+v", records)
+	}
+}
+
+func TestBackgroundExpiryLoopSweepsAndStopsOnClose(t *testing.T) {
+	oldNewTicker := newSessionExpiryTicker
+	ticker := &manualExpiryTicker{channel: make(chan time.Time), stopped: make(chan struct{})}
+	newSessionExpiryTicker = func(time.Duration) sessionExpiryTicker { return ticker }
+	t.Cleanup(func() { newSessionExpiryTicker = oldNewTicker })
+
+	root := t.TempDir()
+	sessions, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := sessions.beginWrite(context.Background(), "/background-expiry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions.mu.Lock()
+	sessions.sessions[result.SessionID].expiresAt = time.Unix(100, 0)
+	sessions.mu.Unlock()
+
+	ticker.channel <- time.Unix(101, 0)
+	deadline := time.After(5 * time.Second)
+	for {
+		if records := sessions.listRecoveries(); len(records) == 1 && records[0].SessionID == result.SessionID {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("background expiry loop did not preserve expired session")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	if err := sessions.close(); err != nil {
+		t.Fatalf("close session manager: %v", err)
+	}
+	select {
+	case <-ticker.stopped:
+	default:
+		t.Fatal("background expiry ticker was not stopped")
+	}
+	select {
+	case <-sessions.done:
+	default:
+		t.Fatal("session manager close signal was not closed")
 	}
 }
 

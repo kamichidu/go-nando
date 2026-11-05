@@ -40,16 +40,22 @@ jobs:
           TAG_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          deadline=$((SECONDS + 1800))
-          while (( SECONDS < deadline )); do
-            matching=$(gh api --paginate --slurp \
-              "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$TAG_SHA&per_page=100" \
-              --jq --arg sha "$TAG_SHA" '[.[] | .workflow_runs[]?
+          latest_main_ci_run() {
+            local runs_json
+            runs_json=$(gh api --paginate --slurp \
+              "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$TAG_SHA&per_page=100")
+            jq -c --arg sha "$TAG_SHA" '
+              [.[] | .workflow_runs[]?
                 | select(.head_sha == $sha)
                 | select(.event == "push")
                 | select(.head_branch == "main")
                 | {id, status, conclusion, head_sha, head_branch, event}]
-                | sort_by(.id) | last // empty')
+              | sort_by(.id) | last // empty
+            ' <<<"$runs_json"
+          }
+          deadline=$((SECONDS + 1800))
+          while (( SECONDS < deadline )); do
+            matching=$(latest_main_ci_run)
             if [[ -n "$matching" ]]; then
               run_id=$(jq -r '.id' <<<"$matching")
               status=$(jq -r '.status' <<<"$matching")
