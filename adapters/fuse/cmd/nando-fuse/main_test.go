@@ -45,3 +45,15 @@ func TestFuseMountOptionFlagAndPrecedence(t *testing.T) {
 		t.Fatalf("go-fuse mount options=%q, want %q", mountOptions.Options, wantCLI)
 	}
 }
+
+func TestValidateFuseMountOptions(t *testing.T) {
+	if err := validateMountOptions([]string{"allow_other", "default_permissions"}); err != nil {
+		t.Fatalf("supported options rejected: %v", err)
+	}
+	for _, option := range []string{"ro", "fsname=nando", "allow_other=true", ""} {
+		err := validateMountOptions([]string{option})
+		if err == nil || !strings.Contains(err.Error(), "unsupported FUSE mount option") {
+			t.Errorf("option %q error=%v, want clear unsupported-option error", option, err)
+		}
+	}
+}

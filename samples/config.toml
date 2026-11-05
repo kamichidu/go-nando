@@ -53,8 +53,13 @@
 # Adapter settings. CLI options override these values.
 [fuse]
 # mountpoint = "/mnt/nando"
-# Optional FUSE mount options. Empty by default; allow_other is opt-in.
-# mount_options = ["allow_other"]
+# Supported mount options (all omitted by default):
+# - "allow_other": allow users other than the mounting user to access the
+#   mount. Requires "user_allow_other" enabled in /etc/fuse.conf.
+# - "default_permissions": ask the kernel to check Unix mode bits on access.
+# Values outside this supported list are rejected. CLI mount options replace
+# this list; repeat --fuse-mount-option to select multiple values.
+# mount_options = ["allow_other", "default_permissions"]
 
 [webdav]
 # listen = "127.0.0.1:8080"

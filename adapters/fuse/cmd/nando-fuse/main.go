@@ -42,6 +42,17 @@ func resolveMountOptions(configured, commandLine []string) []string {
 	return append([]string(nil), configured...)
 }
 
+func validateMountOptions(options []string) error {
+	for _, option := range options {
+		switch option {
+		case "allow_other", "default_permissions":
+		default:
+			return fmt.Errorf("unsupported FUSE mount option %q (supported: allow_other, default_permissions)", option)
+		}
+	}
+	return nil
+}
+
 func (*command) Name() string { return "nando-fuse" }
 func (c *command) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) context.Context {
 	fs.StringVar(&c.options.Config, "config", "", "configuration file path")
@@ -82,6 +93,9 @@ func (c *command) Run(ctx context.Context, args []string) error {
 		return fmt.Errorf("create daemon client: %w", err)
 	}
 	mountOptions := resolveMountOptions(cfg.Fuse.MountOptions, o.MountOptions)
+	if err := validateMountOptions(mountOptions); err != nil {
+		return err
+	}
 	server, err := fusefs.New(client).Mount(mountpoint, &fs.Options{MountOptions: fuse.MountOptions{Options: mountOptions}})
 	if err != nil {
 		for _, option := range mountOptions {
