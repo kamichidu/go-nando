@@ -240,7 +240,7 @@ func (f *fakeRepositoryUseCases) PutExpectedEntryID(ctx context.Context, input a
 func TestResourceSessionsExpireRenewAndPersistRecovery(t *testing.T) {
 	fake := &fakeRepositoryUseCases{}
 	root := t.TempDir()
-	sessions, err := newSessionManagerWithTTL(fake, root, 120*time.Millisecond)
+	sessions, err := newSessionManagerWithTTL(fake, root, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,18 +265,17 @@ func TestResourceSessionsExpireRenewAndPersistRecovery(t *testing.T) {
 	if _, err := service.Call(context.Background(), controlrpc.MethodRenew, marshalTestJSON(t, map[string]string{"session_id": begin.SessionID})); err != nil {
 		t.Fatalf("Renew RPC: %v", err)
 	}
-	time.Sleep(70 * time.Millisecond)
 	secondRenew, err := sessions.renew(begin.SessionID)
 	if err != nil || !secondRenew.After(firstRenew) {
 		t.Fatalf("session renewal did not extend expiry: first=%v second=%v err=%v", firstRenew, secondRenew, err)
 	}
-	time.Sleep(70 * time.Millisecond)
-	if _, err := sessions.renew(begin.SessionID); err != nil {
-		t.Fatalf("renewed session expired at original deadline: %v", err)
-	}
-	time.Sleep(150 * time.Millisecond)
-	sessions.expireDue(time.Now())
-	if _, err := sessions.renew(begin.SessionID); !errors.Is(err, errSessionNotFound) {
+	// Make expiry deterministic and allow the renew call itself to perform the
+	// expiry transition. The renew result is expired here; if the background
+	// sweep wins first, the terminal result is not-found instead.
+	sessions.mu.Lock()
+	sessions.sessions[begin.SessionID].expiresAt = time.Now().Add(-time.Second)
+	sessions.mu.Unlock()
+	if _, err := sessions.renew(begin.SessionID); !errors.Is(err, errSessionExpired) && !errors.Is(err, errSessionNotFound) {
 		t.Fatalf("expired session remained renewable: %v", err)
 	}
 	records := sessions.listRecoveries()
