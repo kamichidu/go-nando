@@ -55,6 +55,7 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	}
 	dbPath := filepath.Join(repoDir, "metadata.sqlite")
 	settingsPath := filepath.Join(repoDir, "repository.json")
+	settingsLoaded := false
 	if _, err := os.Stat(settingsPath); err == nil {
 		persisted, err := LoadRepositorySettings(repoDir)
 		if err != nil {
@@ -64,6 +65,7 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 			return fmt.Errorf("existing repository settings cannot be changed by init")
 		}
 		settings = persisted
+		settingsLoaded = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect repository settings path: %w", err)
 	} else if _, statErr := os.Stat(dbPath); statErr == nil {
@@ -123,7 +125,8 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 		for _, entry := range entries {
 			name := entry.Name()
 			isSettingsTemp := strings.HasPrefix(name, ".repository.json-") && strings.HasSuffix(name, ".tmp")
-			if name != "objects" && name != "temp" && !isSettingsTemp {
+			isPublishedSettings := name == "repository.json" && settingsLoaded
+			if name != "objects" && name != "temp" && !isSettingsTemp && !isPublishedSettings {
 				return fmt.Errorf("%w: repository state without metadata.sqlite is not a recognized initialization state", repositoryformat.ErrUnsupported)
 			}
 			if name == "objects" || name == "temp" {

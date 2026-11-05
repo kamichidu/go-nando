@@ -288,6 +288,40 @@ func TestInitRepositoryResumesAfterSettingsPublicationBeforeSchemaInitialization
 	}
 }
 
+func TestInitRepositoryResumesAfterSettingsPublicationBeforeMetadataCreation(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://settings-only-recovery"}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishRepositorySettings(root, want); err != nil {
+		t.Fatalf("publish settings for interrupted initialization state: %v", err)
+	}
+	path := filepath.Join(root, "repository.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "metadata.sqlite")); !os.IsNotExist(err) {
+		t.Fatalf("metadata unexpectedly exists before restart: %v", err)
+	}
+
+	if err := InitRepository(context.Background(), root); err != nil {
+		t.Fatalf("resume settings-only initialization: %v", err)
+	}
+	got, err := LoadRepositorySettings(root)
+	if err != nil || got != want {
+		t.Fatalf("resumed settings: got=%+v err=%v", got, err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("repository settings were overwritten: before=%q after=%q err=%v", before, after, err)
+	}
+	if err := InitRepositoryWithSettings(context.Background(), root, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://different"}); err == nil {
+		t.Fatal("restart silently accepted a settings mismatch")
+	}
+}
+
 func TestInitRepositoryRejectsUnknownMetadataSchemaWithoutMutation(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(root, 0o755); err != nil {
