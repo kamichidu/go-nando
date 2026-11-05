@@ -76,6 +76,20 @@ type sessionFiles interface {
 
 type osSessionFiles struct{}
 
+type sessionExpiryTicker interface {
+	Chan() <-chan time.Time
+	Stop()
+}
+
+type realSessionExpiryTicker struct{ ticker *time.Ticker }
+
+func (t realSessionExpiryTicker) Chan() <-chan time.Time { return t.ticker.C }
+func (t realSessionExpiryTicker) Stop()                  { t.ticker.Stop() }
+
+var newSessionExpiryTicker = func(interval time.Duration) sessionExpiryTicker {
+	return realSessionExpiryTicker{ticker: time.NewTicker(interval)}
+}
+
 func (osSessionFiles) SyncFile(path string) error { return syncFile(path) }
 
 func (osSessionFiles) WriteAtomic(directory, path string, data []byte) error {
@@ -115,6 +129,7 @@ type sessionManager struct {
 	recoveries map[string]*recoveryRecord
 	files      sessionFiles
 	done       chan struct{}
+	stopOnce   sync.Once
 	wg         sync.WaitGroup
 }
 
@@ -711,13 +726,13 @@ func (m *sessionManager) expireLoop() {
 	if interval < 5*time.Millisecond {
 		interval = 5 * time.Millisecond
 	}
-	ticker := time.NewTicker(interval)
+	ticker := newSessionExpiryTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-m.done:
 			return
-		case now := <-ticker.C:
+		case now := <-ticker.Chan():
 			m.expireDue(now)
 		}
 	}
@@ -1046,7 +1061,7 @@ func (m *sessionManager) resolveManifestStage(record *recoveryRecord) error {
 }
 
 func (m *sessionManager) close() error {
-	close(m.done)
+	m.stopOnce.Do(func() { close(m.done) })
 	m.wg.Wait()
 	m.mu.Lock()
 	writeIDs := make([]string, 0, len(m.sessions))

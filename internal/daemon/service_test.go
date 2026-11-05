@@ -39,6 +39,30 @@ type failingSessionFiles struct {
 	removeErr  error
 }
 
+type blockingSessionFiles struct {
+	osSessionFiles
+	started       chan struct{}
+	continueWrite chan struct{}
+	once          *sync.Once
+}
+
+type manualExpiryTicker struct {
+	channel chan time.Time
+	stopped chan struct{}
+	once    sync.Once
+}
+
+func (t *manualExpiryTicker) Chan() <-chan time.Time { return t.channel }
+func (t *manualExpiryTicker) Stop()                  { t.once.Do(func() { close(t.stopped) }) }
+
+func (f blockingSessionFiles) WriteAtomic(directory, path string, data []byte) error {
+	f.once.Do(func() {
+		close(f.started)
+		<-f.continueWrite
+	})
+	return f.osSessionFiles.WriteAtomic(directory, path, data)
+}
+
 func (f failingSessionFiles) SyncFile(path string) error {
 	if f.syncErr != nil {
 		return f.syncErr
@@ -327,6 +351,146 @@ func TestResourceSessionsExpireRenewAndPersistRecovery(t *testing.T) {
 	}
 	if data, err := os.ReadFile(revokedStage); err != nil || string(data) != "revoked but retained" {
 		t.Fatalf("revoke removed staging: data=%q err=%v", data, err)
+	}
+}
+
+func TestExpirySweepPreservesUnexpiredSessionsAndReleasesExpiredReads(t *testing.T) {
+	root := t.TempDir()
+	sessions, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sessions.close(); err != nil {
+			t.Errorf("close sessions: %v", err)
+		}
+	}()
+
+	activeWrite, err := sessions.beginWrite(context.Background(), "/active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredWrite, err := sessions.beginWrite(context.Background(), "/expired")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeReadReleased := 0
+	expiredReadReleased := 0
+	sessions.mu.Lock()
+	now := time.Now()
+	sessions.sessions[activeWrite.SessionID].expiresAt = now.Add(time.Second)
+	sessions.sessions[expiredWrite.SessionID].expiresAt = now.Add(-time.Second)
+	sessions.reads["active-read"] = &readSession{expiresAt: now.Add(time.Second), release: func() error { activeReadReleased++; return nil }}
+	sessions.reads["expired-read"] = &readSession{expiresAt: now.Add(-time.Second), release: func() error { expiredReadReleased++; return nil }}
+	sessions.mu.Unlock()
+
+	sessions.expireDue(now)
+
+	if _, err := sessions.renew(activeWrite.SessionID); err != nil {
+		t.Fatalf("unexpired write session was swept: %v", err)
+	}
+	if _, err := os.Stat(sessions.expectedStagePath(activeWrite.SessionID)); err != nil {
+		t.Fatalf("unexpired staging was removed: %v", err)
+	}
+	if _, err := os.Stat(sessions.expectedStagePath(expiredWrite.SessionID)); err != nil {
+		t.Fatalf("expired write staging should be preserved for recovery: %v", err)
+	}
+	if records := sessions.listRecoveries(); len(records) != 1 || records[0].SessionID != expiredWrite.SessionID {
+		t.Fatalf("sweep recovery candidates=%+v", records)
+	}
+	if activeReadReleased != 0 || expiredReadReleased != 1 {
+		t.Fatalf("read releases: active=%d expired=%d", activeReadReleased, expiredReadReleased)
+	}
+}
+
+func TestExpirySweepClaimsSessionBeforePersistingRecovery(t *testing.T) {
+	root := t.TempDir()
+	sessions, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sessions.close(); err != nil {
+			t.Errorf("close sessions: %v", err)
+		}
+	}()
+	result, err := sessions.beginWrite(context.Background(), "/contended")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions.mu.Lock()
+	sessions.sessions[result.SessionID].expiresAt = time.Now().Add(-time.Second)
+	files := blockingSessionFiles{started: make(chan struct{}), continueWrite: make(chan struct{}), once: &sync.Once{}}
+	sessions.files = files
+	sessions.mu.Unlock()
+
+	swept := make(chan struct{})
+	go func() { sessions.expireDue(time.Now()); close(swept) }()
+	<-files.started
+	if _, err := sessions.renew(result.SessionID); !errors.Is(err, errSessionExpired) {
+		t.Fatalf("renew during expiry preservation error=%v, want expired", err)
+	}
+	sessions.expireDue(time.Now())
+	close(files.continueWrite)
+	<-swept
+	if records := sessions.listRecoveries(); len(records) != 1 || records[0].SessionID != result.SessionID {
+		t.Fatalf("concurrent sweep produced recovery records %+v", records)
+	}
+}
+
+func TestBackgroundExpiryLoopSweepsAndStopsOnClose(t *testing.T) {
+	oldNewTicker := newSessionExpiryTicker
+	ticker := &manualExpiryTicker{channel: make(chan time.Time), stopped: make(chan struct{})}
+	newSessionExpiryTicker = func(time.Duration) sessionExpiryTicker { return ticker }
+	t.Cleanup(func() { newSessionExpiryTicker = oldNewTicker })
+
+	root := t.TempDir()
+	sessions, err := newSessionManagerWithTTL(&fakeRepositoryUseCases{}, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := sessions.close(); err != nil {
+			t.Errorf("cleanup session manager: %v", err)
+		}
+	})
+	result, err := sessions.beginWrite(context.Background(), "/background-expiry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions.mu.Lock()
+	sessions.sessions[result.SessionID].expiresAt = time.Unix(100, 0)
+	sessions.mu.Unlock()
+
+	select {
+	case ticker.channel <- time.Unix(101, 0):
+	case <-sessions.done:
+		t.Fatal("session manager stopped before expiry tick")
+	}
+	deadline := time.After(5 * time.Second)
+	for {
+		if records := sessions.listRecoveries(); len(records) == 1 && records[0].SessionID == result.SessionID {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("background expiry loop did not preserve expired session")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	if err := sessions.close(); err != nil {
+		t.Fatalf("close session manager: %v", err)
+	}
+	select {
+	case <-ticker.stopped:
+	default:
+		t.Fatal("background expiry ticker was not stopped")
+	}
+	select {
+	case <-sessions.done:
+	default:
+		t.Fatal("session manager close signal was not closed")
 	}
 }
 

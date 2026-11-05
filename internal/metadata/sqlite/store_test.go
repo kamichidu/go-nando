@@ -2460,8 +2460,15 @@ func TestSQLiteStore(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("expected context deadline while waiting for SQLite writer lock, got %v", err)
 		}
+		if errors.Is(err, context.Canceled) {
+			t.Errorf("deadline cancellation was reported as explicit cancellation: %v", err)
+		}
 		if rollbackErr := writer.Rollback(); rollbackErr != nil {
 			t.Fatalf("failed to release lock holder transaction: %v", rollbackErr)
+		}
+		stored, err := store.GetByID(ctx, entryID)
+		if err != nil || stored.Name != "move-context.txt" || stored.Revision != 1 {
+			t.Fatalf("canceled Move changed persisted entry: entry=%+v err=%v", stored, err)
 		}
 
 		if _, err := store.Move(ctx, metadata.Entry{
