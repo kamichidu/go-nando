@@ -365,7 +365,7 @@ func (h *Handler) mkcol(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	if err = h.client.Call(r.Context(), controlrpc.MethodMkdir, map[string]any{"path": p, "mode": uint32(0755)}, nil); err != nil {
+	if err = h.client.Call(r.Context(), controlrpc.MethodMkdir, map[string]any{"path": p, "mode": uint32(0o755)}, nil); err != nil {
 		http.Error(w, err.Error(), statusFor(err))
 		return
 	}

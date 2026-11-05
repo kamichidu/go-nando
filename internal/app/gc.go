@@ -13,17 +13,17 @@ func (a *App) GC(ctx context.Context) (int, error) {
 	return a.repo.GC(ctx)
 }
 
-// RestoreGCSOrphans restores missing Entries for unreferenced GCS objects.
-func (a *App) RestoreGCSOrphans(ctx context.Context) (int, error) {
-	return a.repo.RestoreGCSOrphans(ctx)
+// RestoreRemoteOrphans restores missing Entries for unreferenced remote objects.
+func (a *App) RestoreRemoteOrphans(ctx context.Context) (int, error) {
+	return a.repo.RestoreRemoteOrphans(ctx)
 }
 
-// RestoreGCSOrphansTo restores missing Entries under a configured logical directory.
-func (a *App) RestoreGCSOrphansTo(ctx context.Context, directory string) (int, error) {
-	return a.repo.RestoreGCSOrphansTo(ctx, directory)
+// RestoreRemoteOrphansTo restores missing Entries under a configured logical directory.
+func (a *App) RestoreRemoteOrphansTo(ctx context.Context, directory string) (int, error) {
+	return a.repo.RestoreRemoteOrphansTo(ctx, directory)
 }
 
-// ProcessTransferQueue attempts pending GCS transfers once; failures remain queued.
+// ProcessTransferQueue attempts pending remote deliveries once; failures remain queued.
 func (a *App) ProcessTransferQueue(ctx context.Context) error {
 	return a.repo.ProcessTransferQueue(ctx)
 }

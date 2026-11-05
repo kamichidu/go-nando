@@ -27,15 +27,15 @@ func (r *Repository) ProcessTransferQueueParallel(ctx context.Context, paralleli
 	if parallelism <= 0 {
 		return fmt.Errorf("transfer parallelism must be positive")
 	}
-	if r.settings.DeliveryMode != DeliveryModeGCS {
+	if r.settings.DeliveryMode != DeliveryModeRemote {
 		return nil
 	}
-	if r.replica == nil {
-		return errors.New("GCS delivery is configured without a replica store")
+	if r.remoteStore == nil {
+		return errors.New("remote delivery is configured without a remote object store")
 	}
 	ids, err := r.metaStore.PendingTransfers(ctx)
 	if err != nil {
-		return fmt.Errorf("list GCS transfer obligations: %w", err)
+		return fmt.Errorf("list remote delivery obligations: %w", err)
 	}
 	var failures []error
 	var failureMu sync.Mutex
@@ -86,7 +86,7 @@ func (r *Repository) ProcessTransferQueueParallel(ctx context.Context, paralleli
 				if err != nil {
 					return fmt.Errorf("open Local source %s for transfer: %w", id, err)
 				}
-				info, uploadErr := r.replica.Upload(transferCtx, id, size, expectedMD5, reader)
+				info, uploadErr := r.remoteStore.Upload(transferCtx, id, size, expectedMD5, reader)
 				closeErr := reader.Close()
 				if uploadErr != nil || closeErr != nil {
 					if uploadErr != nil {
@@ -95,7 +95,7 @@ func (r *Repository) ProcessTransferQueueParallel(ctx context.Context, paralleli
 					return errors.Join(uploadErr, closeErr)
 				}
 				if info.ID != id || info.Size != size || info.Generation <= 0 || len(info.MD5) != 16 || !bytes.Equal(info.MD5, expectedMD5) {
-					return fmt.Errorf("GCS upload returned mismatched API attributes for %s: %+v", id, info)
+					return fmt.Errorf("remote upload returned mismatched API attributes for %s: %+v", id, info)
 				}
 				if err := r.validateLease(transferCtx, operationID); err != nil {
 					return err

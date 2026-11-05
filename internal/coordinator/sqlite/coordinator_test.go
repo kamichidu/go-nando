@@ -396,7 +396,7 @@ func TestExclusiveAcrossProcessesAndProcessTermination(t *testing.T) {
 func runCoordinatorProcessHelper(t *testing.T) {
 	coordinator := openCoordinator(t, os.Getenv("GO_NANDO_COORDINATOR_DB"))
 	err := coordinator.Exclusive(context.Background(), func() error {
-		if err := os.WriteFile(os.Getenv("GO_NANDO_COORDINATOR_READY"), []byte("ready"), 0600); err != nil {
+		if err := os.WriteFile(os.Getenv("GO_NANDO_COORDINATOR_READY"), []byte("ready"), 0o600); err != nil {
 			return err
 		}
 		select {}

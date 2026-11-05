@@ -19,11 +19,11 @@
 
 == Decision
 
-The repository has a substantial, tested single-host Phase A implementation: Local and GCS repository modes, the SQLite Metadata and transfer queue, daemon-owned Resource sessions and Recovery, peer CLI/FUSE/WebDAV processes, and real host FUSE and HTTP checks are present. This review does not find a broad failure of the Repository or CAS core.
+The repository has a substantial, tested single-host Phase A implementation: Local and Remote repository modes, the SQLite Metadata and transfer queue, daemon-owned Resource sessions and Recovery, peer CLI/FUSE/WebDAV processes, and real host FUSE and HTTP checks are present. This review does not find a broad failure of the Repository or CAS core.
 
 Phase A cannot be signed off as complete from this checkout. The PA-01 implementation follow-up adds a daemon-owned configured scheduler, and this PA-02 follow-up records the approved single-user local-host security boundary. Scheduler operational defaults and the meaning of idle remain open, as do the other completion items:
 
-. Design IR `OPEN-GCS-SCHEDULER-DEFAULTS` still leaves timing defaults and whether idle means no repository writes or no dirty handles unresolved. GCS mode therefore requires all four scheduler settings explicitly; current code measures idle from the last successful content commit observed by the daemon. That mechanism is implemented and exercised, but this review does not treat the chosen operational interpretation as an accepted Design IR decision. Local-mode GC scheduling also starts only when these scheduler settings are explicitly configured.
+. Design IR `OPEN-GCS-SCHEDULER-DEFAULTS` still leaves timing defaults and whether idle means no repository writes or no dirty handles unresolved. Remote mode therefore requires all four scheduler settings explicitly; current code measures idle from the last successful content commit observed by the daemon. That mechanism is implemented and exercised, but this review does not treat the chosen operational interpretation as an accepted Design IR decision. Local-mode GC scheduling also starts only when these scheduler settings are explicitly configured.
 . PA-02 is resolved for Phase A by the approved policy recorded in `DES-PHASE-A-DAEMON` and `DES-ADAPTERS-FILESYSTEM`: private per-user Unix socket, loopback-only unauthenticated HTTP WebDAV, no external exposure or multi-user authorization, and explicit conditional PUT handling. `OPEN-ADAPTER-AUTHORIZATION` now tracks future expansion choices only and is not a Phase A blocker.
 
 The Design IR also still labels `DES-PHASE-A-DAEMON.phase_status` as `planned`. That is a formal status mismatch: implementation evidence cannot by itself change the canonical roadmap state. It should be changed only after the owner accepts the remaining decisions and evidence.
@@ -38,7 +38,7 @@ The trace below treats system requirements and designs as obligations where appl
 
 Evidence checked:
 
-* Source and tests under `internal/`, `controlrpc/`, `fuse/`, `webdav/`, `cmd/`, `e2e/`, and the repository documentation.
+* Source and tests under `internal/`, `controlrpc/`, `adapters/fuse/`, `adapters/webdav/`, `cmd/`, `e2e/`, and the repository documentation.
 * The original host gate was rerun as `e2e/run.sh --stress` on the reviewed main revision. PA-01 follow-up reran it on the implementation worktree. Follow-up evidence directory: `{pa-01-evidence}`.
 * A separate native HTTP PROPFIND request against a temporary Local repository confirmed a WebDAV live-property inconsistency described below. The response included `DAV:supportedlock` although the adapter returns 501 for LOCK/UNLOCK.
 * `litmus` and `cadaver` were not installed (`command -v` returned no executable). No full WebDAV compliance claim is made.
@@ -109,12 +109,12 @@ Remaining verification limits: no process-kill E2E is run at every individual ma
 |Local automatic maintenance implemented; GCS orphan metadata recovery is an explicit CLI operation.
 
 |`REQ-DOCTOR-NONDESTRUCTIVE`, `DES-DOCTOR`
-|`internal/repository/repository.go` Doctor validates root, Entry hierarchy/revisions, references and Local content without modifying repository state. `OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS` leaves GCS-mode cache/remote health interpretation unresolved.
+|`internal/repository/repository.go` Doctor validates root, Entry hierarchy/revisions, references and Local content without modifying repository state. `OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS` leaves Remote-mode cache/object health interpretation unresolved.
 |`TestDoctorDoesNotMutateRepositoryAndIgnoresValidOrphanObjects`, `TestDoctorDoesNotLockMetadataDBOrBlockGC`; G0 PASS.
 |Implemented for defined Local checks; GCS health policy open
 |===
 
-G2's PASS establishes behavior against `fake-gcs-server:1.52.3`, including daemon-scheduled delivery without maintenance RPC, a directly observed outage, restart retry, and upload-response ambiguity reconciled without retransmitting the payload. It does not establish ADC/IAM, production bucket policy, actual cloud credentials, billing, retention/versioning, or external GCS mutation behavior; the IR explicitly says the emulator is not evidence for those semantics. `OPEN-GCS-GENERATION-AND-BUCKET-POLICY` and `OPEN-DELIVERY-MODE-MIGRATION` remain open decisions. The Local/GCS transfer mechanics are present; production deployment acceptance needs an explicit real-GCS environment decision/evidence.
+G2's PASS establishes behavior against `fake-gcs-server:1.52.3`, including daemon-scheduled delivery without maintenance RPC, a directly observed outage, restart retry, and upload-response ambiguity reconciled without retransmitting the payload. It does not establish ADC/IAM, production bucket policy, actual cloud credentials, billing, retention/versioning, or external GCS mutation behavior; the IR explicitly says the emulator is not evidence for those semantics. `OPEN-GCS-GENERATION-AND-BUCKET-POLICY` remains open. The Local/Remote transfer mechanics are present; production deployment acceptance needs an explicit real-GCS environment decision/evidence.
 
 `nando sync` is currently a stub returning `ErrNotImplemented` through `internal/app/sync.go`. This is *intentionally deferred*, not a Phase A failure: `DES-PHASE7-SYNC` defers user-directed synchronization between repositories. It must not be confused with the missing Phase A automatic one-way GCS queue scheduler.
 
@@ -125,7 +125,7 @@ G2's PASS establishes behavior against `fake-gcs-server:1.52.3`, including daemo
 |Design references |Code and test trace |Status
 
 |`DES-CLI-BOUNDARY`, `DES-RUNTIME-CONFIGURATION`
-|Repository-facing `put/get/cat/list/stat/mkdir/move/remove/gc/doctor/recovery/maintenance` commands use `controlrpc` (`internal/cli/commands/`). `init` is provisioning; `daemon` is the composition root. TOML/CLI/XDG precedence and legacy-path migration guard are in `internal/config/config.go` and CLI root. Tests are in `commands_test.go` and `config_test.go`.
+|Repository-facing `put/get/cat/list/stat/mkdir/move/remove/gc/doctor/recovery/maintenance` commands use `controlrpc` (`internal/cli/commands/`). `init` is provisioning; `daemon` is the composition root. TOML/CLI/XDG precedence is in `internal/config/config.go` and CLI root. Tests are in `commands_test.go` and `config_test.go`.
 |Implemented; G0 PASS. `nando sync` is Phase 7 deferred as noted above.
 
 |`DES-DEPENDENCY-DIRECTION`, `DES-DAEMON-RUNTIME`, `DES-REPOSITORY-BOUNDARIES`, approved `OPEN-ADAPTER-AUTHORIZATION` Phase A decision
@@ -149,7 +149,7 @@ The accepted security boundary is single-user local-host operation. Unix socket 
 
 === FUSE adapter
 
-`DES-ADAPTERS-FILESYSTEM`, `REQ-FUSE-DURABILITY`, and `REQ-FUSE-FILE-HANDLES` map to `fuse/filesystem.go` and its tests. The adapter is a separate read-write process/module using daemon RPC and shared `file://` resources. Source and tests cover stable Entry-ID rename, shared serialized writer session, atomic append, Fsync/final-close commit, terminal CAS failure, O_TRUNC staging, open-handle unlink/tombstones, no hard links, direct I/O/zero cache TTL, metadata refresh, and errno conversion.
+`DES-ADAPTERS-FILESYSTEM`, `REQ-FUSE-DURABILITY`, and `REQ-FUSE-FILE-HANDLES` map to `adapters/fuse/filesystem.go` and its tests. The adapter is a separate read-write process/module using daemon RPC and shared `file://` resources. Source and tests cover stable Entry-ID rename, shared serialized writer session, atomic append, Fsync/final-close commit, terminal CAS failure, O_TRUNC staging, open-handle unlink/tombstones, no hard links, direct I/O/zero cache TTL, metadata refresh, and errno conversion.
 
 G1 exercised a real host kernel FUSE mount for CRUD, commit durability, multiple writers, rename, unlink, and CAS; G3 exercised daemon/FUSE crash/restart and recovery; optional G4 exercised a 2 MiB random-offset multi-handle stress file with independent final digest. Current run: *G1 PASS, G3 PASS, G4 PASS*. Unit/race results are in G0.
 
@@ -249,7 +249,7 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |ID / severity |Finding and impact |Smallest next action |Disposition
 
 |PA-01 — *P1 design/operations decision*
-|The daemon-owned scheduler is now implemented and G0–G5 exercises it. However, `OPEN-GCS-SCHEDULER-DEFAULTS` remains open: the IR asks the owner to define operational timing/parallelism defaults and whether idle means no repository writes or no dirty handles. Current code requires explicit settings and interprets idle as time since the last successful content commit observed by the daemon. GCS mode will not start without complete explicit settings; Local-mode automatic GC is also off unless those settings are supplied. No arbitrary default is installed.
+|The daemon-owned scheduler is now implemented and G0–G5 exercises it. However, `OPEN-GCS-SCHEDULER-DEFAULTS` remains open: the IR asks the owner to define operational timing/parallelism defaults and whether idle means no repository writes or no dirty handles. Current code requires explicit settings and interprets idle as time since the last successful content commit observed by the daemon. Remote mode will not start without complete explicit settings; Local-mode automatic GC is also off unless those settings are supplied. No arbitrary default is installed.
 |Accept the idle interpretation or select another, and select deployment values for all four settings. Decide whether Local-mode GC must also be enabled by mandatory explicit scheduler configuration. Update the Design IR in a separate accepted design change.
 |Scheduler implementation complete; formal PA-01 acceptance conditional on the open policy decision
 
@@ -289,7 +289,7 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |Non-blocker for current IR scope
 
 |PA-09 — *P3 unresolved semantics*
-|`OPEN-DELIVERY-MODE-MIGRATION`, `OPEN-GCS-GENERATION-AND-BUCKET-POLICY`, `OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS`, `OPEN-GCS-SCHEDULER-DEFAULTS`, and `OPEN-READ-REVISION-CHANGE` remain open. Current compatibility defaults to Local and does not silently change repository settings.
+|`OPEN-GCS-GENERATION-AND-BUCKET-POLICY`, `OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS`, `OPEN-GCS-SCHEDULER-DEFAULTS`, and `OPEN-READ-REVISION-CHANGE` remain open. Formal v1 has no pre-v1 compatibility guarantee and does not silently change repository settings.
 |Resolve the operational decisions needed by the selected deployment profile; do not expand this review into Phase B/Firestore or deferred optimization work.
 |Documented conditional scope
 |===

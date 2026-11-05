@@ -62,7 +62,7 @@ func (c *GetCommand) Run(ctx context.Context, args []string) (runErr error) {
 		return fmt.Errorf("daemon returned unsupported or inaccessible Resource URI %q", read.ResourceURI)
 	}
 	parent := filepath.Dir(localPath)
-	if err := os.MkdirAll(parent, 0755); err != nil {
+	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return fmt.Errorf("create destination directory: %w", err)
 	}
 	if info, err := os.Lstat(localPath); err == nil {

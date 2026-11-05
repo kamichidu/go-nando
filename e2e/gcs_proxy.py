@@ -104,6 +104,12 @@ def handler_type(state: ProxyState, upstream_host: str, upstream_port: int):
                 if key.lower() not in {"host", "connection", "content-length", "expect"}
             }
             query = parse_qs(urlsplit(self.path).query)
+            # The Go storage client starts a resumable session with POST, then
+            # sends the object bytes on a POST carrying upload_id. A crash can
+            # leave that session holding the committed object; fake-gcs-server
+            # may accept the resumed chunk even though ifGenerationMatch=0 was
+            # on the session-creation request. Model the GCS precondition at the
+            # final object boundary so the replay gate remains deterministic.
             if self.command == "GET" and "/o/" in urlsplit(self.path).path and "prefix" not in query:
                 with state.lock:
                     state.object_attribute_gets += 1
@@ -117,7 +123,14 @@ def handler_type(state: ProxyState, upstream_host: str, upstream_port: int):
                 with state.lock:
                     if state.armed:
                         state.ambiguous_name = object_name
-                    elif state.held_commits == 1 and object_name and object_name == state.ambiguous_name:
+            if (
+                self.command == "POST"
+                and "/upload/" in self.path
+                and "upload_id" in query
+                and query.get("name", [""])[0] == state.ambiguous_name
+            ):
+                with state.lock:
+                    if state.held_commits == 1 and state.ambiguous_name:
                         state.upload_puts += 1
                         state.replay_preconditions += 1
                         payload = json.dumps({

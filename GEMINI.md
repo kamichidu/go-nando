@@ -19,7 +19,7 @@ This document defines:
 Before making any non-trivial change, read in the following order:
 
 1. `GEMINI.md`
-2. `docs/index.adoc`
+2. `docs/design.ir.yaml`
 3. Relevant documents under `docs/`
 4. Source code
 
@@ -420,3 +420,63 @@ Once a design decision has been explicitly accepted, stop proposing alternatives
 Execute the agreed work first.
 
 Further improvements may be proposed only after reporting completion.
+
+---
+
+## 16. Design IR and Documentation Projections
+
+`docs/design.ir.yaml` is the canonical semantic design authority. Do not use source code, a rendered manual, or an audit report to silently change its meaning. When a requested change affects architecture, requirements, compatibility, repository semantics, or lifecycle rules, update the Design IR as part of the accepted design change and report any unresolved decision.
+
+User-facing documentation is a projection of the accepted design and current implementation. README is the concise user-facing gateway; it is not the architecture specification or operator manual. The future Pages manual and other generated or projected documentation must derive design semantics from `docs/design.ir.yaml`. Do not hand-edit a projected document to introduce or alter design semantics. Hand edits may be used only for presentation or user guidance that does not change the canonical design; regenerate affected projections after source changes.
+
+Keep agent and contributor procedures in this file or in focused engineering documents, not in the user-facing README. In particular, Design IR validation commands, test gates, E2E gate mechanics, and projection-maintenance rules belong here or in linked engineering documentation.
+
+## 17. Design IR Validation
+
+The repository pins the official Design IR validator at revision `455ed318b7bc409d3e1da320620ef92d457042b9`. To validate the canonical model, check out that revision and run the repository wrapper:
+
+```shell
+git clone https://github.com/kamichidu/design-ir.git ../design-ir
+git -C ../design-ir checkout 455ed318b7bc409d3e1da320620ef92d457042b9
+DESIGN_IR_REPO=../design-ir tools/validate-design-ir.sh
+```
+
+The wrapper checks the pinned schema digest and runs structural and semantic validation. Unresolved representation gaps are warnings; validation errors fail the command. Do not treat implementation evidence as a substitute for updating the canonical model when a design decision changes.
+
+## 18. Tests and End-to-End Gates
+
+For Go implementation changes, use the repository-owned `.golangci.yml` and run:
+
+```shell
+golangci-lint run ./...
+go test ./...
+```
+
+The reproducible host gate is `e2e/run.sh`. It runs root, FUSE, and WebDAV module tests and race tests, lint, workspace install targets, native builds, Design IR validation, and the host-native E2E scenarios. Docker Compose manages only the fake GCS dependency; the daemon, FUSE mount, WebDAV adapter, runner, and fault proxy run on the host. Review [docs/e2e-gates.md](docs/e2e-gates.md) for host requirements, scenario coverage, fake-GCS limits, cleanup behavior, and retained evidence. The optional bounded stress profile is `e2e/run.sh --stress`.
+
+Do not claim a real FUSE gate passed when the host cannot mount FUSE. Preserve the gate's explicit PASS, FAIL, and SKIP outcomes and its cleanup evidence. For documentation-only changes, run relevant format and link checks; run Go tests only when requested or when the change affects executable behavior.
+
+## 19. Go Workspace and Distribution
+
+The committed `go.work` is the supported developer workspace and includes the
+root, FUSE, and WebDAV modules. From a repository checkout, install binaries
+with:
+
+```sh
+go install ./cmd/nando
+go install ./adapters/fuse/cmd/nando-fuse
+go install ./adapters/webdav/cmd/nando-webdav
+```
+
+Root-level `go install ./...` does not cover nested workspace modules. Adapter
+modules must not use local filesystem `replace` directives for the root
+module. `go.work` maps their current
+unreleased `v0.0.0` root-module requirement to the checked-out root module; do
+not invent a version tag to make an unpublished module appear available. Any
+future standalone Go module distribution must use real published module
+versions and be verified outside the workspace before it is claimed as
+supported.
+
+General users install from GitHub Releases archives or the Debian package.
+README Installation must point to these release artifacts and must not
+recommend `go install @latest`.

@@ -22,7 +22,7 @@ func TestCommitCrossFilesystemFailsAndCleansStaging(t *testing.T) {
 	}
 	root := t.TempDir()
 	objectsDir := filepath.Join(objectsParent, "go-nando-test-"+filepath.Base(root))
-	if err := os.Mkdir(objectsDir, 0700); err != nil {
+	if err := os.Mkdir(objectsDir, 0o700); err != nil {
 		t.Skipf("cannot create object test directory: %v", err)
 	}
 	t.Cleanup(func() {
@@ -31,7 +31,7 @@ func TestCommitCrossFilesystemFailsAndCleansStaging(t *testing.T) {
 		}
 	})
 	tempDir := filepath.Join(root, "temp")
-	if err := os.Mkdir(tempDir, 0700); err != nil {
+	if err := os.Mkdir(tempDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 

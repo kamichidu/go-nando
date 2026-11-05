@@ -78,7 +78,7 @@ func New(client rpcClient) *FileSystem {
 }
 
 func (f *FileSystem) Root() fs.InodeEmbedder {
-	return &entryNode{owner: f, entry: controlrpc.Entry{ID: "root", Kind: "directory", Mode: 0755}, path: "/"}
+	return &entryNode{owner: f, entry: controlrpc.Entry{ID: "root", Kind: "directory", Mode: 0o755}, path: "/"}
 }
 
 func (f *FileSystem) Mount(mountpoint string, options *fs.Options) (*fuse.Server, error) {
@@ -213,7 +213,7 @@ func (f *FileSystem) startWrite(ctx context.Context, node *entryNode, truncate b
 		}
 	}
 	if node.entryID() != "" && node.entryID() != "root" {
-		if err := stage.Chmod(os.FileMode(node.entryMode() & 07777)); err != nil {
+		if err := stage.Chmod(os.FileMode(node.entryMode() & 0o7777)); err != nil {
 			return nil, f.cleanupSessionError(ctx, begin.SessionID, err, stage)
 		}
 	}
@@ -735,7 +735,7 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 		}
 	}
 	if modeSet {
-		if err := state.file.Chmod(os.FileMode(mode & 07777)); err != nil {
+		if err := state.file.Chmod(os.FileMode(mode & 0o7777)); err != nil {
 			state.mu.Unlock()
 			return errnoFor(err)
 		}
@@ -818,7 +818,7 @@ func (n *entryNode) Create(ctx context.Context, name string, flags uint32, mode 
 	if errno != 0 {
 		return nil, nil, 0, n.owner.abortSession(ctx, begin.SessionID, errno)
 	}
-	if err := os.Chmod(stagePath, os.FileMode(mode&07777)); err != nil {
+	if err := os.Chmod(stagePath, os.FileMode(mode&0o7777)); err != nil {
 		return nil, nil, 0, n.owner.abortSession(ctx, begin.SessionID, errnoFor(err))
 	}
 	if errno := n.owner.call(ctx, controlrpc.MethodCommit, map[string]string{"session_id": begin.SessionID}, nil); errno != 0 {
@@ -864,7 +864,7 @@ func (n *entryNode) Mkdir(ctx context.Context, name string, mode uint32, out *fu
 		return nil, syscall.EINVAL
 	}
 	p := path.Join(n.currentPath(), name)
-	if errno := n.owner.call(ctx, controlrpc.MethodMkdir, map[string]any{"path": p, "mode": mode & 07777}, nil); errno != 0 {
+	if errno := n.owner.call(ctx, controlrpc.MethodMkdir, map[string]any{"path": p, "mode": mode & 0o7777}, nil); errno != 0 {
 		return nil, errno
 	}
 	var entry controlrpc.Entry
@@ -1019,9 +1019,9 @@ func (f *FileSystem) renameCached(oldPath, newPath string) {
 }
 
 func inodeMode(entry controlrpc.Entry) uint32 {
-	mode := entry.Mode & 07777
+	mode := entry.Mode & 0o7777
 	if mode == 0 {
-		mode = 0644
+		mode = 0o644
 	}
 	if entry.Kind == "directory" {
 		return syscall.S_IFDIR | mode

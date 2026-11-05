@@ -13,7 +13,7 @@ import (
 // AcquireRepositoryLock enforces the Phase A single-daemon-per-repository rule.
 func AcquireRepositoryLock(repoDir string) (func() error, error) {
 	path := filepath.Join(repoDir, "daemon.lock")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open daemon lock: %w", err)
 	}

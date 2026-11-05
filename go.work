@@ -1,0 +1,9 @@
+go 1.25.1
+
+use (
+	.
+	./adapters/fuse
+	./adapters/webdav
+)
+
+replace github.com/kamichidu/go-nando v0.0.0 => .

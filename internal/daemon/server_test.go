@@ -78,7 +78,7 @@ func TestDaemonWriteResourceVerticalSlice(t *testing.T) {
 	if err != nil || resourceURL.Scheme != "file" || resourceURL.Host != "" {
 		t.Fatalf("daemon returned inaccessible Resource URI %q: %v", begin.ResourceURI, err)
 	}
-	if err := os.WriteFile(resourceURL.Path, []byte("JSON-RPC resource payload"), 0600); err != nil {
+	if err := os.WriteFile(resourceURL.Path, []byte("JSON-RPC resource payload"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	resource, err := os.OpenFile(resourceURL.Path, os.O_WRONLY, 0)
@@ -117,11 +117,11 @@ func TestDaemonWriteResourceVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(staleURL.Path, []byte("stale session"), 0600); err != nil {
+	if err := os.WriteFile(staleURL.Path, []byte("stale session"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	winner := filepath.Join(t.TempDir(), "winner")
-	if err := os.WriteFile(winner, []byte("concurrent winner"), 0600); err != nil {
+	if err := os.WriteFile(winner, []byte("concurrent winner"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := application.Put(ctx, app.PutInput{LocalPath: winner, RepositoryPath: "/rpc.txt"}); err != nil {
@@ -168,7 +168,7 @@ func TestRecoveryRetryAfterRepositoryMoveWithRealLocalRepository(t *testing.T) {
 	}
 	stage := resourcePathFromURI(t, begin.ResourceURI)
 	want := []byte("real Repository recovery payload after relocation")
-	if err := os.WriteFile(stage, want, 0600); err != nil {
+	if err := os.WriteFile(stage, want, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.close(); err != nil {
@@ -238,7 +238,7 @@ func TestStableEntryWriteSessionFollowsRenameWithOriginalCAS(t *testing.T) {
 		}
 	}()
 	initial := filepath.Join(t.TempDir(), "initial")
-	if err := os.WriteFile(initial, []byte("before"), 0600); err != nil {
+	if err := os.WriteFile(initial, []byte("before"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := application.Put(ctx, app.PutInput{LocalPath: initial, RepositoryPath: "/old-name"}); err != nil {
@@ -263,7 +263,7 @@ func TestStableEntryWriteSessionFollowsRenameWithOriginalCAS(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := resourcePathFromURI(t, begin.ResourceURI)
-	if err := os.WriteFile(stage, []byte("renamed handle bytes"), 0600); err != nil {
+	if err := os.WriteFile(stage, []byte("renamed handle bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	entryID := beginEntryIDForTest(t, application, ctx, "/old-name")
@@ -335,7 +335,7 @@ func TestStableEntryWriteSessionRejectsInterveningContentUpdate(t *testing.T) {
 		}
 	}()
 	initial := filepath.Join(t.TempDir(), "initial")
-	if err := os.WriteFile(initial, []byte("initial"), 0600); err != nil {
+	if err := os.WriteFile(initial, []byte("initial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := application.Put(ctx, app.PutInput{LocalPath: initial, RepositoryPath: "/file"}); err != nil {
@@ -359,11 +359,11 @@ func TestStableEntryWriteSessionRejectsInterveningContentUpdate(t *testing.T) {
 	if err := decodeTestResult(t, result, &begin); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(resourcePathFromURI(t, begin.ResourceURI), []byte("stale bytes"), 0600); err != nil {
+	if err := os.WriteFile(resourcePathFromURI(t, begin.ResourceURI), []byte("stale bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	winner := filepath.Join(t.TempDir(), "winner")
-	if err := os.WriteFile(winner, []byte("winner bytes"), 0600); err != nil {
+	if err := os.WriteFile(winner, []byte("winner bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := application.Put(ctx, app.PutInput{LocalPath: winner, RepositoryPath: "/file"}); err != nil {
@@ -405,7 +405,7 @@ func TestUnlinkTombstoneRestartDeletesOnlyStableEntryID(t *testing.T) {
 	put := func(repoPath, content string) {
 		t.Helper()
 		localPath := filepath.Join(t.TempDir(), "source")
-		if err := os.WriteFile(localPath, []byte(content), 0600); err != nil {
+		if err := os.WriteFile(localPath, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := application.Put(ctx, app.PutInput{LocalPath: localPath, RepositoryPath: repoPath}); err != nil {
@@ -542,7 +542,7 @@ func TestReadResourceLeaseProtectsObjectUntilRelease(t *testing.T) {
 	}()
 
 	oldSource := filepath.Join(t.TempDir(), "old")
-	if err := os.WriteFile(oldSource, []byte("pinned immutable bytes"), 0600); err != nil {
+	if err := os.WriteFile(oldSource, []byte("pinned immutable bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := application.Put(ctx, app.PutInput{LocalPath: oldSource, RepositoryPath: "/pinned"}); err != nil {
@@ -646,7 +646,7 @@ func TestExpiredReadLeaseStopsRenewingAndRecoveryStagingSurvivesGC(t *testing.T)
 		}
 	}()
 	source := filepath.Join(t.TempDir(), "source")
-	if err := os.WriteFile(source, []byte("expiring read object"), 0600); err != nil {
+	if err := os.WriteFile(source, []byte("expiring read object"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := application.Put(ctx, app.PutInput{LocalPath: source, RepositoryPath: "/file"}); err != nil {
@@ -696,7 +696,7 @@ func TestExpiredReadLeaseStopsRenewingAndRecoveryStagingSurvivesGC(t *testing.T)
 		t.Fatal(err)
 	}
 	stagePath := resourcePathFromURI(t, write.ResourceURI)
-	if err := os.WriteFile(stagePath, []byte("must survive repository GC"), 0600); err != nil {
+	if err := os.WriteFile(stagePath, []byte("must survive repository GC"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := sessions.release(write.SessionID); err != nil {
@@ -743,6 +743,6 @@ func openTestApplication(t *testing.T, repoDir string) (*app.App, func() error) 
 	if err != nil {
 		t.Fatal(errors.Join(err, coordinator.Close(), metaStore.Close()))
 	}
-	repo := repository.NewRepositoryWithReplica(metadata.NewValidatingStore(metaStore), objects, nil, hasher, coordinator, settings)
+	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, nil, hasher, coordinator, settings)
 	return app.NewApp(repo), func() error { return errors.Join(coordinator.Close(), metaStore.Close()) }
 }

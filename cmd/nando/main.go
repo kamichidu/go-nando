@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -23,7 +24,7 @@ func main() {
 		&commands.MvCommand{},
 		&commands.RmCommand{},
 		&commands.GcCommand{},
-		&commands.GCSOrphansCommand{},
+		&commands.RemoteOrphansCommand{},
 		&commands.MaintenanceCommand{},
 		&commands.SyncCommand{},
 		&commands.DaemonCommand{},
@@ -33,6 +34,16 @@ func main() {
 
 	// 2. Instantiate Root Command
 	root := cli.NewRootCommand(subs)
+	if root.IsExternalSubcommand(os.Args[1:]) {
+		if err := cli.RunExternalSubcommand(os.Args[1:]); err != nil {
+			if status, ok := cli.ExternalExitCode(err); ok {
+				os.Exit(status)
+			}
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// 3. Run flagshim execution loop
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

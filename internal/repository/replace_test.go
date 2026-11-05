@@ -13,7 +13,7 @@ func TestReplaceDestinationAtomicReaderVisibility(t *testing.T) {
 	destination := filepath.Join(dir, "destination")
 	oldValue := []byte("old-complete-content")
 	newValue := []byte("new-complete-content")
-	if err := os.WriteFile(destination, oldValue, 0600); err != nil {
+	if err := os.WriteFile(destination, oldValue, 0o600); err != nil {
 		t.Fatal(err)
 	}
 

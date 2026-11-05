@@ -14,14 +14,14 @@ import (
 )
 
 // CapacityGC evicts oldest confirmed Local cache objects until usage is within
-// the configured limit. It never evicts in Local mode or an untransferred GCS
+// the configured limit. It never evicts in Local mode or an undelivered remote
 // object, and rechecks eligibility while holding the resource WLock.
 func (r *Repository) CapacityGC(ctx context.Context) (int, error) {
-	if r.settings.DeliveryMode != DeliveryModeGCS || r.settings.MaxLocalBytes <= 0 {
+	if r.settings.DeliveryMode != DeliveryModeRemote || r.settings.MaxLocalBytes <= 0 {
 		return 0, nil
 	}
-	if r.replica == nil {
-		return 0, errors.New("capacity GC requires a GCS replica store")
+	if r.remoteStore == nil {
+		return 0, errors.New("capacity GC requires a remote object store")
 	}
 	lister, ok := r.objectStore.(interface {
 		ListObjectInfo(context.Context) ([]objectstore.LocalObjectInfo, error)
@@ -95,9 +95,9 @@ func (r *Repository) evictCapacityCandidate(ctx context.Context, id content.ID) 
 		if err != nil || len(expectedMD5) != md5.Size {
 			return nil
 		}
-		remote, err := r.replica.ReplicaAttrs(leaseCtx, id)
+		remote, err := r.remoteStore.RemoteAttrs(leaseCtx, id)
 		if err != nil {
-			return fmt.Errorf("read GCS attributes for capacity candidate: %w", err)
+			return fmt.Errorf("read remote object attributes for capacity candidate: %w", err)
 		}
 		if len(remote.MD5) != md5.Size || !bytes.Equal(remote.MD5, expectedMD5) {
 			return nil

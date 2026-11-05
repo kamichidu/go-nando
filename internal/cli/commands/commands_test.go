@@ -21,8 +21,10 @@ import (
 
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/controlrpc"
+	"github.com/kamichidu/go-nando/internal/app"
 	"github.com/kamichidu/go-nando/internal/cli"
 	"github.com/kamichidu/go-nando/internal/cli/commands"
+	"github.com/kamichidu/go-nando/internal/repository"
 )
 
 func executeCLI(ctx context.Context, stdout, stderr *bytes.Buffer, args []string) int {
@@ -36,7 +38,7 @@ func executeCLI(ctx context.Context, stdout, stderr *bytes.Buffer, args []string
 		&commands.MvCommand{},
 		&commands.RmCommand{},
 		&commands.GcCommand{},
-		&commands.GCSOrphansCommand{},
+		&commands.RemoteOrphansCommand{},
 		&commands.SyncCommand{},
 		&commands.DaemonCommand{},
 		&commands.DoctorCommand{},
@@ -107,7 +109,7 @@ func TestPutUsesDaemonResourceSession(t *testing.T) {
 	}
 
 	source := filepath.Join(t.TempDir(), "source.txt")
-	if err := os.WriteFile(source, []byte("CLI daemon client payload"), 0600); err != nil {
+	if err := os.WriteFile(source, []byte("CLI daemon client payload"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	stdout.Reset()
@@ -146,11 +148,11 @@ func TestPutUsesDaemonResourceSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(staleURL.Path, []byte("stale recoverable edit"), 0600); err != nil {
+	if err := os.WriteFile(staleURL.Path, []byte("stale recoverable edit"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	winner := filepath.Join(t.TempDir(), "winner")
-	if err := os.WriteFile(winner, []byte("new committed revision"), 0600); err != nil {
+	if err := os.WriteFile(winner, []byte("new committed revision"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "put", winner, "/from-cli.txt"}); code != 0 {
@@ -204,27 +206,82 @@ func TestPutUsesDaemonResourceSession(t *testing.T) {
 }
 
 func TestAdminRecoverCommandNameAndArguments(t *testing.T) {
-	command := &commands.GCSOrphansCommand{}
+	command := &commands.RemoteOrphansCommand{}
 	if command.Name() != "admin" {
 		t.Fatalf("command name=%q", command.Name())
 	}
 	var stdout, stderr bytes.Buffer
-	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"admin", "unknown"}); code == 0 || !strings.Contains(stderr.String(), "nando admin recover") {
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"admin", "unknown"}); code == 0 || !strings.Contains(stderr.String(), "nando admin recover") || !strings.Contains(stderr.String(), "nando admin migrate") {
 		t.Fatalf("invalid admin command: code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestAdminMigrateCurrentAndMissingDatabase(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	repoDir := filepath.Join(t.TempDir(), "repository")
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "admin", "migrate"}); code == 0 || !strings.Contains(stderr.String(), "does not exist") {
+		t.Fatalf("migrate absent repository: code=%d stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "metadata.sqlite")); !os.IsNotExist(err) {
+		t.Fatalf("migrate created absent database: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "init"}); code != 0 {
+		t.Fatalf("init repository: code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "admin", "migrate"}); code != 0 || !strings.Contains(stdout.String(), "version 1") {
+		t.Fatalf("migrate current repository: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", repoDir, "admin"}); code == 0 || !strings.Contains(stderr.String(), "nando admin migrate") {
+		t.Fatalf("admin command synopsis: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestInitAcceptsCurrentRemoteFlags(t *testing.T) {
+	repoDir := filepath.Join(t.TempDir(), "repository")
+	args := []string{"--repository", repoDir, "init", "--delivery-mode", "remote", "--remote-backend", "gcs", "--remote-uri", "gs://new-bucket"}
+	var stdout, stderr bytes.Buffer
+	if code := executeCLI(context.Background(), &stdout, &stderr, args); code != 0 {
+		t.Fatalf("init: code=%d stderr=%q", code, stderr.String())
+	}
+	settings, err := app.LoadRepositorySettings(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.DeliveryMode != repository.DeliveryModeRemote || settings.RemoteBackend != "gcs" || settings.RemoteURI != "gs://new-bucket" {
+		t.Fatalf("repository settings=%+v", settings)
+	}
+}
+
+func TestInitRejectsDeprecatedGCSCLIValues(t *testing.T) {
+	for _, args := range [][]string{{"--delivery-mode", "gcs"}, {"--remote-bucket", "bucket"}, {"--gcs-bucket", "bucket"}} {
+		repoDir := filepath.Join(t.TempDir(), "repository")
+		args = append([]string{"--repository", repoDir, "init"}, args...)
+		var stdout, stderr bytes.Buffer
+		if code := executeCLI(context.Background(), &stdout, &stderr, args); code == 0 {
+			t.Fatalf("deprecated args accepted: %v", args)
+		}
+		if _, err := os.Stat(filepath.Join(repoDir, "metadata.sqlite")); !os.IsNotExist(err) {
+			t.Fatalf("rejected CLI input initialized repository: args=%v err=%v", args, err)
+		}
 	}
 }
 
 func TestTOMLConfigSelectsRepositoryAndSharedDaemonEndpoint(t *testing.T) {
 	repoDir := filepath.Join(t.TempDir(), "configured-repository")
 	socketDir := filepath.Join(t.TempDir(), "socket")
-	if err := os.Mkdir(socketDir, 0700); err != nil {
+	if err := os.Mkdir(socketDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	// Use a test-owned absolute socket path as the configured endpoint.
 	endpoint := "unix://" + filepath.Join(socketDir, "configured.sock")
 	configPath := filepath.Join(t.TempDir(), "config.toml")
-	configText := fmt.Sprintf("repository = %q\nverbose = true\ndaemon_endpoint = %q\ndaemon_token_file = \"\"\ndaemon_ca_cert = \"\"\ndaemon_tls_cert = \"\"\ndaemon_tls_key = \"\"\n", repoDir, endpoint)
-	if err := os.WriteFile(configPath, []byte(configText), 0600); err != nil {
+	configText := fmt.Sprintf("[repository]\npath = %q\n[logging]\nverbose = true\n[daemon]\nlisten = %q\n", repoDir, endpoint)
+	if err := os.WriteFile(configPath, []byte(configText), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
@@ -273,7 +330,7 @@ func TestTOMLConfigSelectsRepositoryAndSharedDaemonEndpoint(t *testing.T) {
 		t.Fatalf("daemon did not listen on TOML endpoint %q: %v", endpoint, err)
 	}
 	source := filepath.Join(t.TempDir(), "input.txt")
-	if err := os.WriteFile(source, []byte("TOML config integration"), 0600); err != nil {
+	if err := os.WriteFile(source, []byte("TOML config integration"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	stdout.Reset()
@@ -288,7 +345,7 @@ func TestTOMLConfigSelectsRepositoryAndSharedDaemonEndpoint(t *testing.T) {
 	overrideEndpoint := "unix://" + filepath.Join(t.TempDir(), "cli-override.sock")
 	stdout.Reset()
 	stderr.Reset()
-	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--config", configPath, "--daemon-endpoint", overrideEndpoint, "stat", "/configured.txt"}); code == 0 || !strings.Contains(stderr.String(), strings.TrimPrefix(overrideEndpoint, "unix://")) {
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--config", configPath, "--daemon-listen", overrideEndpoint, "stat", "/configured.txt"}); code == 0 || !strings.Contains(stderr.String(), strings.TrimPrefix(overrideEndpoint, "unix://")) {
 		t.Fatalf("CLI endpoint did not override TOML endpoint: code=%d stderr=%q", code, stderr.String())
 	}
 
@@ -306,7 +363,7 @@ func TestTOMLConfigSelectsRepositoryAndSharedDaemonEndpoint(t *testing.T) {
 	}
 }
 
-func TestLegacyDefaultRepositoryRequiresExplicitSelection(t *testing.T) {
+func TestDefaultRepositoryDoesNotProbeOldConfigLocation(t *testing.T) {
 	home := t.TempDir()
 	configHome := filepath.Join(home, ".config")
 	dataHome := filepath.Join(home, ".local", "share")
@@ -320,23 +377,18 @@ func TestLegacyDefaultRepositoryRequiresExplicitSelection(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"stat", "/"}); code == 0 || !strings.Contains(stderr.String(), legacyRepo) {
-		t.Fatalf("legacy repository was not guarded: code=%d stderr=%q", code, stderr.String())
+	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"stat", "/"}); code == 0 {
+		t.Fatal("uninitialized default repository unexpectedly opened")
 	}
-	stdout.Reset()
-	stderr.Reset()
-	if code := executeCLI(context.Background(), &stdout, &stderr, []string{"--repository", legacyRepo, "init"}); code != 0 {
-		t.Fatalf("explicit legacy repository selection failed: code=%d stderr=%q", code, stderr.String())
+	if strings.Contains(stderr.String(), legacyRepo) {
+		t.Fatalf("runtime still probes pre-v1 repository location: stderr=%q", stderr.String())
 	}
 }
 
 func TestTOMLConfigTCPAuthenticationAndTLS(t *testing.T) {
 	repoDir := filepath.Join(t.TempDir(), "repo")
 	certPEM, certPath, keyPath := writeCommandTestCertificate(t)
-	tokenPath := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenPath, []byte("nando-test-token\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("NANDO_TEST_DAEMON_TOKEN", "nando-test-token")
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -346,8 +398,8 @@ func TestTOMLConfigTCPAuthenticationAndTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(t.TempDir(), "tcp-config.toml")
-	configText := fmt.Sprintf("repository = %q\nverbose = false\ndaemon_endpoint = %q\ndaemon_token_file = %q\ndaemon_ca_cert = %q\ndaemon_tls_cert = %q\ndaemon_tls_key = %q\n", repoDir, endpoint, tokenPath, certPath, certPath, keyPath)
-	if err := os.WriteFile(configPath, []byte(configText), 0600); err != nil {
+	configText := fmt.Sprintf("[repository]\npath = %q\n[logging]\nverbose = false\n[daemon]\nlisten = %q\ntoken_from_env = \"NANDO_TEST_DAEMON_TOKEN\"\nca_cert = %q\ntls_cert = %q\ntls_key = %q\n", repoDir, endpoint, certPath, certPath, keyPath)
+	if err := os.WriteFile(configPath, []byte(configText), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
@@ -369,7 +421,7 @@ func TestTOMLConfigTCPAuthenticationAndTLS(t *testing.T) {
 		}
 	}()
 	source := filepath.Join(t.TempDir(), "input")
-	if err := os.WriteFile(source, []byte("TLS configured Resource"), 0600); err != nil {
+	if err := os.WriteFile(source, []byte("TLS configured Resource"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -414,10 +466,10 @@ func writeCommandTestCertificate(t *testing.T) ([]byte, string, string) {
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	dir := t.TempDir()
 	certPath, keyPath := filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key")
-	if err := os.WriteFile(certPath, certPEM, 0600); err != nil {
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return certPEM, certPath, keyPath

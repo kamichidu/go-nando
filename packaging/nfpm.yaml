@@ -14,17 +14,22 @@ recommends:
   - fuse3
 contents:
   - src: ${BUILD_DIR}/nando
-    dst: /usr/bin/nando
+    dst: /opt/nando/bin/nando
     file_info:
       mode: 0755
   - src: ${BUILD_DIR}/nando-fuse
-    dst: /usr/bin/nando-fuse
+    dst: /opt/nando/libexec/nando-fuse
     file_info:
       mode: 0755
   - src: ${BUILD_DIR}/nando-webdav
-    dst: /usr/bin/nando-webdav
+    dst: /opt/nando/libexec/nando-webdav
     file_info:
       mode: 0755
+  - dst: /usr/bin/nando
+    type: symlink
+    src: /opt/nando/bin/nando
+    file_info:
+      mode: 0777
   - src: packaging/nando@.user.service
     dst: /usr/lib/systemd/user/nando@.service
     file_info:

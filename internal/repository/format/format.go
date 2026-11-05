@@ -17,7 +17,8 @@ const (
 )
 
 // Format describes durable Repository semantics. SQLite schema versions are
-// deliberately tracked separately by the SQLite adapter's migration ledger.
+// deliberately tracked separately from SQLite's PRAGMA user_version schema
+// authority.
 type Format struct {
 	Version          int
 	ContentAlgorithm string

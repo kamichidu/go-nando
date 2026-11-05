@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"cloud.google.com/go/storage"
 	"github.com/kamichidu/go-nando/internal/content"
@@ -15,12 +16,13 @@ import (
 )
 
 var (
-	ErrReplicaConflict = errors.New("GCS object does not match requested content ID")
-	ErrObjectNotFound  = errors.New("GCS object not found")
+	ErrRemoteObjectConflict = errors.New("GCS object does not match requested content ID")
+	ErrObjectNotFound       = errors.New("GCS object not found")
 )
 
 // apiAttrs are the object attributes returned by the GCS JSON API.
 type apiAttrs struct {
+	Name       string
 	ID         content.ID
 	Size       int64
 	Generation int64
@@ -32,30 +34,42 @@ type gcsAPI interface {
 	Upload(context.Context, string, content.ID, int64, []byte, io.Reader) (apiAttrs, error)
 	Attrs(context.Context, string) (apiAttrs, error)
 	Open(context.Context, string) (io.ReadCloser, error)
-	List(context.Context) ([]apiAttrs, error)
+	List(context.Context, string) ([]apiAttrs, error)
 }
 
-// Store implements the remote immutable-replica operations for one bucket.
+// Store implements remote immutable object operations for one GCS bucket.
 type Store struct {
 	bucket string
+	prefix string
 	api    gcsAPI
 }
 
-// NewStore constructs a GCS replica store around an authenticated Cloud Storage client.
-func NewStore(bucket string, client *storage.Client) (*Store, error) {
-	if bucket == "" || client == nil {
-		return nil, errors.New("GCS bucket and client are required")
+var (
+	_ objectstore.RemoteObjectStore = (*Store)(nil)
+)
+
+// NewStore constructs a GCS object store around an authenticated Cloud Storage client.
+func NewStore(remoteURI string, client *storage.Client) (*Store, error) {
+	bucket, prefix, err := ParseRemoteURI(remoteURI)
+	if err != nil {
+		return nil, err
 	}
-	return NewStoreWithAPI(bucket, &storageAPI{bucket: client.Bucket(bucket)}), nil
+	if client == nil {
+		return nil, errors.New("GCS client is required")
+	}
+	return &Store{bucket: bucket, prefix: prefix, api: &storageAPI{bucket: client.Bucket(bucket), prefix: prefix}}, nil
 }
 
 // NewClientStore constructs a GCS store using Application Default Credentials.
-func NewClientStore(ctx context.Context, bucket string) (*Store, *storage.Client, error) {
+func NewClientStore(ctx context.Context, remoteURI string) (*Store, *storage.Client, error) {
+	if _, _, err := ParseRemoteURI(remoteURI); err != nil {
+		return nil, nil, err
+	}
 	client, err := storage.NewClient(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create GCS client: %w", err)
 	}
-	store, err := NewStore(bucket, client)
+	store, err := NewStore(remoteURI, client)
 	if err != nil {
 		return nil, nil, errors.Join(err, client.Close())
 	}
@@ -63,76 +77,130 @@ func NewClientStore(ctx context.Context, bucket string) (*Store, *storage.Client
 }
 
 // NewStoreWithAPI supports deterministic tests without contacting Google Cloud.
-func NewStoreWithAPI(bucket string, api gcsAPI) *Store { return &Store{bucket: bucket, api: api} }
+func NewStoreWithAPI(remoteURI string, api gcsAPI) (*Store, error) {
+	bucket, prefix, err := ParseRemoteURI(remoteURI)
+	if err != nil {
+		return nil, err
+	}
+	return NewStoreWithAPIAndPrefix(bucket, prefix, api), nil
+}
 
-func objectName(id content.ID) string { return "objects/" + id.String() }
+func NewStoreWithAPIAndPrefix(bucket, prefix string, api gcsAPI) *Store {
+	return &Store{bucket: bucket, prefix: prefix, api: api}
+}
+
+// ParseRemoteURI validates gs://bucket[/prefix] and preserves every prefix byte.
+// It deliberately avoids URL parsing so escaped bytes and trailing slashes are
+// never decoded or normalized.
+func ParseRemoteURI(remoteURI string) (bucket, prefix string, err error) {
+	const scheme = "gs://"
+	if !strings.HasPrefix(remoteURI, scheme) {
+		return "", "", fmt.Errorf("remote URI must use gs://")
+	}
+	rest := remoteURI[len(scheme):]
+	if rest == "" || strings.ContainsAny(rest, "?#\\") || strings.ContainsAny(remoteURI, "\x00\r\n") {
+		return "", "", fmt.Errorf("malformed GCS remote URI")
+	}
+	bucket, prefix, hasPrefix := strings.Cut(rest, "/")
+	if bucket == "" || bucket == "." || bucket == ".." || strings.Contains(bucket, "%") || strings.Contains(bucket, ":") || strings.Contains(bucket, "@") {
+		return "", "", fmt.Errorf("malformed GCS bucket in remote URI")
+	}
+	for _, r := range bucket {
+		valid := r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '.' || r == '_'
+		if !valid {
+			return "", "", fmt.Errorf("malformed GCS bucket in remote URI")
+		}
+	}
+	if !hasPrefix {
+		prefix = ""
+	}
+	for _, segment := range strings.Split(prefix, "/") {
+		if segment == "." || segment == ".." {
+			return "", "", fmt.Errorf("malformed GCS object prefix in remote URI")
+		}
+	}
+	return bucket, prefix, nil
+}
+
+func (s *Store) objectName(id content.ID) string { return s.prefix + "objects/" + id.String() }
 
 // Upload writes directly to the final object name with a generation-match-zero
 // precondition. If the response is ambiguous or the name already exists, API
 // attributes are queried and accepted only when they identify this content ID
 // and size. No object bytes are read back from GCS.
-func (s *Store) Upload(ctx context.Context, id content.ID, size int64, expectedMD5 []byte, src io.Reader) (objectstore.ReplicaInfo, error) {
+func (s *Store) Upload(ctx context.Context, id content.ID, size int64, expectedMD5 []byte, src io.Reader) (objectstore.RemoteObjectInfo, error) {
 	if err := id.Validate(); err != nil {
-		return objectstore.ReplicaInfo{}, err
+		return objectstore.RemoteObjectInfo{}, err
 	}
 	if len(expectedMD5) != md5.Size {
-		return objectstore.ReplicaInfo{}, fmt.Errorf("upload requires a precomputed MD5")
+		return objectstore.RemoteObjectInfo{}, fmt.Errorf("upload requires a precomputed MD5")
 	}
-	attrs, uploadErr := s.api.Upload(ctx, objectName(id), id, size, expectedMD5, src)
+	name := s.objectName(id)
+	attrs, attrsErr := s.api.Attrs(ctx, name)
+	if attrsErr == nil {
+		if matches(attrs, id, size, expectedMD5) {
+			return toRemoteObjectInfo(attrs), nil
+		}
+		return objectstore.RemoteObjectInfo{}, fmt.Errorf("%w: final name %q has incompatible API attributes", ErrRemoteObjectConflict, name)
+	}
+	if !errors.Is(attrsErr, ErrObjectNotFound) {
+		return objectstore.RemoteObjectInfo{}, fmt.Errorf("inspect final GCS object %q: %w", name, attrsErr)
+	}
+	attrs, uploadErr := s.api.Upload(ctx, name, id, size, expectedMD5, src)
 	if uploadErr == nil && matches(attrs, id, size, expectedMD5) {
-		return toReplicaInfo(attrs), nil
+		return toRemoteObjectInfo(attrs), nil
 	}
 	if uploadErr == nil {
-		uploadErr = ErrReplicaConflict
+		uploadErr = ErrRemoteObjectConflict
 	}
-	attrs, attrsErr := s.api.Attrs(ctx, objectName(id))
+	attrs, attrsErr = s.api.Attrs(ctx, name)
 	if attrsErr == nil && matches(attrs, id, size, expectedMD5) {
-		return toReplicaInfo(attrs), nil
+		return toRemoteObjectInfo(attrs), nil
 	}
 	if attrsErr == nil {
-		return objectstore.ReplicaInfo{}, fmt.Errorf("%w: final name %q has incompatible API attributes", ErrReplicaConflict, objectName(id))
+		return objectstore.RemoteObjectInfo{}, fmt.Errorf("%w: final name %q has incompatible API attributes", ErrRemoteObjectConflict, name)
 	}
-	return objectstore.ReplicaInfo{}, errors.Join(fmt.Errorf("resumable GCS upload %q: %w", objectName(id), uploadErr), attrsErr)
+	return objectstore.RemoteObjectInfo{}, errors.Join(fmt.Errorf("resumable GCS upload %q: %w", name, uploadErr), attrsErr)
 }
 
 func matches(attrs apiAttrs, id content.ID, size int64, localMD5 []byte) bool {
 	return attrs.ID == id && attrs.ContentID == id.String() && attrs.Size == size && attrs.Generation > 0 && len(attrs.MD5) == md5.Size && bytes.Equal(attrs.MD5, localMD5)
 }
 
-func toReplicaInfo(attrs apiAttrs) objectstore.ReplicaInfo {
-	return objectstore.ReplicaInfo{ID: attrs.ID, Size: attrs.Size, Generation: attrs.Generation, MD5: append([]byte(nil), attrs.MD5...)}
+func toRemoteObjectInfo(attrs apiAttrs) objectstore.RemoteObjectInfo {
+	return objectstore.RemoteObjectInfo{ID: attrs.ID, ContentID: attrs.ContentID, Size: attrs.Size, Generation: attrs.Generation, MD5: append([]byte(nil), attrs.MD5...)}
 }
 
-func (s *Store) ReplicaAttrs(ctx context.Context, id content.ID) (objectstore.ReplicaInfo, error) {
+func (s *Store) RemoteAttrs(ctx context.Context, id content.ID) (objectstore.RemoteObjectInfo, error) {
 	if err := id.Validate(); err != nil {
-		return objectstore.ReplicaInfo{}, err
+		return objectstore.RemoteObjectInfo{}, err
 	}
-	attrs, err := s.api.Attrs(ctx, objectName(id))
+	attrs, err := s.api.Attrs(ctx, s.objectName(id))
 	if err != nil {
-		return objectstore.ReplicaInfo{}, err
+		return objectstore.RemoteObjectInfo{}, err
 	}
 	if attrs.ID != id || attrs.ContentID != id.String() || attrs.Generation <= 0 {
-		return objectstore.ReplicaInfo{}, ErrReplicaConflict
+		return objectstore.RemoteObjectInfo{}, ErrRemoteObjectConflict
 	}
-	return toReplicaInfo(attrs), nil
+	return toRemoteObjectInfo(attrs), nil
 }
 
-func (s *Store) OpenReplica(ctx context.Context, id content.ID) (io.ReadCloser, error) {
+func (s *Store) OpenRemote(ctx context.Context, id content.ID) (io.ReadCloser, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
 	}
-	r, err := s.api.Open(ctx, objectName(id))
+	r, err := s.api.Open(ctx, s.objectName(id))
 	if errors.Is(err, ErrObjectNotFound) {
 		return nil, objectstore.ErrObjectNotFound
 	}
 	return r, err
 }
 
-func (s *Store) ReplicaExists(ctx context.Context, id content.ID) (bool, error) {
+func (s *Store) RemoteExists(ctx context.Context, id content.ID) (bool, error) {
 	if err := id.Validate(); err != nil {
 		return false, err
 	}
-	attrs, err := s.api.Attrs(ctx, objectName(id))
+	attrs, err := s.api.Attrs(ctx, s.objectName(id))
 	if errors.Is(err, ErrObjectNotFound) {
 		return false, nil
 	}
@@ -142,21 +210,32 @@ func (s *Store) ReplicaExists(ctx context.Context, id content.ID) (bool, error) 
 	return attrs.ID == id && attrs.ContentID == id.String(), nil
 }
 
-func (s *Store) ListReplicas(ctx context.Context) ([]objectstore.ReplicaInfo, error) {
-	attrs, err := s.api.List(ctx)
+func (s *Store) ListRemoteObjects(ctx context.Context) ([]objectstore.RemoteObjectInfo, error) {
+	attrs, err := s.api.List(ctx, s.prefix+"objects/")
 	if err != nil {
 		return nil, err
 	}
-	result := make([]objectstore.ReplicaInfo, 0, len(attrs))
+	result := make([]objectstore.RemoteObjectInfo, 0, len(attrs))
+	var failures []error
 	for _, item := range attrs {
-		if item.ID.Validate() == nil && item.ContentID == item.ID.String() && item.Generation > 0 {
-			result = append(result, toReplicaInfo(item))
+		keyPrefix := s.prefix + "objects/"
+		if !strings.HasPrefix(item.Name, keyPrefix+"sha256-") {
+			continue
 		}
+		nameID, nameErr := content.ParseID(strings.TrimPrefix(item.Name, keyPrefix))
+		if err := item.ID.Validate(); err != nil || nameErr != nil || nameID != item.ID || item.ContentID == "" || item.ContentID != item.ID.String() || item.Name != keyPrefix+item.ContentID || item.Generation <= 0 {
+			failures = append(failures, fmt.Errorf("GCS object %q has missing or invalid Content ID metadata or generation", item.Name))
+			continue
+		}
+		result = append(result, toRemoteObjectInfo(item))
 	}
-	return result, nil
+	return result, errors.Join(failures...)
 }
 
-type storageAPI struct{ bucket *storage.BucketHandle }
+type storageAPI struct {
+	bucket *storage.BucketHandle
+	prefix string
+}
 
 func (a *storageAPI) Upload(ctx context.Context, name string, id content.ID, size int64, expectedMD5 []byte, src io.Reader) (apiAttrs, error) {
 	localMD5 := md5.New()
@@ -180,7 +259,7 @@ func (a *storageAPI) Upload(ctx context.Context, name string, id content.ID, siz
 	}
 	result := convertAttrs(name, attrs)
 	if len(result.MD5) != md5.Size || !bytes.Equal(result.MD5, expectedMD5) || !bytes.Equal(localMD5.Sum(nil), expectedMD5) {
-		return apiAttrs{}, ErrReplicaConflict
+		return apiAttrs{}, ErrRemoteObjectConflict
 	}
 	return result, nil
 }
@@ -198,13 +277,15 @@ func (a *storageAPI) Attrs(ctx context.Context, name string) (apiAttrs, error) {
 
 func convertAttrs(name string, attrs *storage.ObjectAttrs) apiAttrs {
 	var id content.ID
+	contentID := ""
 	if attrs.Metadata != nil {
-		parsed, err := content.ParseID(attrs.Metadata["nando-content-id"])
+		contentID = attrs.Metadata["nando-content-id"]
+		parsed, err := content.ParseID(contentID)
 		if err == nil {
 			id = parsed
 		}
 	}
-	return apiAttrs{ID: id, Size: attrs.Size, Generation: attrs.Generation, ContentID: id.String(), MD5: append([]byte(nil), attrs.MD5...)}
+	return apiAttrs{Name: attrs.Name, ID: id, Size: attrs.Size, Generation: attrs.Generation, ContentID: contentID, MD5: append([]byte(nil), attrs.MD5...)}
 }
 
 func (a *storageAPI) Open(ctx context.Context, name string) (io.ReadCloser, error) {
@@ -215,8 +296,8 @@ func (a *storageAPI) Open(ctx context.Context, name string) (io.ReadCloser, erro
 	return r, err
 }
 
-func (a *storageAPI) List(ctx context.Context) ([]apiAttrs, error) {
-	iter := a.bucket.Objects(ctx, &storage.Query{Prefix: "objects/"})
+func (a *storageAPI) List(ctx context.Context, wantPrefix string) ([]apiAttrs, error) {
+	iter := a.bucket.Objects(ctx, &storage.Query{Prefix: wantPrefix})
 	var result []apiAttrs
 	for {
 		attrs, err := iter.Next()
@@ -227,7 +308,7 @@ func (a *storageAPI) List(ctx context.Context) ([]apiAttrs, error) {
 			return nil, err
 		}
 		name := attrs.Name
-		if len(name) <= len("objects/") || name[:len("objects/")] != "objects/" {
+		if !strings.HasPrefix(name, wantPrefix) || len(name) <= len(wantPrefix) {
 			continue
 		}
 		result = append(result, convertAttrs(name, attrs))

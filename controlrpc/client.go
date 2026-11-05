@@ -139,7 +139,7 @@ func ReadTokenFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if info.Mode().Perm()&0077 != 0 {
+	if info.Mode().Perm()&0o077 != 0 {
 		return "", fmt.Errorf("bearer token file %q must not be accessible by group or others", path)
 	}
 	data, err := os.ReadFile(path)
@@ -151,6 +151,32 @@ func ReadTokenFile(path string) (string, error) {
 		return "", fmt.Errorf("bearer token file is empty")
 	}
 	return token, nil
+}
+
+// ResolveToken resolves one configured bearer-token source. An unset
+// environment variable produces an empty token, preserving unauthenticated
+// local-socket behavior. The caller must not include the returned token in
+// diagnostics.
+func ResolveToken(literal, file, envName string) (string, error) {
+	count := 0
+	for _, source := range []string{literal, file, envName} {
+		if source != "" {
+			count++
+		}
+	}
+	if count > 1 {
+		return "", errors.New("daemon token sources are mutually exclusive")
+	}
+	if literal != "" {
+		return literal, nil
+	}
+	if file != "" {
+		return ReadTokenFile(file)
+	}
+	if envName != "" {
+		return os.Getenv(envName), nil
+	}
+	return "", nil
 }
 
 // DefaultEndpoint returns a per-user local socket endpoint for one repository.
@@ -170,10 +196,10 @@ func DefaultEndpoint(repoDir string) (string, error) {
 	} else {
 		base = filepath.Join(base, "nando")
 	}
-	if err := os.MkdirAll(base, 0700); err != nil {
+	if err := os.MkdirAll(base, 0o700); err != nil {
 		return "", fmt.Errorf("create daemon socket directory: %w", err)
 	}
-	if err := os.Chmod(base, 0700); err != nil {
+	if err := os.Chmod(base, 0o700); err != nil {
 		return "", fmt.Errorf("restrict daemon socket directory permissions: %w", err)
 	}
 	digest := sha256.Sum256([]byte(filepath.Clean(absolute)))

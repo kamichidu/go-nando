@@ -1,25 +1,64 @@
-# Copy to the per-user config path:
-#   Linux/macOS: ${XDG_CONFIG_HOME:-~/.config}/nando/config.toml
-#   Windows:     ${XDG_CONFIG_HOME:-%USERPROFILE%\.config}\nando\config.toml
-#
-# Empty path values select the active defaults. The repository data directory
-# is separate from this config directory:
-#   Linux/macOS: ${XDG_DATA_HOME:-~/.local/share}/nando
-#   Windows:     ${XDG_DATA_HOME:-%USERPROFILE%\.local\share}\nando
-# If an older initialized repository is detected at the previous user-config
-# location, select it explicitly here or with --repository before using nando.
+# nando per-user configuration.
+# Copy this file to ${XDG_CONFIG_HOME:-~/.config}/nando/config.toml. nando,
+# nando-fuse, and nando-webdav all read this same per-user file; each accepts
+# --config/-config to select an alternate file.
+# Uncomment only the settings you need. Command-line flags take precedence.
 
-repository = ""
-verbose = false
+# Local repository directory. Actual default: empty (use the default data
+# directory). This is the filesystem path for the repository, not a logical
+# directory inside nando.
+[repository]
+# path = "/home/alex/nando-data"
 
-# Empty endpoint uses the repository-specific local UDS endpoint. A TCP
-# endpoint requires daemon_tls_cert, daemon_tls_key, and daemon_token_file.
-daemon_endpoint = ""
-daemon_token_file = ""
-daemon_ca_cert = ""
-daemon_tls_cert = ""
-daemon_tls_key = ""
+# Enable diagnostic logging. Actual default: false.
+[logging]
+# verbose = false
 
+# Remote delivery scheduler policy. These are examples, not defaults.
+# Remote repositories require all four values. Durations must be positive.
+# Local repositories can also use these values to schedule maintenance.
+[remote]
+# GCS repository URI, for example "gs://my-nando-bucket/archive/".
+# The prefix is literal: trailing slashes are preserved and no separator is
+# inserted. When set, it must match the URI persisted at repository init.
+# remote_uri = "gs://my-nando-bucket/archive/"
+# sync_idle_interval = "30s"
+# sync_periodic_interval = "5m"
+# max_delivery_delay = "30m"
+# sync_parallelism = 2
+
+# Daemon transport and credentials. `listen` configures both the daemon's
+# listening address and the address all client commands connect to, including
+# FUSE and WebDAV. If omitted, both use the repository-specific local Unix
+# socket. The values below are illustrative.
+# WebDAV's [webdav].listen / --webdav-listen remain its separate HTTP bind address.
+# TCP listeners require TLS and bearer auth; configure the matching client
+# token source and CA certificate where needed.
+[daemon]
+# listen = "tcp://127.0.0.1:7443"
+
+# Select at most one token source. Uncomment exactly one line when using TCP.
+# These three settings are mutually exclusive, even when an empty value is set.
+# token = "replace-with-a-secret"       # Example literal token value.
+# token_from_file = "/etc/nando/token"  # Example path containing the token.
+# token_from_env = "NANDO_DAEMON_TOKEN" # Example environment variable name.
+
+# CA certificate used by clients to verify a private server certificate.
+# ca_cert = "/etc/nando/ca.pem"
+
+# Server certificate and private key read by `nando daemon` for TCP TLS.
+# tls_cert = "/etc/nando/server.pem"
+# tls_key = "/etc/nando/server-key.pem"
+
+# Adapter settings. CLI options override these values.
+[fuse]
+# mountpoint = "/mnt/nando"
+
+[webdav]
+# listen = "127.0.0.1:8080"
+
+# Logical directory inside nando for `nando admin recover` when restoring
+# unreferenced GCS objects. Actual default: /recyclebin. This is not the local
+# repository directory configured by [repository].path.
 [recovery]
-# Logical destination for GCS orphan metadata recovery.
-directory = "/recyclebin"
+# directory = "/recyclebin"

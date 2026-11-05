@@ -5,7 +5,7 @@ schema_ref:
 model:
   id: go-nando
   title: go-nando repository design
-  description: Canonical semantic design for repository authority, storage contracts, operation consistency, failure outcomes, and implementation roadmap.
+  description: Canonical semantic design for the formal v1 baseline, repository authority, storage contracts, operation consistency, failure outcomes, and implementation roadmap. No pre-v1 repository, configuration, API, CLI, schema, or recovery compatibility is guaranteed.
   domain: file repository
   profile: repository-system-design
 nodes:
@@ -24,7 +24,7 @@ nodes:
   - id: REQ-OBJECT-SSOT
     level: system_requirement
     kind: authority-invariant
-    statement: The Object Store replica set MUST own the immutable bytes identified by each content ID. The delivery mode defines which physical replica is authoritative or required for durability; physical Object placement MUST NOT determine logical Entry visibility, which remains Metadata Store authority.
+    statement: The Object Store MUST own immutable bytes identified by each content ID. Local mode uses Local Object Storage as its durable authority. Remote mode uses Local durable staging/cache and exactly one selected remote object-storage backend; remote placement MUST NOT determine logical Entry visibility, which remains Metadata Store authority.
     provenance:
       origin: imported
   - id: REQ-OBJECT-COMMIT
@@ -48,7 +48,7 @@ nodes:
   - id: REQ-PUT-GC-EXCLUSION
     level: system_requirement
     kind: concurrency-invariant
-    statement: A single Lease model MUST protect resources identified by resource ID and operation ID and MUST carry an RLock or WLock mode, expiry, and extensible information. One operation MAY hold Leases for multiple resources. RLocks are shared; a WLock is exclusive against all RLocks and WLocks for the same resource. Local and GCS operations use the same Lease contract and state transitions. Lease state changes MUST be atomic in SQLite transactions. Put, Get, upload, and download MUST hold RLocks; physical Local GC deletion MUST hold and renew a WLock, then re-evaluate metadata references and other deletion eligibility while holding it. Heartbeat renewal failure or expiry MUST stop the operation and prohibit subsequent Local Publish, Metadata Commit, or transfer-state confirmation. Long-running I/O MUST NOT hold Repository-wide exclusive coordination. I/O already sent before expiry MAY complete late; this is a documented availability boundary, not a reason to add fencing, deletion states, or storage-specific transitions.
+    statement: A single Lease model MUST protect resources identified by resource ID and operation ID and MUST carry an RLock or WLock mode, expiry, and extensible information. One operation MAY hold Leases for multiple resources. RLocks are shared; a WLock is exclusive against all RLocks and WLocks for the same resource. Local and the selected remote backend use the same Lease contract and state transitions. Lease state changes MUST be atomic in SQLite transactions. Put, Get, upload, and download MUST hold RLocks; physical Local GC deletion MUST hold and renew a WLock, then re-evaluate metadata references and other deletion eligibility while holding it. Heartbeat renewal failure or expiry MUST stop the operation and prohibit subsequent Local Publish, Metadata Commit, or transfer-state confirmation. Long-running I/O MUST NOT hold Repository-wide exclusive coordination. I/O already sent before expiry MAY complete late; this is a documented availability boundary, not a reason to add fencing, deletion states, or storage-specific transitions.
     provenance:
       origin: imported
   - id: REQ-READ-GC-EXCLUSION
@@ -72,7 +72,7 @@ nodes:
   - id: REQ-NO-RESUME
     level: system_requirement
     kind: failure-invariant
-    statement: Repository operations MUST NOT persist logical-operation progress for later resumption; interruption is handled according to the last committed boundary. GCS replication may persist content-ID-level delivery obligation and confirmation so unfinished content can be rediscovered and a fresh idempotent transfer attempted; this is not resumption of the original Put and does not create Pending Entries.
+    statement: Repository operations MUST NOT persist logical-operation progress for later resumption; interruption is handled according to the last committed boundary. Remote delivery may persist a content-ID-level delivery obligation and confirmation so unfinished content can be rediscovered and a fresh idempotent transfer attempted; this is not resumption of the original Put and does not create Pending Entries.
     provenance:
       origin: imported
   - id: REQ-PUT-STAGE-RESOURCE-LEASE
@@ -84,9 +84,15 @@ nodes:
   - id: REQ-DELIVERY-MODES
     level: system_requirement
     kind: deployment-invariant
-    statement: The repository MUST support a Local delivery mode in which GCS is absent and Local is the authoritative durable Object Store, and a GCS delivery mode in which each write first durably commits complete content to Local and atomically commits Metadata plus its GCS delivery obligation. Phase A exposes this committed state immediately through the single daemon; GCS replication is deferred until the configured idle/periodic/max-delay policy selects it.
+    statement: The repository MUST support Local delivery mode, where Local Object Storage is the durable authority, and Remote delivery mode, where each write first durably commits complete content to Local and atomically commits Metadata plus its remote delivery obligation. Exactly one remote object-storage backend is selected per repository. Phase A exposes the committed state immediately through the single daemon; asynchronous delivery follows the configured idle/periodic/maximum-delay policy. The current and only implemented remote backend is GCS.
     provenance:
-      origin: imported
+      origin: human-authored
+  - id: REQ-REMOTE-BACKEND-SELECTION
+    level: system_requirement
+    kind: deployment-invariant
+    statement: Each repository MUST select at most one remote object-storage backend. Local durable staging/cache and asynchronous delivery are part of Remote mode semantics. Multiple remote backends, fanout, failover, tiering, and a provider plugin registry are unsupported and are not planned. GCS is the sole currently implemented remote backend.
+    provenance:
+      origin: human-authored
   - id: REQ-REPLICATION-OBLIGATION
     level: system_requirement
     kind: persistence-invariant
@@ -110,7 +116,7 @@ nodes:
     level: system_requirement
     kind: verification-invariant
     statement: >-
-      The repository MUST provide one host-command G0-G3 verification gate with isolated temporary repository state, recorded scenario evidence, bounded readiness/operation deadlines, strict terminal PASS/FAIL/SKIP outcomes, and unconditional project-scoped cleanup. Docker Compose MUST manage only external dependency services; the nando daemon, real FUSE mount, and E2E runner MUST execute natively on the Linux/WSL host. G0 MUST run root and FUSE module tests, race tests, lint, native binary builds, and Design IR validation. G1 MUST use a real kernel FUSE mount in Local mode without GCS and verify CRUD, fsync/final-close durability, multiple writers, stable-Entry rename, open-handle unlink, and CAS conflict/recovery. G2 MUST use a pinned fake GCS JSON API emulator and verify local-before-remote commit, a directly observed emulator outage plus the corresponding repository transport error, retry after emulator restart, and idempotent duplicate content delivery through external object API observations. G2 MUST inject an upload-response hold after the emulator has persisted an object, crash the daemon before transfer acknowledgement, then verify restart retries the pending obligation without changing object generation or creating another object. Recovery retry MUST use the original durable CAS expectation: an absent-path session MAY commit only while the path remains absent; an existing Entry session MUST commit only while its observed identity and content remain valid (allowing namespace-only rename under the stable-Entry contract). A retry that succeeds MUST remove the recovery obligation only after committed content is externally readable and byte-identical; a genuine conflict MUST retain staging and the original expectation, identify the conflict, and MUST NOT overwrite the winning Entry. Recovery verification MUST invoke retry and compare the committed bytes with the exact expected payload and SHA-256, not infer content from record metadata. G3 MUST crash and restart daemon and FUSE processes, verify uncommitted staging Recovery, and verify successful-fsync data persistence. Child processes MUST be tracked in isolated process groups; timeout and abnormal exit cleanup MUST inspect run-scoped FUSE mounts and processes, report uninterruptible D-state processes, and make any cleanup failure fail the gate. A missing FUSE device or denied mount MUST be reported as SKIP or FAIL and MUST NOT count as a passing real-mount gate. G4 stress MAY run separately and MUST remain bounded; when enabled it MUST verify large binary content, truncation, deterministic random-offset writes through concurrent handles to one file, and final bytes by SHA-256. The emulator MUST NOT be treated as evidence of IAM, ACL, or complete production GCS semantics.
+      The repository MUST provide one host-command G0-G3 verification gate with isolated temporary repository state, recorded scenario evidence, bounded readiness/operation deadlines, strict terminal PASS/FAIL/SKIP outcomes, and unconditional project-scoped cleanup. Docker Compose MUST manage only external dependency services; the nando daemon, real FUSE mount, and E2E runner MUST execute natively on the Linux/WSL host. G0 MUST run root and FUSE module tests, race tests, lint, native binary builds, and Design IR validation. G1 MUST use a real kernel FUSE mount in Local mode without GCS and verify CRUD, fsync/final-close durability, multiple writers, stable-Entry rename, open-handle unlink, CAS conflict/recovery, and a relative daemon repository root supporting CLI put/cat and FUSE copy/cat with byte-identical results. G2 MUST use a pinned fake GCS JSON API emulator and verify local-before-remote commit, a directly observed emulator outage plus the corresponding repository transport error, retry after emulator restart, and idempotent duplicate content delivery through external object API observations. G2 MUST inject an upload-response hold after the emulator has persisted an object, crash the daemon before transfer acknowledgement, then verify restart retries the pending obligation without changing object generation or creating another object. Recovery retry MUST use the original durable CAS expectation: an absent-path session MAY commit only while the path remains absent; an existing Entry session MUST commit only while its observed identity and content remain valid (allowing namespace-only rename under the stable-Entry contract). A retry that succeeds MUST remove the recovery obligation only after committed content is externally readable and byte-identical; a genuine conflict MUST retain staging and the original expectation, identify the conflict, and MUST NOT overwrite the winning Entry. Recovery verification MUST invoke retry and compare the committed bytes with the exact expected payload and SHA-256, not infer content from record metadata. G3 MUST crash and restart daemon and FUSE processes, verify uncommitted staging Recovery, and verify successful-fsync data persistence. Child processes MUST be tracked in isolated process groups; timeout and abnormal exit cleanup MUST inspect run-scoped FUSE mounts and processes, report uninterruptible D-state processes, and make any cleanup failure fail the gate. A missing FUSE device or denied mount MUST be reported as SKIP or FAIL and MUST NOT count as a passing real-mount gate. G4 stress MAY run separately and MUST remain bounded; when enabled it MUST verify large binary content, truncation, deterministic random-offset writes through concurrent handles to one file, and final bytes by SHA-256. The emulator MUST NOT be treated as evidence of IAM, ACL, or complete production GCS semantics.
     provenance:
       origin: human-authored
   - id: REQ-RESOURCE-SESSIONS
@@ -134,7 +140,7 @@ nodes:
       manifest_staging_path: repository-root-relative
       manifest_staging_path_format: temp/rpc-sessions/<session-id>.stage
       manifest_staging_path_validation: exact-session-match; reject-absolute-and-traversal; reject-symlinks; require-regular-file
-      legacy_manifest_v1: never-open-stored-absolute-path; migrate-only-when-current-root-expected-stage-exists-and-is-regular
+      unsupported_manifest_versions: reject-without-opening-paths-or-modifying-staging
       begin_manifest_reconstruction_anchor: true
       durable_commit_completion_marker: true
       durable_discard_tombstone_before_cleanup: true
@@ -148,25 +154,25 @@ nodes:
   - id: REQ-GCS-PUBLICATION
     level: system_requirement
     kind: object-publication-invariant
-    statement: GCS upload MUST begin only after the content ID and an expected MD5 computed independently of the upload stream are known. It MUST use a resumable upload directly to objects/{content_id}, MUST NOT create a temporary GCS Object or copy one, and MUST NOT replace an existing live Object. Synchronization MUST first query/reconcile an existing final object by API attributes and skip payload upload when the same immutable content is already delivered. A successful GCS API upload response is authoritative transfer completion. If the response is ambiguous, the Repository MUST query the final object and use GCS API attributes to converge; an existing-name/precondition result MUST be handled idempotently by checking those API attributes against the expected content ID, size, and precomputed MD5, independent of how many input bytes the failed upload consumed. The Repository MUST retain the GCS generation and other API metadata required for subsequent conditional operations. A separate full-object read-back SHA-256 pass is not required; Local hash verification remains required, and detection of arbitrary external GCS corruption is not guaranteed.
+    statement: GCS upload MUST begin only after the content ID and an expected MD5 computed independently of the upload stream are known. It MUST use a resumable upload directly to the configured literal prefix concatenated with objects/{content_id}, MUST NOT create a temporary GCS Object or copy one, and MUST NOT replace an existing live Object. Synchronization MUST first query/reconcile an existing final object by API attributes and skip payload upload when the same immutable content is already delivered. A successful GCS API upload response is authoritative transfer completion. If the response is ambiguous, the Repository MUST query the final object and use GCS API attributes to converge; an existing-name/precondition result MUST be handled idempotently by checking those API attributes against the expected content ID, size, and precomputed MD5, independent of how many input bytes the failed upload consumed. The Repository MUST retain the GCS generation and other API metadata required for subsequent conditional operations. A separate full-object read-back SHA-256 pass is not required; Local hash verification remains required, and detection of arbitrary external GCS corruption is not guaranteed.
     provenance:
       origin: imported
   - id: REQ-LOCAL-CAPACITY-GC
     level: system_requirement
     kind: garbage-collection-invariant
-    statement: Capacity GC and local invalid-orphan GC MUST be distinct maintenance operations. Capacity GC MUST operate on Local storage only, inspect configured capacity policy, and reclaim eligible Local cache copies only when needed; it MUST NOT delete GCS Objects, Local authoritative Objects in Local mode, untransferred GCS-mode Objects, or RLock-protected resources. Local orphan cleanup MUST preserve every content ID with an uncompleted GCS delivery obligation and recheck that obligation under the content WLock immediately before deletion. Ordinary and scheduled Repository GC MUST NOT enumerate or delete GCS Objects. The dedicated `nando admin recover` recovery command MUST detect GCS Objects whose Content IDs have no SQLite Entry reference and create file Entries at `<recovery.directory>/<content-id>` (default `/recyclebin/<content-id>`). Original names are unknown and MUST NOT be guessed. Recovery MUST be idempotent, require a valid Content ID and exactly 16-byte GCS MD5 attribute, preserve that MD5, and treat listed GCS bytes and attributes as authoritative without a full-object download or SHA-256 re-hash. Missing/invalid MD5 MUST be reported as an error and MUST NOT be treated as successful recovery; valid objects MAY still be recovered with aggregated errors. Recovery MUST take the per-content WLock and recheck Metadata references while holding it before restoring, and leave GCS object names and bytes unchanged. Existing `<recovery.directory>/<content-id>` paths containing a different Entry MUST be left untouched and reported as conflicts. SQLite reference absence, including a valid initialized Metadata database with no Entry references for a GCS Content ID, MUST trigger Metadata recovery rather than GCS deletion. Put, Download, or another operation that encounters actual Local capacity exhaustion MUST fail with a capacity error; no reservation guarantee is required. No automated GC may delete GCS objects; deletion of a restored GCS object requires a separate explicit human action and is not provided by a project command.
+    statement: Capacity GC and local invalid-orphan GC MUST be distinct maintenance operations. Capacity GC MUST operate on Local storage only, inspect configured capacity policy, and reclaim eligible Local cache copies only when needed; it MUST NOT delete remote Objects, Local authoritative Objects in Local mode, undelivered Remote-mode Objects, or RLock-protected resources. Local orphan cleanup MUST preserve every content ID with an uncompleted remote delivery obligation and recheck that obligation under the content WLock immediately before deletion. Ordinary and scheduled Repository GC MUST NOT enumerate or delete remote Objects. The dedicated `nando admin recover` command MUST detect remote Objects whose Content IDs have no SQLite Entry reference and create file Entries at `<recovery.directory>/<content-id>` (default `/recyclebin/<content-id>`). Original names are unknown and MUST NOT be guessed. Recovery MUST be idempotent and leave remote object names and bytes unchanged. For the current GCS backend, recovery requires a valid Content ID and exactly 16-byte GCS MD5 attribute, preserves that MD5, and treats listed GCS bytes and attributes as authoritative without a full-object download or SHA-256 re-hash. Missing/invalid MD5 MUST be reported as an error and MUST NOT be treated as successful recovery; valid objects MAY still be recovered with aggregated errors. Recovery MUST take the per-content WLock and recheck Metadata references while holding it before restoring. Existing `<recovery.directory>/<content-id>` paths containing a different Entry MUST be left untouched and reported as conflicts. SQLite reference absence MUST trigger Metadata recovery rather than remote object deletion. Put, Download, or another operation that encounters actual Local capacity exhaustion MUST fail with a capacity error; no reservation guarantee is required. No automated GC or CLI operation may delete remote Objects; deletion of a restored remote Object requires a separate explicit human action and is not provided by a project command.
     provenance:
       origin: imported
   - id: REQ-READ-THROUGH
     level: system_requirement
     kind: read-path-invariant
-    statement: In GCS delivery mode, Get and Cat MUST prefer a complete Local Object. If it is absent, the Repository MUST acquire RLocks for the content ID and shared temporary ID, download to shared temporary storage, verify the complete bytes against the content ID, and publish the Local Object without replacement before serving it. A partial download MUST never become a committed Local Object. If an already-sent GCS request completes after its Resource Lease expires and a subsequent read receives 404, that read fails locally without changing Metadata. A direct GCS-to-Get destination streaming path is not required; progress-following streaming remains an optional future design.
+    statement: In Remote delivery mode, Get and Cat MUST prefer a complete Local Object. If it is absent, the Repository MUST acquire RLocks for the content ID and shared temporary ID, download from the selected remote backend to shared temporary storage, verify the complete bytes against the content ID, and publish the Local Object without replacement before serving it. A partial download MUST never become a committed Local Object. If an already-sent GCS request completes after its Resource Lease expires and a subsequent read receives 404, that read fails locally without changing Metadata. Direct remote-to-Get destination streaming is not required; progress-following streaming remains an optional future design.
     provenance:
       origin: imported
   - id: REQ-LOCAL-GCS-IMMUTABILITY
     level: system_requirement
     kind: immutability-invariant
-    statement: Local and GCS publication for a content ID MUST be no-replace. Local pre-existing Objects MUST retain existing content-ID hash verification. GCS upload success follows the GCS API response contract; ambiguous completion and existing-name results are reconciled through object lookup and API attributes, with generation and required API metadata retained. GCS deletion is prohibited in Repository GC and CLI workflows. Full-object GCS read-back hashing and detection of arbitrary external corruption are not required.
+    statement: Local and selected remote-backend publication for a content ID MUST be no-replace. Local pre-existing Objects MUST retain existing content-ID hash verification. For the current GCS backend, upload success follows the GCS API response contract; ambiguous completion and existing-name results are reconciled through object lookup and API attributes, with generation and required API metadata retained. Remote object deletion is prohibited in Repository GC and CLI workflows. Full-object GCS read-back hashing and detection of arbitrary external corruption are not required.
     provenance:
       origin: imported
   - id: REQ-METADATA-PORTABILITY
@@ -205,6 +211,139 @@ nodes:
     statement: Metadata backup and restoration are operator responsibilities. A Phase A backup MUST capture the complete Repository at one consistent static point after FUSE/WebDAV clients have stopped and the daemon has shut down normally with all Repository writes ceased. It MUST preserve the association among SQLite Metadata and any WAL/SHM sidecars, Repository Format, delivery obligations, Local Objects, Recovery staging/manifests, coordination state, and repository-owned settings. Operators select the snapshot/copy mechanism; no storage technology is mandated. Restore MUST occur while stopped, preserve owner/mode and Repository configuration, and verify integrity before clients resume. Backup procedures do not require GCS delivery to drain; pending obligations are preserved for scheduler retry. Repository-external configuration and credentials remain operator-managed separately.
     provenance:
       origin: imported
+  - id: REQ-USER-CONFIG-TABLES
+    level: system_requirement
+    kind: configuration-contract
+    statement: >-
+      User TOML configuration MUST place the repository path at
+      [repository].path and the process-wide verbose logging flag at
+      [logging].verbose. The previous top-level repository and verbose keys
+      MUST be rejected as unknown keys. CLI --repository and --verbose flags
+      remain supported, and this configuration schema change MUST NOT alter
+      the repository-owned repository.json persistence format.
+    attributes:
+      repository_path: repository.path
+      verbose_flag: logging.verbose
+      legacy_top_level_keys: rejected
+      cli_overrides: supported
+      repository_settings_file: repository.json
+    provenance:
+      origin: human-authored
+  - id: REQ-V1-BASELINE
+    level: system_requirement
+    kind: compatibility-boundary
+    statement: The first formal release is v1. Compatibility guarantees begin at v1; pre-v1 repository and on-disk state, repository settings, runtime configuration spellings, APIs, CLI spellings, SQLite schema histories, and Recovery manifest versions are unsupported. Detection of unsupported state MUST fail clearly before mutation and MUST preserve the original data for operator recovery. The current GCS backend and canonical remote_backend=gcs selection remain supported v1 behavior.
+    attributes:
+      formal_release: v1
+      pre_v1_compatibility: none
+      unsupported_state_policy: explicit-error-no-mutation-no-deletion
+      current_gcs_backend: supported
+      current_remote_backend_value: gcs
+    provenance:
+      origin: human-authored
+  - id: REQ-RELEASE-DISTRIBUTION-AND-DEVELOPMENT-WORKSPACE
+    level: system_requirement
+    kind: distribution-and-development-contract
+    statement: >-
+      GitHub Releases prebuilt archives and the Debian package are the official
+      installation path for general users. README Installation MUST direct
+      users to those release assets and MUST NOT recommend `go install
+      @latest`. Developers cloning the repository MUST use the committed Go
+      workspace containing the root, FUSE, and WebDAV modules. From the
+      repository root, the supported source installation commands are `go
+      install ./cmd/nando`, `go install ./adapters/fuse/cmd/nando-fuse`, and
+      `go install ./adapters/webdav/cmd/nando-webdav`. Adapter go.mod files MUST
+      NOT use local filesystem replace directives for the root module. A root
+      `go install ./...` covers only root-module packages, so workspace-aware
+      build gates MUST explicitly cover all three installation targets.
+      Release, CI, and E2E builds MUST resolve the checked-out modules through
+      the committed workspace, including a workspace-scoped local replacement
+      for the adapters' unreleased root-module requirement. A dependency on an
+      unpublished project module MUST NOT be made to appear valid by inventing
+      a release tag.
+    attributes:
+      general_user_installation: GitHub-Releases-archives-and-Debian-package
+      readme_go_install_at_latest: prohibited
+      developer_workspace_modules: [root, adapters/fuse, adapters/webdav]
+      developer_install_targets:
+        - ./cmd/nando
+        - ./adapters/fuse/cmd/nando-fuse
+        - ./adapters/webdav/cmd/nando-webdav
+      local_adapter_replace: prohibited
+      workspace_root_dependency_replacement: "github.com/kamichidu/go-nando v0.0.0 => ."
+      root_go_install_all_includes_nested_modules: false
+      unpublished_module_tag_invention: prohibited
+    provenance:
+      origin: human-authored
+  - id: REQ-SQLITE-SCHEMA-VERSIONING
+    level: system_requirement
+    kind: compatibility-invariant
+    statement: >-
+      SQLite PRAGMA user_version MUST be the sole authority for SQLite schema
+      version, with initial schema version 1. Each schema change MUST increment
+      user_version by exactly one; schema version MUST be independent of
+      application semantic version. The application release sequence starts at
+      v1.0.0 and proceeds through sequential minor releases, with patch releases
+      for fixes; this sequence MUST NOT be inferred from or encoded by
+      user_version. Each released executable MUST support migration from exactly
+      the immediately preceding schema N-1 to its own schema N, and MUST NOT
+      skip versions, support N-2 or older schemas, or carry a historical
+      migration chain. Migration code in a release MUST cover only its immediate
+      predecessor. `nando admin migrate` MUST be the sole explicit migration
+      entry point. Normal startup and initialization MUST validate the schema
+      version and refuse mismatches without migration; initialization MAY
+      complete a recognized interrupted repository provisioning state, but MUST
+      never migrate an existing database or modify an unsupported schema. A
+      valid existing v1 database MUST be validated and left unchanged. Unknown,
+      older, newer, and legacy schema/data states MUST be
+      refused without mutation. A migration MUST apply schema changes and the
+      new user_version in one transaction and roll back both on failure.
+      Downgrade is unsupported. Operators upgrading across a schema change MUST
+      use each intermediate release in sequence. Adjacent-only support bounds
+      migration state space and test combinatorics to one predecessor
+      transition per release.
+    attributes:
+      authority: SQLite-PRAGMA-user_version-only
+      initial_schema_version: 1
+      schema_increment: exactly-one-per-schema-change
+      application_release_sequence: v1.0.0-then-sequential-minors;patches-for-fixes
+      release_and_schema_versions_independent: true
+      supported_source_schema: immediate-predecessor-only
+      skipped_upgrade: unsupported
+      historical_migration_chain: unsupported
+      migration_entry_point: nando-admin-migrate
+      normal_startup_migration: prohibited
+      init_existing_database: validate-only-v1-and-resume-empty-schema
+      completed_init_rerun: idempotent-no-op
+      unsupported_state_mutation: prohibited
+      migration_atomicity: schema-and-user_version-same-transaction
+      downgrade: unsupported
+      operator_upgrade_path: every-intermediate-release
+      rationale: bound-migration-state-space-and-test-combinatorics
+    provenance:
+      origin: human-authored
+  - id: REQ-INIT-RESUMABLE-NO-REPLACE
+    level: system_requirement
+    kind: initialization-invariant
+    statement: >-
+      Repository initialization MUST serialize concurrent initializers across
+      processes and MUST validate existing repository components before
+      mutating them. Initialization MAY resume only recognized incomplete
+      provisioning states; unsupported or unknown state MUST fail without
+      modifying existing data. Repository-owned settings MUST be fully written,
+      synced, and closed in a same-directory temporary file before atomic
+      publication that never replaces an existing repository.json. A failed or
+      interrupted settings publication MUST leave no partial repository.json
+      and MUST allow a later initialization to resume. Existing valid v1
+      settings, metadata, coordination state, and object data MUST be preserved
+      by repeated initialization.
+    attributes:
+      settings_publication: same-directory-temp-sync-close-atomic-no-replace
+      concurrent_initialization: cross-process-serialized
+      unsupported_state: reject-without-mutation
+      retry_after_interruption: supported
+    provenance:
+      origin: human-authored
   - id: REQ-ENTRY-ID
     level: system_requirement
     kind: identity-invariant
@@ -310,7 +449,7 @@ nodes:
     level: system_design
     kind: user-configuration
     statement: >-
-      Per-user runtime configuration is TOML at $XDG_CONFIG_HOME/nando/config.toml on Linux, macOS, and Windows when XDG_CONFIG_HOME is set; otherwise it is ~/.config/nando/config.toml on Linux/macOS and %USERPROFILE%/.config/nando/config.toml on Windows. Do not use os.UserConfigDir, macOS Application Support, Windows AppData, or conf.d for the new config location. Repository data is independent: $XDG_DATA_HOME/nando when set, otherwise ~/.local/share/nando on Linux/macOS and %USERPROFILE%/.local/share/nando on Windows. CLI arguments override TOML values, which override these defaults. A missing implicit config uses defaults; a missing explicit --config or malformed existing TOML is an error. Runtime keys are repository, verbose, daemon_endpoint, daemon_token_file, daemon_ca_cert, daemon_tls_cert, and daemon_tls_key; repository delivery settings remain repository-owned in repository.json. If a previous os.UserConfigDir-based initialized repository exists and the new default data repository does not, require explicit repository selection to prevent silently opening a different repository.
+      Per-user runtime configuration is TOML at $XDG_CONFIG_HOME/nando/config.toml on Linux, macOS, and Windows when XDG_CONFIG_HOME is set; otherwise it is ~/.config/nando/config.toml on Linux/macOS and %USERPROFILE%/.config/nando/config.toml on Windows. All three binaries (nando, nando-fuse, and nando-webdav) MUST load this same file and share configuration parsing and daemon client resolution through a public package in the root module. Do not use os.UserConfigDir, macOS Application Support, Windows AppData, or conf.d for the new config location. Repository data is independent: $XDG_DATA_HOME/nando when set, otherwise ~/.local/share/nando on Linux/macOS and %USERPROFILE%/.local/share/nando on Windows. CLI arguments override TOML values, which override these defaults. A missing implicit config uses defaults; a missing explicit --config/-config or malformed existing TOML is an error. Runtime keys include repository, verbose, nested daemon listen address and transport settings, optional matching `[remote].remote_uri`, `[fuse].mountpoint`, and `[webdav].listen`. All three binaries MUST accept --config, --repository, --daemon-listen, --daemon-token-file, and --daemon-ca-cert. `[daemon].listen` MUST be used by both the daemon listener and all client connections; `[daemon].endpoint` and top-level `daemon_endpoint` are rejected. Exactly one nonempty daemon token source may be selected using daemon.token, daemon.token_from_file, or daemon.token_from_env. FUSE accepts --fuse-mountpoint and WebDAV accepts --webdav-listen; these override the corresponding TOML settings. WebDAV HTTP bind MUST NOT use `[daemon].listen`. Repository delivery settings remain repository-owned in repository.json. Unsupported pre-v1 config spellings MUST be rejected as unknown keys. No old repository-location probing is performed.
     attributes:
       format: TOML
       config_filename: config.toml
@@ -322,8 +461,10 @@ nodes:
       implicit_missing_config: defaults
       explicit_missing_config: error
       malformed_config: error
-      migration_guard: require-explicit-selection-when-legacy-repository-detected
-      active_keys: [repository, verbose, daemon_endpoint, daemon_token_file, daemon_ca_cert, daemon_tls_cert, daemon_tls_key]
+      migration_guard: none
+      active_keys: [repository, verbose, daemon.listen, daemon.token, daemon.token_from_file, daemon.token_from_env, daemon.ca_cert, daemon.tls_cert, daemon.tls_key, fuse.mountpoint, webdav.listen]
+      common_cli_flags: [config, repository, daemon-listen, daemon-token-file, daemon-ca-cert]
+      adapter_cli_flags: {fuse: fuse-mountpoint, webdav: webdav-listen}
     provenance:
       origin: human-authored
   - id: DES-APPLICATION-BOUNDARY
@@ -432,11 +573,11 @@ nodes:
   - id: DES-LOCAL-COMMIT-GLOBAL-PUBLISH
     level: system_design
     kind: visibility-and-replication-model
-    statement: Local Commit and Global Publish are separate concepts. A Local Commit means complete immutable bytes are durable in the local Object Store and the local Metadata mutation plus any GCS delivery obligation committed atomically; it is the local recovery boundary. In Phase A, the single daemon's SQLite Metadata is the visible head immediately after Local Commit and GCS is a delayed replica. In Phase B, a Local Commit is private to its daemon until Global Publish advances the Published Head; other daemons continue to observe the prior Published Head, which remains available until the new version is globally committed. A pending local version must never leak through shared Metadata as if it were globally published. Firestore transaction and multi-daemon coordination mechanics are deferred to Phase B.
+    statement: Local Commit and Global Publish are separate concepts. A Local Commit means complete immutable bytes are durable in Local Object Storage and the local Metadata mutation plus any remote delivery obligation committed atomically; it is the local recovery boundary. In Phase A, the single daemon's SQLite Metadata is the visible head immediately after Local Commit and the selected remote backend is delivered asynchronously (currently GCS). In Phase B, a Local Commit is private to its daemon until Global Publish advances the Published Head; other daemons continue to observe the prior Published Head, which remains available until the new version is globally committed. A pending local version must never leak through shared Metadata as if it were globally published. Firestore transaction and multi-daemon coordination mechanics are deferred to Phase B.
     attributes:
       phase_a_local_visibility: immediate-after-local-commit
       phase_a_metadata: SQLite
-      phase_a_gcs: idle-scheduled-replica
+      phase_a_remote_delivery: idle-scheduled;single-selected-backend
       phase_b_local_visibility: originating-daemon-only-before-publish
       phase_b_global_visibility: Published-Head
       preserve_previous_published_head_until: new-global-publish
@@ -447,7 +588,7 @@ nodes:
   - id: DES-GCS-SYNC-SCHEDULING
     level: system_design
     kind: replication-scheduler
-    statement: Local writes commit content and a content-ID delivery obligation but do not start a GCS payload upload per write. A daemon scheduler selects work after the configured idle interval, on the configured periodic check, or when the oldest obligation reaches its configured maximum delivery delay; the earliest applicable trigger makes work eligible. Parallel upload count is configurable. Before uploading bytes, the worker checks the final immutable GCS name and reconciles API attributes, so a content ID already successfully delivered is completed without retransmitting its payload. Queue state remains durable across daemon restarts. A queued content ID protects its complete Local source from orphan and capacity GC until delivery is confirmed.
+    statement: Remote writes commit content and a content-ID delivery obligation but do not start a payload upload per write. A daemon scheduler selects work after the configured idle interval, on the configured periodic check, or when the oldest obligation reaches its configured maximum delivery delay; the earliest applicable trigger makes work eligible. Parallel upload count is configurable. For the current GCS backend, before uploading bytes, the worker checks the final immutable object name and reconciles API attributes so an already-delivered content ID is completed without retransmission. Queue state remains durable across daemon restarts. A queued content ID protects its complete Local source from orphan and capacity GC until delivery is confirmed.
     attributes:
       triggers: [idle-interval, periodic-check, maximum-delivery-delay]
       configurable: [idle-interval, periodic-check-interval, maximum-delivery-delay, parallelism]
@@ -460,14 +601,17 @@ nodes:
   - id: DES-CONSTRUCTION
     level: system_design
     kind: composition-root
-    statement: The executable composition root reads persisted Repository Format metadata and Repository settings, validates their meaning and compatibility before use, then composes the metadata backend, object backend, digest algorithm, and Repository. Repository settings own Local/GCS delivery mode, GCS bucket, and capacity policy; they are distinct from per-user runtime TOML configuration, which owns repository selection and client/daemon runtime options only. The SQLite adapter owns schema migrations and persistence of Repository Format values.
+    statement: The executable composition root reads persisted Repository Format metadata and canonical v1 Repository settings, validates their meaning before use, then composes the metadata backend, object backend, digest algorithm, and Repository. Repository settings own Local/Remote delivery mode, the one selected remote backend and gs:// bucket/prefix URI, and capacity policy; they are distinct from per-user runtime TOML configuration, which owns repository selection, an optional matching remote URI, and client/daemon runtime options. Unsupported pre-v1 settings or Repository Format state MUST fail before mutation. The SQLite v1 baseline lifecycle is implemented using REQ-SQLITE-SCHEMA-VERSIONING; future schema-changing releases still require exactly one explicit N-1-to-N migration and MUST NOT invent a v0-to-v1 migration.
     attributes:
-      current_backends: [SQLite, local filesystem Object Store]
-      planned_backend_selection: repository-owned-configuration
-      repository_owned_settings: [delivery-mode, GCS-bucket, capacity-policy]
+      current_backends: [SQLite Metadata Store, Local Object Store, GCS remote object storage]
+      remote_backend_selection: exactly-one-per-repository;currently-GCS
+      repository_owned_settings: [delivery-mode, remote-backend, remote-uri, capacity-policy]
       current_settings_file: repository.json
-      current_settings_fields: [delivery_mode, gcs_bucket]
-      legacy_repository_without_settings: defaults-to-Local;is-not-reconfigured-by-init
+      current_settings_fields: [delivery_mode, remote_backend, remote_uri, max_local_bytes]
+      legacy_settings_fields_read: []
+      unsupported_settings_policy: reject-without-rewrite
+      sqlite_schema_baseline: v1-current
+      sqlite_schema_lifecycle_requirement: REQ-SQLITE-SCHEMA-VERSIONING
       settings_scope_limit: capacity-policy-representation-not-yet-implemented
     provenance:
       origin: imported
@@ -482,7 +626,7 @@ nodes:
   - id: DES-OBJECT-MODEL
     level: system_design
     kind: object-model
-    statement: Object Stores own immutable content bytes identified by algorithm-namespaced content IDs, independent of logical names or paths. Local and GCS are physical replicas whose required durability role depends on delivery mode; committed immutable publication, verification, enumeration, and deletion never assign logical paths.
+    statement: Object Stores own immutable content bytes identified by algorithm-namespaced content IDs, independent of logical names or paths. Local and the single selected remote object-storage backend are physical copies whose durability role depends on delivery mode; committed immutable publication, verification, enumeration, and deletion never assign logical paths. GCS is the current remote backend.
     provenance:
       origin: imported
   - id: DES-DOCTOR
@@ -530,7 +674,7 @@ nodes:
   - id: DES-LEASE
     level: system_design
     kind: resource-lock-model
-    statement: Lease has one model for all Local and GCS operations; resource ID, operation ID, RLock/WLock mode, expiry, and extensible information. One operation may hold multiple resource Leases. RLock is shared; WLock excludes all locks for its resource. Leases are heartbeated while the operation is active and explicitly released when it completes. Defaults are TTL 30 seconds and heartbeat 5 seconds, both configurable; expiry uses the SQLite database clock. There is no separate Put-only Operation Lease in the target design.
+    statement: Lease has one model for Local and the selected remote backend; resource ID, operation ID, RLock/WLock mode, expiry, and extensible information. One operation may hold multiple resource Leases. RLock is shared; WLock excludes all locks for its resource. Leases are heartbeated while the operation is active and explicitly released when it completes. Defaults are TTL 30 seconds and heartbeat 5 seconds, both configurable; expiry uses the SQLite database clock. There is no separate Put-only Operation Lease in the target design.
     attributes:
       expiration_representation: absolute-utc-timestamp
       active_operation: heartbeat-until-completion
@@ -543,7 +687,7 @@ nodes:
   - id: DES-PUT-STAGE-COMMIT
     level: system_design
     kind: put-lifecycle
-    statement: Put acquires an RLock for the operation-specific temp resource before creating Stage, then copies and hashes outside Repository-wide exclusive coordination while heartbeating. After the content ID is known, Put acquires its content-ID RLock and retains both RLocks through Local no-replace publication and Metadata Commit; GCS mode commits the Entry and idempotent transfer-queue item in that same Metadata transaction. The resource Lease validity check authorizes Commit. Put releases all Leases when complete. GCS delivery is content-ID-scoped and does not make Put resumable or exactly-once.
+    statement: Put acquires an RLock for the operation-specific temp resource before creating Stage, then copies and hashes outside Repository-wide exclusive coordination while heartbeating. After the content ID is known, Put acquires its content-ID RLock and retains both RLocks through Local no-replace publication and Metadata Commit; Remote mode commits the Entry and idempotent delivery-queue item in that same Metadata transaction. The resource Lease validity check authorizes Commit. Put releases all Leases when complete. Remote delivery is content-ID-scoped and does not make Put resumable or exactly-once.
     attributes:
       staging_order: [acquire-temp-RLock,create-operation-temp,copy-and-hash-with-heartbeat]
       content_lock_transition: acquire-content-ID-RLock-after-hash;retain-temp-RLock
@@ -557,15 +701,17 @@ nodes:
   - id: DES-DELIVERY-MODES
     level: system_design
     kind: storage-delivery-model
-    statement: Local delivery mode has no GCS dependency and treats Local as the durable authoritative Object copy. In Phase A GCS mode, each write first persists a complete immutable Local Object and atomically commits Metadata plus a content-ID delivery obligation, making the committed Entry immediately visible through the single daemon; transfer waits for the configured idle scheduler. Local data remains the only known-good copy until GCS delivery is confirmed. After confirmation, Local may act as an evictable cache while SQLite Metadata remains the Phase A authority for logical Entries and paths. In Phase B, Local Commit and Global Publish are separate and shared Metadata exposes only the Published Head. A content ID can be referenced by multiple Entries and is delivered once per content identity, independent of logical names.
+    statement: Local delivery mode does not construct or contact a remote backend and treats Local as the durable authoritative Object copy. In Phase A Remote mode, each write first persists a complete immutable Local Object and atomically commits Metadata plus a content-ID delivery obligation, making the committed Entry immediately visible through the single daemon; asynchronous transfer waits for the configured scheduler. Local data remains the durable source until delivery is confirmed. After confirmation, Local may act as an evictable cache while SQLite Metadata remains the Phase A authority for logical Entries and paths. Exactly one remote backend is selected for a repository; the current implementation selects GCS. In Phase B, Local Commit and Global Publish are separate and shared Metadata exposes only the Published Head. A content ID can be referenced by multiple Entries and is delivered once per content identity, independent of logical names.
     attributes:
-      modes: [local, gcs]
-      local_mode: [GCS-absent, Local-authoritative]
-      gcs_mode_put_order: [acquire-temp-RLock-before-Stage, Local-Stage-and-hash, acquire-content-ID-RLock, Local-no-replace-publication, atomic-Metadata-Entry-and-transfer-queue-Commit, idle-scheduled-transfer, delete-queue-row-after-API-confirmation, release-Leases-on-completion]
-      gcs_mode_visibility: [Phase-A-local-Metadata-Commit, Phase-B-Global-Publish]
-      pre_replication_failure: Local-physical-loss-may-lose-unreplicated-content
-      local_cache_eviction: only-after-confirmed-GCS-delivery
-      gcs_object_name: objects/{content_id}
+      modes: [local, remote]
+      remote_backend_count: exactly-one
+      additional_remote_backends: unsupported-and-not-planned
+      local_mode: [remote-backend-absent, Local-authoritative]
+      remote_mode_put_order: [acquire-temp-RLock-before-Stage, Local-Stage-and-hash, acquire-content-ID-RLock, Local-no-replace-publication, atomic-Metadata-Entry-and-transfer-queue-Commit, idle-scheduled-transfer, delete-queue-row-after-API-confirmation, release-Leases-on-completion]
+      remote_mode_visibility: [Phase-A-local-Metadata-Commit, Phase-B-Global-Publish]
+      pre_remote_delivery_failure: Local-physical-loss-may-lose-unreplicated-content
+      local_cache_eviction: only-after-confirmed-remote-delivery
+      gcs_object_name: <raw-prefix>objects/{content_id};no-separator-insertion
       gcs_upload: resumable-direct-to-final-name;no-temporary-object-or-copy
       transfer_key: content-ID
       shared_temporary_storage: [Put-spool, GCS-download-staging]
@@ -576,25 +722,25 @@ nodes:
       origin: imported
   - id: DES-REPLICATION-STATE
     level: system_design
-    kind: replica-state-model
-    statement: The MetadataStore owns a content-ID-keyed queue of uncompleted GCS deliveries. A Local Commit atomically commits the Entry and idempotently enqueues its content ID in one backend transaction; SQLite stores both in the existing Metadata database, and alternate adapters provide the same semantic atomicity without exposing backend transactions. The idle synchronization scheduler selects remaining rows from complete Local content. It reconciles the final GCS object before payload upload; a matching already-delivered ID completes without resending content. A successful GCS API response, or final-object API attributes resolving an ambiguous/existing-name result, confirms delivery and causes the queue obligation to be deleted. A crash before deletion leaves the row for retry; retry is idempotent. The queue is not an Entry-level Pending state, Operation Record, or resumption of the original write.
+    kind: remote-delivery-state-model
+    statement: The MetadataStore owns a content-ID-keyed queue of uncompleted remote deliveries. The current implementation selects GCS as the single remote backend. A Local Commit atomically commits the Entry and idempotently enqueues its content ID in one backend transaction; SQLite stores both in the existing Metadata database, and alternate adapters provide the same semantic atomicity without exposing backend transactions. The idle synchronization scheduler selects remaining rows from complete Local content. It reconciles the final GCS object before payload upload; a matching already-delivered ID completes without resending content. A successful GCS API response, or final-object API attributes resolving an ambiguous/existing-name result, confirms delivery and causes the queue obligation to be deleted. A crash before deletion leaves the row for retry; retry is idempotent. The queue is not an Entry-level Pending state, Operation Record, or resumption of the original write.
     attributes:
       confirmed_delivery_evidence: GCS-success-response-or-ambiguous-response-object-query-using-API-attributes
       retained_remote_metadata: [GCS-generation, API-attributes-required-for-conditional-operations]
       full_object_readback_SHA256: not-required
       uncompleted_queue_rows: durable-retry-source-after-restart
-      completed_transfer: delete-row-after-GCS-API-contract-confirmation
-      queue_completion: delete-row-after-GCS-API-contract-confirmation
+      completed_transfer: delete-row-after-selected-remote-backend-contract-confirmation
+      queue_completion: delete-row-after-selected-remote-backend-contract-confirmation
       retry: idle-periodic-and-max-delay-scheduled-while-row-remains
       already_delivered_content: reconcile-final-object-before-payload-upload
       duplicate_transfer: idempotent-enqueue-and-API-attribute-reconciliation
-      no_temporary_GCS_object: true
+      no_temporary_remote_object: true
     provenance:
       origin: imported
   - id: DES-RESOURCE-LEASES
     level: system_design
     kind: gc-protection-protocol
-    statement: A single Resource Lease model uses resource ID, operation ID, RLock/WLock mode, expiry, and extensible information; one operation may protect multiple resource IDs. RLocks are shared and WLocks exclusive for the same resource. Local and GCS use identical Lease states and transitions. The dedicated resource-lock area is managed atomically with SQLite transactions and is the sole GC protection mechanism. Leases default to a configurable 30-second TTL and 5-second heartbeat; SQLite database time is the expiry comparison basis. Put obtains a temporary-resource RLock before Stage creation, then a content-ID RLock after hashing while retaining the first through Local Publish and Metadata Commit. Get, Cat, upload, and download hold and heartbeat RLocks through resource use. Local GC obtains and heartbeats a WLock, then rechecks references and deletion eligibility before physical removal. All locks release when their operation completes. Renewal failure or expiry stops further Publish, Commit, or state confirmation; an I/O request sent before expiry may still complete late. This may make an object unavailable (including a read 404); that is a localized operation failure and does not mutate Metadata. No fencing token, deleting state, storage-specific transition, or long Coordinator lock is required.
+    statement: A single Resource Lease model uses resource ID, operation ID, RLock/WLock mode, expiry, and extensible information; one operation may protect multiple resource IDs. RLocks are shared and WLocks exclusive for the same resource. Local and the selected remote backend use identical Lease states and transitions. The dedicated resource-lock area is managed atomically with SQLite transactions and is the sole GC protection mechanism. Leases default to a configurable 30-second TTL and 5-second heartbeat; SQLite database time is the expiry comparison basis. Put obtains a temporary-resource RLock before Stage creation, then a content-ID RLock after hashing while retaining the first through Local Publish and Metadata Commit. Get, Cat, upload, and download hold and heartbeat RLocks through resource use. Local GC obtains and heartbeats a WLock, then rechecks references and deletion eligibility before physical removal. All locks release when their operation completes. Renewal failure or expiry stops further Publish, Commit, or state confirmation; an I/O request sent before expiry may still complete late. This may make an object unavailable (including a read 404); that is a localized operation failure and does not mutate Metadata. No fencing token, deleting state, storage-specific transition, or long Coordinator lock is required.
     attributes:
       lock_scope: resource-ID-content-or-temporary-ID
       lock_modes: [RLock-for-Put-Get-Cat-upload-download, WLock-for-GC-physical-delete]
@@ -611,15 +757,15 @@ nodes:
   - id: DES-GC-CLASSES
     level: system_design
     kind: garbage-collection-model
-    statement: Capacity GC and local orphan/invalid GC are separate subtasks under the maintenance scheduler. Capacity GC reads Repository capacity settings and reclaims Local cache space only when required; it preserves Local-mode authority, untransferred GCS-mode Objects, and RLock-protected resources. If an operation encounters actual capacity exhaustion, it returns a capacity error without requiring a reservation guarantee. Local orphan/invalid GC reconciles malformed, corrupt, or unreferenced Local artifacts while respecting pending delivery obligations and resource leases. Ordinary/scheduled GC never enumerates or deletes GCS Objects. The dedicated `nando admin recover` CLI command lists GCS objects with no SQLite reference and restores file Entries under `<recovery.directory>/<content-id>` (default `/recyclebin/<content-id>`), requiring an exactly 16-byte MD5 attribute and treating GCS bytes and attributes as authoritative without a full download or SHA-256 re-hash. Recovery is idempotent, reports and preserves conflicting paths, continues valid entries while aggregating failures, and does not move, copy, or delete GCS objects. GCS content is retained when Metadata is absent or incomplete; restored GCS content can be deleted only through an explicit human action in operator-controlled GCS administration, for which the project provides no command.
+    statement: Capacity GC and local orphan/invalid GC are separate subtasks under the maintenance scheduler. Capacity GC reads Repository capacity settings and reclaims Local cache space only when required; it preserves Local-mode authority, undelivered Remote-mode Objects, and RLock-protected resources. If an operation encounters actual capacity exhaustion, it returns a capacity error without requiring a reservation guarantee. Local orphan/invalid GC reconciles malformed, corrupt, or unreferenced Local artifacts while respecting pending delivery obligations and resource leases. Ordinary/scheduled GC never enumerates or deletes remote Objects. The dedicated `nando admin recover` CLI command lists GCS objects with no SQLite reference and restores file Entries under `<recovery.directory>/<content-id>` (default `/recyclebin/<content-id>`), requiring an exactly 16-byte MD5 attribute and treating GCS bytes and attributes as authoritative without a full download or SHA-256 re-hash. Recovery is idempotent, reports and preserves conflicting paths, continues valid entries while aggregating failures, and does not move, copy, or delete GCS objects. GCS content is retained when Metadata is absent or incomplete; restored GCS content can be deleted only through an explicit human action in operator-controlled GCS administration, for which the project provides no command.
     attributes:
-      capacity_gc: [GCS-mode-only-eviction-of-confirmed-Local-cache-replicas, resource-RLock-aware]
+      capacity_gc: [Remote-mode-only-eviction-of-confirmed-Local-cache-objects, resource-RLock-aware]
       invalid_orphan_gc: [Local-invalid, Local-unreferenced, resource-WLock-before-physical-delete]
-      GCS_orphan_management: CLI-only-metadata-recovery-to-recyclebin; idempotent; GCS-objects-unchanged
+      remote_orphan_management: CLI-only-metadata-recovery-to-recyclebin; idempotent; remote-objects-unchanged
       Local_mode: no-capacity-eviction-of-authoritative-Objects
       last_known_good_copy: protected-from-Repository-GC
       gcs_delete: prohibited
-      GCS_recovery: create-entry-at-configured-directory-content-id; default-recyclebin; require-exact-16-byte-md5; trust-GCS-attributes; no-download-or-rehash; collision-safe
+      remote_recovery: create-entry-at-configured-directory-content-id; default-recyclebin; current-GCS-backend-requires-exact-16-byte-md5; trust-provider-attributes; no-download-or-rehash; collision-safe
       metadata_loss: GCS-content-preserved; SQLite-metadata-loss-accepted; Local-cache-loss-accepted
       delayed_local_delete_after_expiry: allowed;availability-risk-recorded
       shared_protection_authority: resource-RWLock-only
@@ -632,8 +778,8 @@ nodes:
     attributes:
       subtasks: [transfer-queue-processing, Capacity-GC, Orphan-Invalid-GC]
       shared_behavior: [start, schedule]
-      gcs_transfer_triggers: [idle-interval, periodic-check, maximum-delivery-delay]
-      gcs_parallelism: configurable
+      remote_transfer_triggers: [idle-interval, periodic-check, maximum-delivery-delay]
+      remote_parallelism: configurable
       failure_isolation: independent-per-subtask
       general_job_framework: prohibited
     provenance:
@@ -641,7 +787,7 @@ nodes:
   - id: DES-GCS-READ-THROUGH
     level: system_design
     kind: read-through-protocol
-    statement: GCS delivery reads prefer Local. On a Local miss, the Repository obtains RLocks for the content ID and shared temporary ID, downloads the complete GCS Object to temporary storage, validates bytes against the content ID, and publishes Local with no-replace semantics before Get or Cat consumes it. A failed, interrupted, or partial download never becomes a visible Local Object. An in-flight request may complete after Lease expiry; a subsequent 404 is a local read failure and does not alter Metadata. Get continues to use its existing atomic destination-file publication; Cat may expose a response prefix if its downstream writer fails after bytes have been written. Direct GCS-to-Get streaming is unnecessary in this design; whether any later progress-following stream should be exposed is deferred.
+    statement: Remote delivery reads prefer Local. On a Local miss, the Repository obtains RLocks for the content ID and shared temporary ID, downloads the complete object from the selected remote backend at the configured literal prefix concatenated with objects/{content_id} to temporary storage, validates bytes against the content ID, and publishes Local with no-replace semantics before Get or Cat consumes it. A failed, interrupted, or partial download never becomes a visible Local Object. An in-flight request may complete after Lease expiry; a subsequent GCS 404 is a local read failure and does not alter Metadata. Get continues to use its existing atomic destination-file publication; Cat may expose a response prefix if its downstream writer fails after bytes have been written. Direct remote-to-Get streaming is unnecessary in this design; whether any later progress-following stream should be exposed is deferred.
     attributes:
       local_first: true
       download_staging: repository-shared-temp
@@ -825,19 +971,19 @@ nodes:
   - id: DES-PHASE6-GCS
     level: system_design
     kind: roadmap-phase
-    statement: Phase 6 establishes Local/GCS delivery modes, bucket selection, capacity policy, resource leases, read-through, and garbage collection while keeping MetadataStore's logical namespace contract backend-independent. Each write commits a durable Local Object and atomically enqueues its content ID with the Metadata mutation; GCS payload transfer is selected by the idle synchronization scheduler rather than started for every write. The scheduler supports idle, periodic, and maximum-delay triggers, configurable parallelism, and final-object reconciliation before payload upload. Capacity GC and Orphan/Invalid GC remain independent subtasks. Phase 6 is the storage foundation for Phase A daemon adapters; it does not define Firestore or multi-daemon publication. Delayed in-flight I/O remains an accepted availability risk, not a fencing blocker.
+    statement: Phase 6 establishes Local/Remote delivery modes, single remote backend and gs:// bucket/prefix URI selection, capacity policy, resource leases, read-through, and garbage collection while keeping MetadataStore's logical namespace contract backend-independent. Each write commits a durable Local Object and atomically enqueues its content ID with the Metadata mutation; GCS payload transfer is selected by the idle synchronization scheduler rather than started for every write. The scheduler supports idle, periodic, and maximum-delay triggers, configurable parallelism, and final-object reconciliation before payload upload. Capacity GC and Orphan/Invalid GC remain independent subtasks. Phase 6 is the storage foundation for Phase A daemon adapters; it does not define Firestore or multi-daemon publication. Delayed in-flight I/O remains an accepted availability risk, not a fencing blocker.
     provenance:
       origin: imported
     attributes:
       roadmap_phase: 6
       exit_criteria:
         - Local mode runs without constructing, configuring, or contacting GCS
-        - GCS Put commits Local, Entry Metadata, and a content-ID transfer-queue item in one MetadataStore atomic operation before asynchronous transfer; SQLite uses the existing Metadata database and a single SQLite transaction
+        - Remote-mode Put commits Local, Entry Metadata, and a content-ID transfer-queue item in one MetadataStore atomic operation before asynchronous transfer; SQLite uses the existing Metadata database and a single SQLite transaction
         - MetadataStore exposes backend-neutral atomic Put-and-enqueue and transfer-completion semantics; a Firestore adapter must provide equivalent transaction semantics without SQL leakage
         - idle synchronization scheduler retries each remaining queue row from complete Local content, honors configured idle/periodic/maximum-delay triggers and parallelism, reconciles existing final objects before payload upload, and deletes the obligation after authoritative GCS API success
         - direct resumable upload targets objects/{content_id}, uses no temporary GCS Object or copy, and never overwrites an existing live Object
         - existing-name and ambiguous upload responses converge through final-object API attributes; GCS generation and required API metadata are used for conditional operations
-        - GCS-mode Get/Cat prefer Local; a miss downloads to shared temporary storage and publishes only complete content verified against its ID
+        - Remote-mode Get/Cat prefer Local; a miss downloads to shared temporary storage and publishes only complete content verified against its ID
         - Local capacity GC retains unconfirmed content and RLock-protected resources, and evicts only eligible confirmed replicas under a resource WLock
         - scheduled invalid-orphan GC applies only to Local artifacts; `nando admin recover` restores missing Metadata Entries under the configured recovery directory (default /recyclebin/<content-id>) without changing GCS objects
         - periodic Capacity GC checks Repository capacity settings and reclaims only needed eligible space; a Put/Download that encounters actual capacity exhaustion returns a capacity error without a reservation guarantee
@@ -846,7 +992,7 @@ nodes:
         - Repository coordination is not held during long input, GCS network, download, or response I/O
         - the daemon maintenance scheduler runs GCS synchronization, Capacity GC, and Orphan/Invalid GC as independent subtasks; failure in one does not prevent the others
         - Local orphan GC rechecks pending content-ID delivery obligations under the content WLock and preserves queued Local sources even after their final Entry is removed
-        - existing Local-only CAS, Get atomic export, Doctor, GC, CLI, and SQLite migration compatibility tests remain covered
+        - existing Local-only CAS, Get atomic export, Doctor, GC, CLI, and v1 SQLite baseline rejection tests remain covered
   - id: DES-PHASE0-SCAFFOLDING
     level: system_design
     kind: roadmap-phase
@@ -859,7 +1005,7 @@ nodes:
   - id: DES-PHASE7-SYNC
     level: system_design
     kind: roadmap-phase
-    statement: Phase 7 user-directed synchronization between repositories and remote repository operations remain deferred until authority, conflict resolution, snapshot boundaries, deletion propagation, offline mutation, authentication, and ownership semantics are defined. This is distinct from Phase A's one-way content-ID replication to GCS, which is a storage durability mechanism and does not merge logical namespaces.
+    statement: Phase 7 user-directed synchronization between repositories and remote repository operations remain deferred until authority, conflict resolution, snapshot boundaries, deletion propagation, offline mutation, authentication, and ownership semantics are defined. This is distinct from Phase A's one-way content-ID delivery to the selected remote object-storage backend (currently GCS), which is a storage durability mechanism and does not merge logical namespaces.
     provenance:
       origin: imported
     attributes:
@@ -868,7 +1014,7 @@ nodes:
   - id: DES-PHASE-A-DAEMON
     level: system_design
     kind: roadmap-phase
-    statement: Phase A delivers one WSL Linux daemon for single-user local-host operation with SQLite Metadata, Local durable commits, immediate single-daemon visibility, standard per-user Unix-domain-socket JSON-RPC 2.0 (private parent directory mode 0700 and socket mode 0600), daemon-owned Resource sessions, and local file:// Resource URIs. TCP support remains available only with TLS and bearer authentication but its bind/certificate/token operations are outside standard Phase A operation. CLI, FUSE, and WebDAV are client processes; FUSE and WebDAV are separate Go modules and executables. The phase includes read-write FUSE/WebDAV clients and idle-scheduled GCS replication using ADC, but their complete implementations may be delivered incrementally. WebDAV is plain HTTP restricted to loopback and serves the same local OS user; external publication, client authentication, TLS termination, and multi-user authorization are deferred. WebDAV PUT supports If-Match and If-None-Match against the Begin-time Repository CAS snapshot; unsupported conditional headers are explicitly rejected. It does not implement Firestore, multiple daemons, globally published heads, remote Resource transfer, cross-platform runtime support, or Cloud Run deployment.
+    statement: Phase A delivers one WSL Linux daemon for single-user local-host operation with SQLite Metadata, Local durable commits, immediate single-daemon visibility, standard per-user Unix-domain-socket JSON-RPC 2.0 (private parent directory mode 0700 and socket mode 0600), daemon-owned Resource sessions, and local file:// Resource URIs. TCP support remains available only with TLS and bearer authentication but its bind/certificate/token operations are outside standard Phase A operation. CLI, FUSE, and WebDAV are client processes; FUSE and WebDAV are separate Go modules and executables. The phase includes read-write FUSE/WebDAV clients and idle-scheduled remote delivery using the current GCS adapter and ADC, but their complete implementations may be delivered incrementally. WebDAV is plain HTTP restricted to loopback and serves the same local OS user; external publication, client authentication, TLS termination, and multi-user authorization are deferred. WebDAV PUT supports If-Match and If-None-Match against the Begin-time Repository CAS snapshot; unsupported conditional headers are explicitly rejected. It does not implement Firestore, multiple daemons, globally published heads, remote Resource transfer, cross-platform runtime support, or Cloud Run deployment.
     attributes:
       roadmap_phase: A
       phase_status: planned
@@ -935,7 +1081,7 @@ nodes:
   - id: IMP-CURRENT-LOCAL-ONLY
     level: implementation
     kind: observed-implementation
-    statement: At repository revision 04f4e8991f0f7cd12c87a01fcd5a690558e5cf64, CLI composition constructs SQLite MetadataStore and Local ObjectStore only; repository configuration selects a repository directory but has no Local/GCS delivery-mode or bucket selection. GCS methods remain stubs.
+    statement: At repository revision 04f4e8991f0f7cd12c87a01fcd5a690558e5cf64, CLI composition constructs SQLite MetadataStore and Local ObjectStore only; repository configuration selects a repository directory but has no Local/GCS delivery-mode or remote URI selection. GCS methods remain stubs.
     provenance:
       origin: observed
     artifact_refs:
@@ -986,18 +1132,44 @@ nodes:
   - id: IMP-CURRENT-METADATA-SQLITE
     level: implementation
     kind: observed-implementation
-    statement: At repository revision 04f4e8991f0f7cd12c87a01fcd5a690558e5cf64, MetadataStore is implemented by SQLite schema migration version 1 with entries, repository_format, and schema_migrations tables. SQLite performs state-dependent Create, Update, Move, and Delete checks in backend transactions; the public MetadataStore interface exposes semantic operations rather than SQL transaction types. There is no Firestore adapter or transfer-state schema.
+    statement: >-
+      At repository revision 04f4e8991f0f7cd12c87a01fcd5a690558e5cf64,
+      MetadataStore was implemented by SQLite schema migration version 1 with
+      entries, repository_format, and schema_migrations tables. This is a
+      historical observation superseded for schema lifecycle by the current
+      implementation observation. SQLite performed state-dependent
+      Create, Update, Move, and Delete checks in backend transactions; the
+      public MetadataStore interface exposes semantic operations rather than
+      SQL transaction types. There is no Firestore adapter or transfer-state
+      schema. No Go source or CLI changes are part of this documentation-only
+      decision.
     provenance:
       origin: observed
     artifact_refs:
       - uri: https://github.com/kamichidu/go-nando/blob/04f4e8991f0f7cd12c87a01fcd5a690558e5cf64/internal/metadata/store.go
         revision: 04f4e8991f0f7cd12c87a01fcd5a690558e5cf64
         role: implementation-interface
-      - uri: https://github.com/kamichidu/go-nando/blob/04f4e8991f0f7cd12c87a01fcd5a690558e5cf64/internal/metadata/sqlite/schema.go
+      - uri: https://github.com/kamichidu/go-nando/blob/573259bb0184f3f0f401e76adeb43a0d6f101c83/internal/metadata/sqlite/schema.go
         revision: 04f4e8991f0f7cd12c87a01fcd5a690558e5cf64
         role: implementation-source
-      - uri: https://github.com/kamichidu/go-nando/blob/04f4e8991f0f7cd12c87a01fcd5a690558e5cf64/internal/metadata/sqlite/store.go
+      - uri: https://github.com/kamichidu/go-nando/blob/573259bb0184f3f0f401e76adeb43a0d6f101c83/internal/metadata/sqlite/store.go
         revision: 04f4e8991f0f7cd12c87a01fcd5a690558e5cf64
+        role: implementation-source
+  - id: IMP-SQLITE-SCHEMA-LIFECYCLE-GAP
+    level: implementation
+    kind: observed-implementation
+    statement: The current implementation uses PRAGMA user_version as the sole SQLite schema version authority and creates baseline version 1 transactionally with the v1 tables, root entry, and Repository Format. Application init validates existing v1 metadata and resumes only recognized provisioning components; an empty uninitialized database may receive the transactional baseline, while unknown or malformed databases are refused without mutation. Completed init is idempotent and preserves repository settings. Normal composition validates schema version and v1 table presence without migration. nando admin migrate opens only an existing database, validates schema and Repository Format, and reports a no-op for valid v1. Nonempty user_version=0 databases, including former schema_migrations databases, malformed/missing v1 tables, and unknown older/newer versions are refused without mutation. No v0-to-v1 migration exists. The generic future N-1-to-N transition is NOT implemented because v1 is the initial baseline and there is no predecessor schema to migrate; future schema-changing releases must implement only their immediate predecessor transition with transactional DDL and user_version update.
+    provenance:
+      origin: observed
+    artifact_refs:
+      - uri: https://github.com/kamichidu/go-nando/blob/04f4e8991f0f7cd12c87a01fcd5a690558e5cf64/internal/metadata/sqlite/schema.go
+        revision: 573259bb0184f3f0f401e76adeb43a0d6f101c83
+        role: implementation-source
+      - uri: https://github.com/kamichidu/go-nando/blob/04f4e8991f0f7cd12c87a01fcd5a690558e5cf64/internal/metadata/sqlite/store.go
+        revision: 573259bb0184f3f0f401e76adeb43a0d6f101c83
+        role: implementation-source
+      - uri: https://github.com/kamichidu/go-nando/blob/573259bb0184f3f0f401e76adeb43a0d6f101c83/internal/cli/commands/remote_orphans.go
+        revision: 573259bb0184f3f0f401e76adeb43a0d6f101c83
         role: implementation-source
   - id: IMP-CURRENT-SHA1
     level: implementation
@@ -1436,6 +1608,10 @@ observations:
         role: inspected-source
 
 open_items:
+  - id: OPEN-STANDALONE-ADAPTER-MODULE-VERSIONS
+    statement: The FUSE and WebDAV modules currently require the unpublished root module at v0.0.0 and rely on the committed workspace for checkout builds. Decide whether standalone Go module consumption is supported; if so, establish real root and nested-module publication tags and update requirements before claiming that route. Do not invent a tag. GitHub Releases archives and the Debian package remain the general-user installation path.
+    status: open
+    related_refs: [REQ-RELEASE-DISTRIBUTION-AND-DEVELOPMENT-WORKSPACE]
   - id: OPEN-SHA1-FORMAT-TRANSITION
     statement: Decide how repositories with current plain SHA-1 identifiers transition to the Phase 1 SHA-256 algorithm-namespaced format without silently reinterpreting existing IDs.
     status: open
@@ -1457,19 +1633,19 @@ open_items:
     status: open
     related_refs: [REQ-GCS-PUBLICATION, REQ-LOCAL-GCS-IMMUTABILITY, DES-GC-CLASSES]
   - id: OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS
-    statement: Define Doctor health in GCS mode when Local cache is missing/corrupt, replication remains pending, or the GCS Object is missing/corrupt; distinguish valid unreferenced content from invalid orphans without making Doctor destructive. Cat may have written a response prefix before writer failure. A read 404 after external GCS object removal is a localized read error and does not change Metadata; revision-change policy remains independent from GC safety.
+    statement: Define Doctor health in Remote mode when Local cache is missing/corrupt, remote delivery remains pending, or the selected remote Object is missing/corrupt; distinguish valid unreferenced content from invalid orphans without making Doctor destructive. Cat may have written a response prefix before writer failure. A read 404 after external GCS object removal is a localized read error and does not change Metadata; revision-change policy remains independent from GC safety.
     status: open
     related_refs: [REQ-READ-THROUGH, REQ-DOCTOR-NONDESTRUCTIVE, DES-DOCTOR, DES-GCS-READ-THROUGH, OPEN-READ-REVISION-CHANGE]
   - id: OPEN-DELIVERY-MODE-MIGRATION
-    statement: Repository settings are the authority for Local/GCS mode, bucket, and capacity policy. Decide only compatibility and migration behavior for existing repositories, Local-to-GCS prefill, bucket changes, GCS-to-Local recovery, and rollback; do not introduce a new settings persistence framework.
-    status: open
-    related_refs: [DES-CONSTRUCTION, DES-DELIVERY-MODES, DES-PHASE1-FORMAT]
+    statement: Repository settings use delivery_mode=remote, remote_backend=gcs, and remote_uri=gs://bucket[/prefix] for the current GCS backend; this repository-owned URI remains authoritative and is distinct from per-user TOML scheduler policy; optional [remote].remote_uri must exactly match when present. The URI parser validates gs:// and the bucket while preserving raw prefix bytes, concatenating that prefix literally with the existing objects/{content_id} key without decoding, normalization, cleaning, trimming, or separator insertion. Canonical TOML scheduler settings are grouped under [remote] as sync_idle_interval, sync_periodic_interval, max_delivery_delay, and sync_parallelism. These are the only supported TOML scheduler keys; unsupported pre-v1 keys and CLI aliases are rejected. Opening existing settings never rewrites them; unsupported pre-v1 formats fail without mutation. Remote-to-Local conversion, remote URI changes, rollback across binary versions, and Local-to-Remote prefill are not performed automatically and remain explicit operator decisions.
+    status: resolved
+    related_refs: [DES-CONSTRUCTION, DES-DELIVERY-MODES, DES-PHASE1-FORMAT, REQ-REMOTE-BACKEND-SELECTION]
   - id: OPEN-FIRESTORE-COORDINATION-AND-SNAPSHOT
     statement: Define the deployment boundary for a Firestore MetadataStore behind MetadataStore semantics. The current SQLite Coordinator and Resource Lease store coordinate processes sharing one local repository path; decide whether Firestore is limited to that single-host deployment or requires a shared distributed Coordinator and a consistent ReferencedObjectIDs snapshot/conditional GC contract across hosts and writers. The MetadataStore adapter must retain atomic Put-and-enqueue and queue-row deletion semantics.
     status: open
     related_refs: [REQ-METADATA-PORTABILITY, REQ-PUT-GC-EXCLUSION, REQ-READ-GC-EXCLUSION, DES-METADATA-BACKEND-PORTABILITY, DES-REPOSITORY-BOUNDARIES]
   - id: OPEN-METADATA-BACKUP-PROCEDURE
-    statement: "Resolved by the Phase A operator runbook: quiesce FUSE/WebDAV, normally stop the daemon, and capture every Repository component as one consistent set while all Repository writes have ceased. Preserve SQLite and any sidecars, coordination DB, Local CAS objects, Recovery staging/manifests, repository settings, and pending GCS obligations. Restore the complete set while stopped with owner/mode/configuration checks; do not require GCS queue drain or prescribe a snapshot technology. External credentials and unit/configuration files remain separately managed. Version 2 Recovery manifests store Repository-root-relative staging paths and resolve them under the current root. Version 1 absolute paths are never followed; migration requires the expected current-root stage for the same session ID to exist as a regular file, otherwise startup reports an explicit error."
+    statement: "Resolved by the Phase A operator runbook: quiesce FUSE/WebDAV, normally stop the daemon, and capture every Repository component as one consistent set while all Repository writes have ceased. Preserve SQLite and any sidecars, coordination DB, Local CAS objects, Recovery staging/manifests, repository settings, and pending GCS obligations. Restore the complete set while stopped with owner/mode/configuration checks; do not require GCS queue drain or prescribe a snapshot technology. External credentials and unit/configuration files remain separately managed. Version 2 Recovery manifests store Repository-root-relative staging paths and resolve them under the current root. Unsupported manifest versions, including pre-v1 absolute-path manifests, fail explicitly without opening their stored paths or modifying staging/manifests."
     status: resolved
     related_refs: [REQ-METADATA-BACKUP-RESPONSIBILITY, DES-METADATA-BACKEND-PORTABILITY, DES-REPLICATION-STATE]
   - id: OPEN-ADAPTER-AUTHORIZATION

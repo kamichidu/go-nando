@@ -1,7 +1,6 @@
 package sqlite
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -56,6 +55,9 @@ func TestSQLiteStore(t *testing.T) {
 		if root.Kind != metadata.EntryKindDirectory {
 			t.Errorf("expected root kind 'directory', got %q", root.Kind)
 		}
+		if root.Mode != 0o755 {
+			t.Errorf("expected root mode 0o755 (%d), got %d", 0o755, root.Mode)
+		}
 	})
 
 	t.Run("Create and Get child successfully", func(t *testing.T) {
@@ -78,7 +80,7 @@ func TestSQLiteStore(t *testing.T) {
 			ObjectID:    &oid,
 			Size:        100,
 			Mtime:       now,
-			Mode:        0644,
+			Mode:        0o644,
 			ContentType: "application/pdf",
 			Revision:    1,
 			CreatedAt:   now,
@@ -756,12 +758,12 @@ func TestSQLiteStore(t *testing.T) {
 
 		// Schema check must fail indicating obsolete Phase 0 schema
 		err = store.CheckMigrations(ctx)
-		if !errors.Is(err, ErrMigrationsUnsupported) {
+		if !errors.Is(err, ErrSchemaVersionUnsupported) {
 			t.Errorf("expected incompatible migration history error, got: %v", err)
 		}
 	})
 
-	t.Run("Format metadata and migration history are persisted and enforced", func(t *testing.T) {
+	t.Run("Format metadata and schema version are persisted and enforced", func(t *testing.T) {
 		store, _ := setupStore(t)
 		defer store.Close()
 
@@ -773,9 +775,13 @@ func TestSQLiteStore(t *testing.T) {
 		if formatVersion != repositoryformat.CurrentVersion || algorithm != repositoryformat.ContentAlgorithmSHA256 || idFormat != repositoryformat.ContentIDFormatSHA256 {
 			t.Fatalf("unexpected repository format metadata: %d %q %q", formatVersion, algorithm, idFormat)
 		}
-		var migrationCount int
-		if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations WHERE version=1").Scan(&migrationCount); err != nil || migrationCount != 1 {
-			t.Fatalf("expected migration 1 to be recorded once, count=%d err=%v", migrationCount, err)
+		var schemaVersion int
+		if err := store.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schemaVersion); err != nil || schemaVersion != 1 {
+			t.Fatalf("expected user_version=1, version=%d err=%v", schemaVersion, err)
+		}
+		var ledgerCount int
+		if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'").Scan(&ledgerCount); err != nil || ledgerCount != 0 {
+			t.Fatalf("schema_migrations ledger remains: count=%d err=%v", ledgerCount, err)
 		}
 
 		if _, err := store.db.ExecContext(ctx, "UPDATE repository_format SET format_version=99 WHERE singleton=1"); err != nil {
@@ -793,20 +799,112 @@ func TestSQLiteStore(t *testing.T) {
 		}
 	})
 
+	t.Run("Newer SQLite user_version is rejected without mutation", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+		if _, err := store.db.ExecContext(ctx, "PRAGMA user_version=2"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CheckMigrations(ctx); !errors.Is(err, ErrSchemaVersionUnsupported) {
+			t.Fatalf("unsupported schema version accepted: %v", err)
+		}
+	})
+
 	t.Run("Empty SQLite database is not an openable repository until initialized", func(t *testing.T) {
 		store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
 		if err != nil {
 			t.Fatalf("failed to create empty database: %v", err)
 		}
 		defer store.Close()
-		if err := store.CheckMigrations(ctx); !errors.Is(err, ErrMigrationsUninitialized) {
+		if err := store.CheckMigrations(ctx); !errors.Is(err, ErrSchemaUninitialized) {
 			t.Fatalf("expected empty database to have no migration history, got %v", err)
 		}
 		if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
 			t.Fatalf("fresh initialization should accept an empty database: %v", err)
 		}
 		if err := store.CheckMigrations(ctx); err != nil {
-			t.Fatalf("initialized schema migrations should be accepted: %v", err)
+			t.Fatalf("initialized schema should be accepted: %v", err)
+		}
+	})
+
+	t.Run("Version-zero database with a view is not pristine", func(t *testing.T) {
+		store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		if _, err := store.db.ExecContext(ctx, "CREATE VIEW existing_view AS SELECT 1 AS value"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CheckMigrations(ctx); !errors.Is(err, ErrSchemaVersionUnsupported) {
+			t.Fatalf("database with a user schema object reported pristine: %v", err)
+		}
+		if err := store.Initialize(ctx, repositoryformat.Current()); !errors.Is(err, ErrSchemaVersionUnsupported) {
+			t.Fatalf("initialization accepted a database with a user schema object: %v", err)
+		}
+		var views int
+		if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='view' AND name='existing_view'").Scan(&views); err != nil || views != 1 {
+			t.Fatalf("existing view changed: count=%d err=%v", views, err)
+		}
+	})
+
+	t.Run("Nonempty legacy ledger with user_version zero is rejected", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+		if _, err := store.db.ExecContext(ctx, "PRAGMA user_version=0; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL); INSERT INTO schema_migrations VALUES(1,0)"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CheckMigrations(ctx); !errors.Is(err, ErrSchemaVersionUnsupported) {
+			t.Fatalf("legacy ledger accepted: %v", err)
+		}
+		if err := store.Initialize(ctx, repositoryformat.Current()); !errors.Is(err, ErrSchemaVersionUnsupported) {
+			t.Fatalf("init accepted legacy ledger: %v", err)
+		}
+	})
+
+	t.Run("Corrupt or missing v1 tables are rejected", func(t *testing.T) {
+		for _, table := range []string{"entries", "repository_format", "transfer_queue", "content_metadata"} {
+			t.Run(table, func(t *testing.T) {
+				store, _ := setupStore(t)
+				defer store.Close()
+				if _, err := store.db.ExecContext(ctx, "DROP TABLE "+table); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.CheckMigrations(ctx); !errors.Is(err, ErrSchemaVersionUnsupported) {
+					t.Fatalf("missing v1 table accepted: %v", err)
+				}
+			})
+		}
+		t.Run("malformed entries columns", func(t *testing.T) {
+			store, _ := setupStore(t)
+			defer store.Close()
+			if _, err := store.db.ExecContext(ctx, "DROP TABLE entries; CREATE TABLE entries(entry_id TEXT PRIMARY KEY)"); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.CheckMigrations(ctx); !errors.Is(err, ErrSchemaVersionUnsupported) {
+				t.Fatalf("malformed v1 table accepted: %v", err)
+			}
+		})
+	})
+
+	t.Run("Migrate is current-version no-op and rejects unknown versions", func(t *testing.T) {
+		store, _ := setupStore(t)
+		defer store.Close()
+		version, err := store.Migrate(ctx)
+		if err != nil || version != CurrentSchemaVersion {
+			t.Fatalf("current migrate: version=%d err=%v", version, err)
+		}
+		if _, err := store.db.ExecContext(ctx, "PRAGMA user_version=2"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Migrate(ctx); !errors.Is(err, ErrSchemaVersionUnsupported) {
+			t.Fatalf("newer version migrate accepted: %v", err)
+		}
+		if _, err := store.db.ExecContext(ctx, "PRAGMA user_version=-1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Migrate(ctx); !errors.Is(err, ErrSchemaVersionUnsupported) {
+			t.Fatalf("older schema version migrate accepted: %v", err)
 		}
 	})
 
@@ -835,7 +933,7 @@ func TestSQLiteStore(t *testing.T) {
 			t.Fatalf("failed to open legacy repository: %v", err)
 		}
 		defer store.Close()
-		if err := store.Initialize(ctx, repositoryformat.Current()); !errors.Is(err, ErrMigrationsUnsupported) {
+		if err := store.Initialize(ctx, repositoryformat.Current()); !errors.Is(err, ErrSchemaVersionUnsupported) {
 			t.Fatalf("expected legacy repository refusal, got %v", err)
 		}
 		var objectID string
@@ -1672,7 +1770,7 @@ func TestSQLiteStore(t *testing.T) {
 			ObjectID:    &oid,
 			Size:        12345,
 			Mtime:       now,
-			Mode:        0644,
+			Mode:        0o644,
 			ContentType: "text/plain",
 			Revision:    1,
 			CreatedAt:   now,
@@ -2442,7 +2540,7 @@ func TestSQLiteStore(t *testing.T) {
 			Kind:        metadata.EntryKindFile,
 			Size:        10,
 			Mtime:       tsNow,
-			Mode:        0644,
+			Mode:        0o644,
 			ContentType: "text/plain",
 			Revision:    1,
 			CreatedAt:   tsNow,
@@ -2574,87 +2672,5 @@ func TestCommitPutTransferQueue(t *testing.T) {
 	ids, err = store.PendingTransfers(ctx)
 	if err != nil || len(ids) != 0 {
 		t.Fatalf("failed Put leaked transfer queue state: %v, err %v", ids, err)
-	}
-}
-
-func TestMetadataV1MigrationPreservesCommittedEntries(t *testing.T) {
-	ctx := context.Background()
-	store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
-		t.Fatal(err)
-	}
-	root, err := store.Root(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Create(ctx, metadata.Entry{ID: "existing", ParentID: &root.ID, Name: "kept", Kind: metadata.EntryKindDirectory, Revision: 1, Mode: 0755}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.ExecContext(ctx, "DROP TABLE transfer_queue; DELETE FROM schema_migrations WHERE version=2"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.CheckMigrations(ctx); err != nil {
-		t.Fatalf("v1 history should be supported for additive migration: %v", err)
-	}
-	if err := store.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.GetByID(ctx, "existing"); err != nil {
-		t.Fatalf("migration lost committed Entry: %v", err)
-	}
-	if err := store.CheckMigrations(ctx); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestMetadataV3MigrationNormalizesMD5ByContentID(t *testing.T) {
-	ctx := context.Background()
-	store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
-		t.Fatal(err)
-	}
-	root, err := store.Root(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id, err := content.ParseID("sha256-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := []byte{0x90, 0x01, 0x50, 0x98, 0x3c, 0xd2, 0x4f, 0xb0, 0xd6, 0x96, 0x3f, 0x7d, 0x28, 0xe1, 0x7f, 0x72}
-	for _, name := range []string{"one", "two"} {
-		entry := metadata.Entry{ID: metadata.EntryID(name), ParentID: &root.ID, Name: name, Kind: metadata.EntryKindFile, ObjectID: &id, MD5: sum, Revision: 1}
-		if _, err := store.Create(ctx, entry); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := store.db.ExecContext(ctx, `ALTER TABLE entries ADD COLUMN object_md5 BLOB;
-		UPDATE entries SET object_md5=(SELECT md5 FROM content_metadata WHERE content_id=entries.object_id);
-		DROP TABLE content_metadata;
-		DELETE FROM schema_migrations WHERE version>=4`); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Migrate(ctx); err != nil {
-		t.Fatalf("migrate v3 schema: %v", err)
-	}
-	got, err := store.ContentMD5(ctx, id)
-	if err != nil || !bytes.Equal(got, sum) {
-		t.Fatalf("normalized MD5=%x err=%v, want %x", got, err, sum)
-	}
-	var count int
-	if err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM content_metadata`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("content metadata rows=%d err=%v, want one row", count, err)
-	}
-	entry, err := store.GetByID(ctx, "one")
-	if err != nil || !bytes.Equal(entry.MD5, sum) {
-		t.Fatalf("Entry MD5 projection=%x err=%v", entry.MD5, err)
 	}
 }

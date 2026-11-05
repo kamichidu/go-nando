@@ -1,4 +1,10 @@
 # Copy to ~/.config/nando/<instance>.toml and initialize its repository first.
-repository = "/home/USER/.local/share/nando/<instance>"
+[repository]
+path = "/home/USER/.local/share/nando/<instance>"
+
+[logging]
+# verbose = false
 # Optional. Omit to use the per-repository XDG runtime socket.
-# daemon_endpoint = "unix:///run/user/UID/nando/<repository-hash>.sock"
+# Optional advanced transport configuration uses a [daemon] table.
+# [daemon]
+# listen = "unix:///run/user/UID/nando/<repository-hash>.sock"

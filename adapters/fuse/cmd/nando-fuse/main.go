@@ -1,0 +1,76 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/kamichidu/go-flagshim"
+	fusefs "github.com/kamichidu/go-nando/adapters/fuse"
+	"github.com/kamichidu/go-nando/controlrpc"
+	"github.com/kamichidu/go-nando/runtimeconfig"
+)
+
+type flags struct{ Config, Repository, DaemonListen, DaemonTokenFile, DaemonCACert, Mountpoint string }
+type command struct{ options flags }
+
+func (*command) Name() string { return "nando-fuse" }
+func (c *command) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) context.Context {
+	fs.StringVar(&c.options.Config, "config", "", "configuration file path")
+	fs.StringVar(&c.options.Repository, "repository", "", "repository directory")
+	fs.StringVar(&c.options.DaemonListen, "daemon-listen", "", "daemon control listen address")
+	fs.StringVar(&c.options.DaemonTokenFile, "daemon-token-file", "", "private bearer-token file")
+	fs.StringVar(&c.options.DaemonCACert, "daemon-ca-cert", "", "CA certificate PEM for daemon TLS")
+	fs.StringVar(&c.options.Mountpoint, "fuse-mountpoint", "", "directory to mount")
+	return ctx
+}
+func (c *command) Run(ctx context.Context, args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("nando-fuse accepts no positional arguments")
+	}
+	o := c.options
+	cfg, _, err := runtimeconfig.Load(o.Config)
+	if err != nil {
+		return fmt.Errorf("load configuration: %w", err)
+	}
+	repoDir, err := runtimeconfig.ResolveRepositoryPath(cfg, o.Repository)
+	if err != nil {
+		return err
+	}
+	mountpoint := o.Mountpoint
+	if mountpoint == "" {
+		mountpoint = cfg.Fuse.Mountpoint
+	}
+	if mountpoint == "" {
+		return fmt.Errorf("--fuse-mountpoint is required (or set [fuse].mountpoint)")
+	}
+	clientConfig, err := runtimeconfig.ResolveClientConfig(cfg, repoDir, runtimeconfig.ClientOptions{Endpoint: o.DaemonListen, TokenFile: o.DaemonTokenFile, CACert: o.DaemonCACert})
+	if err != nil {
+		return err
+	}
+	client, err := controlrpc.NewClient(clientConfig)
+	if err != nil {
+		return fmt.Errorf("create daemon client: %w", err)
+	}
+	server, err := fusefs.New(client).Mount(mountpoint, nil)
+	if err != nil {
+		return fmt.Errorf("mount FUSE filesystem: %w", err)
+	}
+	stopped := make(chan os.Signal, 1)
+	signal.Notify(stopped, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-stopped
+		if err := server.Unmount(); err != nil {
+			log.Printf("unmount FUSE filesystem: %v", err)
+		}
+	}()
+	server.Wait()
+	fmt.Fprintln(flagshim.MustStdoutFromContext(ctx), "FUSE filesystem unmounted")
+	return nil
+}
+func main() {
+	os.Exit(flagshim.Run(context.Background(), os.Stdin, os.Stdout, os.Stderr, &command{}, os.Args))
+}

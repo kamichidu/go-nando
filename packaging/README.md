@@ -1,6 +1,8 @@
 # Debian package and systemd instances
 
-The `go-nando` deb contains `nando`, `nando-fuse`, `nando-webdav`, and two
+The `go-nando` deb installs `nando` in `/opt/nando/bin` and the adapter
+executables in `/opt/nando/libexec`. Only `/usr/bin/nando` is exposed; use
+`nando fuse` and `nando webdav` to launch adapters. It also contains two
 independent `nando@.service` templates: one for the system manager and one for
 each user's manager. The user service is the supported Phase A deployment.
 The system service is experimental, is not a Phase A completion gate, and has
@@ -11,6 +13,17 @@ Build with nfpm installed:
 ```sh
 VERSION=1.2.3 packaging/build-deb.sh
 ```
+
+GitHub Releases publish Linux amd64 and arm64 archives and an amd64 Debian
+package, plus macOS and Windows amd64 and arm64 archives. CI cross-compiles the
+macOS and Windows executables on Linux; it does not run them on those operating
+systems. Their runtime behavior is therefore not covered by release CI.
+
+Run `packaging/check-deb.sh` to build a temporary package and check its binary,
+symlink, and service-unit paths. The package owns both adapter files in
+`/opt/nando/libexec`, `nando` in `/opt/nando/bin`, and the `/usr/bin/nando`
+symlink through dpkg metadata; maintainer scripts do not create unmanaged
+command links.
 
 The package creates and retains a non-login `nando` system account for the
 experimental system template. Install/upgrade do not enable, start, or restart
@@ -37,7 +50,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now nando@work.service
 ```
 
-Do not copy the example's placeholder path literally. If GCS is enabled, set
+Do not copy the example's placeholder path literally. For remote object delivery, set
 all four scheduler values in the instance TOML. The package does not select
 operational timing or parallelism defaults. ADC remains host/user managed; use
 the user's native identity or a private credential file and ensure the user
@@ -77,7 +90,7 @@ provided for experimentation only and is not required to pass Phase A.
 FUSE and WebDAV remain separate client processes. Start the daemon before
 either client, and stop clients before the daemon. WebDAV remains loopback-only
 and unauthenticated under the approved Phase A boundary. The daemon does not
-require network availability at startup; GCS operations retry asynchronously.
+require network availability at startup; remote delivery retries asynchronously.
 
 ## Upgrade and removal
 

@@ -23,7 +23,7 @@ func TestGetAtomicDestinationAndRejectedTargets(t *testing.T) {
 	ctx := context.Background()
 	repo, _, _, root := newPhase4Repository(t, ctx)
 	source := filepath.Join(root, "source")
-	if err := os.WriteFile(source, []byte("repository bytes"), 0600); err != nil {
+	if err := os.WriteFile(source, []byte("repository bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	storedMtime := time.Date(2024, time.March, 4, 5, 6, 7, 0, time.UTC)
@@ -39,7 +39,7 @@ func TestGetAtomicDestinationAndRejectedTargets(t *testing.T) {
 	}
 
 	destination := filepath.Join(root, "destination")
-	if err := os.WriteFile(destination, []byte("old bytes"), 0640); err != nil {
+	if err := os.WriteFile(destination, []byte("old bytes"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Get(ctx, "/file", destination); err != nil {
@@ -64,7 +64,7 @@ func TestGetAtomicDestinationAndRejectedTargets(t *testing.T) {
 	assertFileBytes(t, absent, "repository bytes")
 
 	directoryTarget := filepath.Join(root, "directory-target")
-	if err := os.Mkdir(directoryTarget, 0755); err != nil {
+	if err := os.Mkdir(directoryTarget, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Get(ctx, "/file", directoryTarget); err == nil {
@@ -75,7 +75,7 @@ func TestGetAtomicDestinationAndRejectedTargets(t *testing.T) {
 	}
 
 	target := filepath.Join(root, "symlink-target")
-	if err := os.WriteFile(target, []byte("symlink target"), 0600); err != nil {
+	if err := os.WriteFile(target, []byte("symlink target"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(root, "symlink-destination")
@@ -97,7 +97,7 @@ func TestGetReadFailurePreservesDestinationAndCleansTemporaryFile(t *testing.T) 
 	ctx := context.Background()
 	_, metaStore, objects, root := newPhase4Repository(t, ctx)
 	source := filepath.Join(root, "source")
-	if err := os.WriteFile(source, []byte("new repository bytes"), 0600); err != nil {
+	if err := os.WriteFile(source, []byte("new repository bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	baseRepo := openRepositoryInstance(t, root, metaStore, objects, content.NewHasher())
@@ -109,7 +109,7 @@ func TestGetReadFailurePreservesDestinationAndCleansTemporaryFile(t *testing.T) 
 	failingObjects := &readFailureObjectStore{ObjectStore: objects, err: readErr}
 	failingRepo := openRepositoryInstance(t, root, metaStore, failingObjects, content.NewHasher())
 	destination := filepath.Join(root, "destination")
-	if err := os.WriteFile(destination, []byte("old destination bytes"), 0600); err != nil {
+	if err := os.WriteFile(destination, []byte("old destination bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := failingRepo.Get(ctx, "/file", destination); !errors.Is(err, readErr) {
@@ -123,7 +123,7 @@ func TestDoctorDoesNotMutateRepositoryAndIgnoresValidOrphanObjects(t *testing.T)
 	ctx := context.Background()
 	repo, metaStore, objects, root := newPhase4Repository(t, ctx)
 	source := filepath.Join(root, "source")
-	if err := os.WriteFile(source, []byte("referenced"), 0600); err != nil {
+	if err := os.WriteFile(source, []byte("referenced"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Put(ctx, source, "/file"); err != nil {
@@ -171,7 +171,7 @@ func TestGCPartialFailureCanBeRetried(t *testing.T) {
 	ctx := context.Background()
 	repo, metaStore, objects, root := newPhase4Repository(t, ctx)
 	referencedSource := filepath.Join(root, "referenced-source")
-	if err := os.WriteFile(referencedSource, []byte("reachable bytes"), 0600); err != nil {
+	if err := os.WriteFile(referencedSource, []byte("reachable bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Put(ctx, referencedSource, "/reachable"); err != nil {
@@ -279,10 +279,10 @@ func TestPutObjectAndMetadataCommitFailureBoundaries(t *testing.T) {
 		repo, metaStore, objects, root := newPhase4Repository(t, ctx)
 		oldSource := filepath.Join(root, "old-source")
 		newSource := filepath.Join(root, "new-source")
-		if err := os.WriteFile(oldSource, []byte("old replacement bytes"), 0600); err != nil {
+		if err := os.WriteFile(oldSource, []byte("old replacement bytes"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(newSource, []byte("new replacement bytes"), 0600); err != nil {
+		if err := os.WriteFile(newSource, []byte("new replacement bytes"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := repo.Put(ctx, oldSource, "/replace"); err != nil {
@@ -330,7 +330,7 @@ func newPhase4Repository(t *testing.T, ctx context.Context) (*repository.Reposit
 func writePhase4Source(t *testing.T, root string) string {
 	t.Helper()
 	path := filepath.Join(root, "source")
-	if err := os.WriteFile(path, []byte("phase4 content"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("phase4 content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path

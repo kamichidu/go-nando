@@ -12,10 +12,10 @@ func TestPublishNoReplaceConcurrentWriters(t *testing.T) {
 	firstPath := filepath.Join(dir, "first")
 	secondPath := filepath.Join(dir, "second")
 	destination := filepath.Join(dir, "published")
-	if err := os.WriteFile(firstPath, []byte("first bytes"), 0600); err != nil {
+	if err := os.WriteFile(firstPath, []byte("first bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(secondPath, []byte("second bytes"), 0600); err != nil {
+	if err := os.WriteFile(secondPath, []byte("second bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

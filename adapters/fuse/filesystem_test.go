@@ -44,7 +44,7 @@ type stubDaemon struct {
 func newStub(t *testing.T, content []byte) *stubDaemon {
 	t.Helper()
 	return &stubDaemon{
-		root: t.TempDir(), entry: controlrpc.Entry{ID: "entry-1", Name: "file", Kind: "file", Size: int64(len(content)), Mode: 0644, Revision: 1, Mtime: time.Now().UnixNano(), ObjectID: "hash"},
+		root: t.TempDir(), entry: controlrpc.Entry{ID: "entry-1", Name: "file", Kind: "file", Size: int64(len(content)), Mode: 0o644, Revision: 1, Mtime: time.Now().UnixNano(), ObjectID: "hash"},
 		path: "/file", content: append([]byte(nil), content...), exists: true, sessions: make(map[string]*stubSession),
 	}
 }
@@ -81,7 +81,7 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 			return &controlrpc.RemoteError{Code: controlrpc.CodeEntryNotFound, Message: "missing"}
 		}
 		file := filepath.Join(d.root, "read-resource")
-		if err := os.WriteFile(file, d.content, 0600); err != nil {
+		if err := os.WriteFile(file, d.content, 0o600); err != nil {
 			return err
 		}
 		sid := "read-session"
@@ -90,7 +90,7 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 	case controlrpc.MethodBeginWrite:
 		d.begins++
 		file := filepath.Join(d.root, "write-"+time.Now().Format("150405.000000000"))
-		if err := os.WriteFile(file, nil, 0600); err != nil {
+		if err := os.WriteFile(file, nil, 0o600); err != nil {
 			return err
 		}
 		sid := "write-session"

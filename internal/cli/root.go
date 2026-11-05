@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,7 +15,6 @@ import (
 	"github.com/kamichidu/go-flagshim"
 	"github.com/kamichidu/go-nando/controlrpc"
 	"github.com/kamichidu/go-nando/internal/app"
-	"github.com/kamichidu/go-nando/internal/config"
 	"github.com/kamichidu/go-nando/internal/content"
 	coordinatorsqlite "github.com/kamichidu/go-nando/internal/coordinator/sqlite"
 	"github.com/kamichidu/go-nando/internal/metadata"
@@ -24,6 +24,7 @@ import (
 	"github.com/kamichidu/go-nando/internal/objectstore/local"
 	"github.com/kamichidu/go-nando/internal/repository"
 	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
+	"github.com/kamichidu/go-nando/runtimeconfig"
 )
 
 // ErrInvalidArguments is returned when CLI arguments are missing or invalid.
@@ -66,7 +67,7 @@ func (c *RootCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) c
 	fs.Alias("config", "c")
 	fs.Var(trackedBoolFlag{value: &c.flags.Verbose, wasSet: &c.flags.VerboseSet}, "verbose", "enable or disable verbose output")
 	fs.Alias("verbose", "v")
-	fs.StringVar(&c.flags.DaemonEndpoint, "daemon-endpoint", "", "daemon control endpoint (unix:///path or tcp://host:port)")
+	fs.StringVar(&c.flags.DaemonEndpoint, "daemon-listen", "", "daemon control listen address (unix:///path or tcp://host:port)")
 	fs.StringVar(&c.flags.DaemonTokenFile, "daemon-token-file", "", "private bearer-token file for TCP daemon access")
 	fs.StringVar(&c.flags.DaemonCACertFile, "daemon-ca-cert", "", "CA certificate PEM for TCP daemon TLS")
 
@@ -85,39 +86,13 @@ func NewDaemonClientFromContext(ctx context.Context) (*controlrpc.Client, error)
 	if err != nil {
 		return nil, err
 	}
-	endpoint := flags.DaemonEndpoint
-	if endpoint == "" {
-		endpoint = cfg.DaemonEndpoint
+	clientConfig, err := runtimeconfig.ResolveClientConfig(cfg, repoDir, runtimeconfig.ClientOptions{
+		Endpoint: flags.DaemonEndpoint, TokenFile: flags.DaemonTokenFile, CACert: flags.DaemonCACertFile,
+	})
+	if err != nil {
+		return nil, err
 	}
-	if endpoint == "" {
-		endpoint, err = controlrpc.DefaultEndpoint(repoDir)
-		if err != nil {
-			return nil, err
-		}
-	}
-	var token string
-	tokenFile := flags.DaemonTokenFile
-	if tokenFile == "" {
-		tokenFile = cfg.DaemonTokenFile
-	}
-	if tokenFile != "" {
-		token, err = controlrpc.ReadTokenFile(tokenFile)
-		if err != nil {
-			return nil, fmt.Errorf("read daemon bearer token: %w", err)
-		}
-	}
-	var caPEM []byte
-	caCertFile := flags.DaemonCACertFile
-	if caCertFile == "" {
-		caCertFile = cfg.DaemonCACert
-	}
-	if caCertFile != "" {
-		caPEM, err = os.ReadFile(caCertFile)
-		if err != nil {
-			return nil, fmt.Errorf("read daemon CA certificate: %w", err)
-		}
-	}
-	return controlrpc.NewClient(controlrpc.ClientConfig{Endpoint: endpoint, Token: token, CACertPEM: caPEM})
+	return controlrpc.NewClient(clientConfig)
 }
 
 // Commands exposes subcommands of the root command.
@@ -129,6 +104,121 @@ func (c *RootCommand) Commands() []flagshim.Command {
 func (c *RootCommand) Run(ctx context.Context, args []string) error {
 	// If no subcommand was parsed, show usage.
 	return flag.ErrHelp
+}
+
+// IsExternalSubcommand reports whether args begin with an unknown command.
+func (c *RootCommand) IsExternalSubcommand(args []string) bool {
+	index := externalCommandIndex(args)
+	if index < 0 {
+		return false
+	}
+	for _, child := range c.children {
+		if child.Name() == args[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func externalCommandIndex(args []string) int {
+	valueFlags := map[string]bool{"--repository": true, "-repository": true, "-r": true, "--config": true, "-config": true, "-c": true, "--daemon-listen": true, "-daemon-listen": true, "--daemon-token-file": true, "-daemon-token-file": true, "--daemon-ca-cert": true, "-daemon-ca-cert": true}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if valueFlags[arg] {
+			if i+1 >= len(args) {
+				return -1
+			}
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "--") && strings.Contains(arg, "=") {
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			return -1
+		}
+		return i
+	}
+	return -1
+}
+
+// runExternalSubcommand resolves adapters beside the installed executable,
+// from the packaged libexec directory, or from an explicit directory supplied
+// for development and integration tests.
+func RunExternalSubcommand(args []string) error {
+	dirs := []string{os.Getenv("NANDO_LIBEXEC_DIR")}
+	if dirs[0] == "" {
+		path, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve nando executable: %w", err)
+		}
+		path, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("resolve nando executable symlink: %w", err)
+		}
+		execDir := filepath.Dir(path)
+		// go install places each command module's binary in the same bin
+		// directory. Debian packages instead place adapters in ../libexec.
+		dirs = []string{execDir, filepath.Clean(filepath.Join(execDir, "..", "libexec"))}
+	}
+	return runExternalSubcommandInDirs(args, dirs, os.Stdout)
+}
+
+func runExternalSubcommandInDirs(args, dirs []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing external subcommand")
+	}
+	index := externalCommandIndex(args)
+	if index < 0 {
+		return fmt.Errorf("external subcommand is missing")
+	}
+	name := args[index]
+	if name == "" || strings.ContainsAny(name, `/\\`) || name == "." || name == ".." {
+		return fmt.Errorf("invalid external subcommand %q", name)
+	}
+	var path string
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, "nando-"+name)
+		info, err := os.Stat(candidate)
+		if err != nil {
+			continue
+		}
+		if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+			return fmt.Errorf("adapter %q is not an executable regular file", candidate)
+		}
+		path = candidate
+		break
+	}
+	if path == "" {
+		return fmt.Errorf("unknown command %q (adapter nando-%s not found in %s)", name, name, strings.Join(dirs, ", "))
+	}
+	forwarded := append(append([]string(nil), args[:index]...), args[index+1:]...)
+	cmd := exec.Command(path, forwarded...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			return externalExitError{code: exit.ExitCode()}
+		}
+		return fmt.Errorf("run adapter %q: %w", path, err)
+	}
+	return nil
+}
+
+type externalExitError struct{ code int }
+
+func (e externalExitError) Error() string {
+	return fmt.Sprintf("adapter exited with status %d", e.code)
+}
+
+func ExternalExitCode(err error) (int, bool) {
+	var external externalExitError
+	if errors.As(err, &external) {
+		return external.code, true
+	}
+	return 0, false
 }
 
 type trackedBoolFlag struct {
@@ -153,7 +243,6 @@ func (c *RootCommand) MapError(err error) int {
 	if err == nil {
 		return 0
 	}
-
 	if errors.Is(err, ErrInvalidArguments) {
 		return 2
 	}
@@ -199,9 +288,9 @@ func (c *RootCommand) MapError(err error) int {
 }
 
 // ResolveConfigFromContext loads explicit or default TOML user configuration.
-func ResolveConfigFromContext(ctx context.Context) (*config.Config, error) {
+func ResolveConfigFromContext(ctx context.Context) (*runtimeconfig.Config, error) {
 	flags := flagshim.MustFlagFromContext[GlobalFlags](ctx)
-	cfg, _, err := config.LoadOptionalConfig(flags.ConfigFile)
+	cfg, _, err := runtimeconfig.Load(flags.ConfigFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load configuration file: %w", err)
 	}
@@ -215,41 +304,21 @@ func ResolveRepositoryAndVerbose(ctx context.Context) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	resolvedPaths, err := config.DefaultPaths()
+	resolvedPaths, err := runtimeconfig.DefaultPaths()
 	if err != nil {
 		return "", false, fmt.Errorf("failed to determine XDG-style data directory: %w", err)
 	}
 	repoDir := resolvedPaths.DataDir
-	if cfg.Repository != "" {
-		repoDir = cfg.Repository
+	if cfg.Repository.Path != "" {
+		repoDir = cfg.Repository.Path
 	}
 	if gFlags.Repository != "" {
 		repoDir = gFlags.Repository
 	}
-	verbose := cfg.Verbose
+	verbose := cfg.Logging.Verbose
 	if gFlags.VerboseSet {
 		verbose = gFlags.Verbose
 	}
-	if cfg.Repository == "" && gFlags.Repository == "" {
-		legacyDir, err := config.DefaultLegacyRepositoryDir()
-		if err != nil {
-			return "", false, fmt.Errorf("failed to resolve legacy repository location: %w", err)
-		}
-		legacyDB := filepath.Join(legacyDir, "metadata.sqlite")
-		newDB := filepath.Join(repoDir, "metadata.sqlite")
-		if filepath.Clean(legacyDir) != filepath.Clean(repoDir) {
-			if _, err := os.Stat(newDB); errors.Is(err, os.ErrNotExist) {
-				if _, legacyErr := os.Stat(legacyDB); legacyErr == nil {
-					return "", false, fmt.Errorf("legacy repository found at %q; set repository in config.toml or pass --repository to select it explicitly", legacyDir)
-				} else if !errors.Is(legacyErr, os.ErrNotExist) {
-					return "", false, fmt.Errorf("inspect legacy repository location %q: %w", legacyDir, legacyErr)
-				}
-			} else if err != nil {
-				return "", false, err
-			}
-		}
-	}
-
 	return repoDir, verbose, nil
 }
 
@@ -258,6 +327,15 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func() error, err
 	repoDir, _, err := ResolveRepositoryAndVerbose(ctx)
 	if err != nil {
 		return nil, "", nil, err
+	}
+	return NewAppAtRepository(ctx, repoDir)
+}
+
+// NewAppAtRepository initializes the App layer using the supplied repository root.
+// Daemon composition passes an absolute root so file:// Resources are valid for clients.
+func NewAppAtRepository(ctx context.Context, repoDir string) (*app.App, string, func() error, error) {
+	if !filepath.IsAbs(repoDir) {
+		return nil, "", nil, fmt.Errorf("repository path must be absolute: %q", repoDir)
 	}
 
 	dbPath := filepath.Join(repoDir, "metadata.sqlite")
@@ -283,9 +361,6 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func() error, err
 	if err := repoFormat.Validate(); err != nil {
 		return nil, "", nil, errors.Join(err, metaStore.Close())
 	}
-	if err := metaStore.Migrate(ctx); err != nil {
-		return nil, "", nil, errors.Join(fmt.Errorf("failed to apply metadata schema migrations: %w", err), metaStore.Close())
-	}
 
 	objectsDir := filepath.Join(repoDir, "objects")
 	tempDir := filepath.Join(repoDir, "temp")
@@ -301,20 +376,30 @@ func NewAppFromContext(ctx context.Context) (*app.App, string, func() error, err
 	}
 
 	validatingMetaStore := metadata.NewValidatingStore(metaStore)
-	var replica objectstore.ReplicaStore
+	var remoteStore objectstore.RemoteObjectStore
 	var gcsClient io.Closer
-	if repoSettings.DeliveryMode == repository.DeliveryModeGCS {
-		gcsStore, client, err := gcs.NewClientStore(ctx, repoSettings.GCSBucket)
+	if repoSettings.DeliveryMode == repository.DeliveryModeRemote {
+		if repoSettings.RemoteBackend != "" && repoSettings.RemoteBackend != "gcs" {
+			return nil, "", nil, errors.Join(fmt.Errorf("unsupported remote object storage backend %q", repoSettings.RemoteBackend), metaStore.Close())
+		}
+		cfg, err := ResolveConfigFromContext(ctx)
 		if err != nil {
 			return nil, "", nil, errors.Join(err, metaStore.Close())
 		}
-		replica, gcsClient = gcsStore, client
+		if cfg.Remote.URI != "" && cfg.Remote.URI != repoSettings.RemoteURI {
+			return nil, "", nil, errors.Join(fmt.Errorf("configured remote_uri %q does not match repository remote_uri", cfg.Remote.URI), metaStore.Close())
+		}
+		gcsStore, client, err := gcs.NewClientStore(ctx, repoSettings.RemoteURI)
+		if err != nil {
+			return nil, "", nil, errors.Join(err, metaStore.Close())
+		}
+		remoteStore, gcsClient = gcsStore, client
 	}
 	coordinator, err := coordinatorsqlite.Open(filepath.Join(repoDir, "coordination.db"))
 	if err != nil {
 		return nil, "", nil, errors.Join(fmt.Errorf("failed to open repository coordinator: %w", err), closeIfNotNil(gcsClient), metaStore.Close())
 	}
-	repo := repository.NewRepositoryWithReplica(validatingMetaStore, objStore, replica, hasher, coordinator, repoSettings)
+	repo := repository.NewRepositoryWithRemoteObjectStore(validatingMetaStore, objStore, remoteStore, hasher, coordinator, repoSettings)
 	application := app.NewApp(repo)
 
 	cleanup := func() error {

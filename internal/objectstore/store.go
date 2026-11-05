@@ -25,9 +25,12 @@ type CommitResult struct {
 	Size int64
 }
 
-// ReplicaInfo is API-observed metadata for one remote immutable replica.
-type ReplicaInfo struct {
-	ID         content.ID
+// RemoteObjectInfo is API-observed metadata for one remote immutable object.
+type RemoteObjectInfo struct {
+	ID content.ID
+	// ContentID is the provider's raw content-ID metadata. It is retained when
+	// ID cannot be parsed so maintenance can report malformed remote objects.
+	ContentID  string
 	Size       int64
 	Generation int64
 	MD5        []byte
@@ -40,14 +43,14 @@ type LocalObjectInfo struct {
 	ModTime time.Time
 }
 
-// ReplicaStore contains only the remote replica operations used by GCS delivery.
-// It does not own logical paths or Repository consistency.
-type ReplicaStore interface {
-	Upload(context.Context, content.ID, int64, []byte, io.Reader) (ReplicaInfo, error)
-	OpenReplica(context.Context, content.ID) (io.ReadCloser, error)
-	ReplicaExists(context.Context, content.ID) (bool, error)
-	ReplicaAttrs(context.Context, content.ID) (ReplicaInfo, error)
-	ListReplicas(context.Context) ([]ReplicaInfo, error)
+// RemoteObjectStore contains operations for the single selected remote object
+// storage backend. It does not own logical paths or Repository consistency.
+type RemoteObjectStore interface {
+	Upload(context.Context, content.ID, int64, []byte, io.Reader) (RemoteObjectInfo, error)
+	OpenRemote(context.Context, content.ID) (io.ReadCloser, error)
+	RemoteExists(context.Context, content.ID) (bool, error)
+	RemoteAttrs(context.Context, content.ID) (RemoteObjectInfo, error)
+	ListRemoteObjects(context.Context) ([]RemoteObjectInfo, error)
 }
 
 // StagedObject is an immutable backend-owned handle produced by Stage.

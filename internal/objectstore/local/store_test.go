@@ -182,7 +182,7 @@ func TestLocalStore(t *testing.T) {
 
 		// Write corrupt bytes directly to the true destination path
 		destPath := filepath.Join(rootDir, "objects", trueID.String())
-		err = os.WriteFile(destPath, []byte("corrupted data"), 0644)
+		err = os.WriteFile(destPath, []byte("corrupted data"), 0o644)
 		if err != nil {
 			t.Fatalf("failed to write corrupt file: %v", err)
 		}
@@ -218,7 +218,7 @@ func TestLocalStore(t *testing.T) {
 
 		// Create a file with an invalid name in objects/
 		invalidPath := filepath.Join(rootDir, "objects", "not_a_valid_hex_id.txt")
-		err := os.WriteFile(invalidPath, []byte("data"), 0644)
+		err := os.WriteFile(invalidPath, []byte("data"), 0o644)
 		if err != nil {
 			t.Fatalf("failed to write invalid file: %v", err)
 		}
@@ -309,7 +309,7 @@ func TestLocalStore(t *testing.T) {
 		}
 
 		corruptContent := "some corrupted or different content"
-		err = os.WriteFile(destPath, []byte(corruptContent), 0644)
+		err = os.WriteFile(destPath, []byte(corruptContent), 0o644)
 		if err != nil {
 			t.Fatalf("failed to write corrupt file: %v", err)
 		}

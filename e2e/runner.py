@@ -55,6 +55,7 @@ ACTIVE_MOUNTS: set[str] = set()
 PROCESS_LOG = ARTIFACTS / "processes.jsonl"
 ACTION_SCENARIOS = {
     "g1": ["G1-01", "G1-02", "G1-03", "G1-04", "G1-05", "G1-06"],
+    "relative-repository": ["G1-07"],
     "g2-init": ["G2-00"],
     "g2-normal": ["G2-01", "G2-04"],
     "g2-outage": ["G2-02"],
@@ -104,7 +105,7 @@ def rpc_call(method: str, params: dict | None = None, timeout: float = 20.0):
 
 def rpc_cli(args: list[str], *, timeout: float = 30.0, check: bool = True) -> subprocess.CompletedProcess:
     process = subprocess.Popen(
-        [NANDO_BIN, "--repository", REPOSITORY, "--daemon-endpoint", ENDPOINT, *args],
+        [NANDO_BIN, "--repository", REPOSITORY, "--daemon-listen", ENDPOINT, *args],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
@@ -124,7 +125,7 @@ def rpc_cli(args: list[str], *, timeout: float = 30.0, check: bool = True) -> su
 
 
 def nando(*args: str, timeout: float = 20.0, check: bool = True) -> subprocess.CompletedProcess:
-    argv = [NANDO_BIN, "--repository", REPOSITORY, "--daemon-endpoint", ENDPOINT, *args]
+    argv = [NANDO_BIN, "--repository", REPOSITORY, "--daemon-listen", ENDPOINT, *args]
     process = subprocess.Popen(
         argv,
         stdout=subprocess.PIPE,
@@ -403,7 +404,7 @@ def fuse_mount(label: str):
     log_path = ARTIFACTS / f"nando-fuse-{label}.log"
     log_file = log_path.open("ab", buffering=0)
     process = subprocess.Popen(
-        [FUSE_BIN, "-endpoint", ENDPOINT, "-mountpoint", mountpoint],
+        [FUSE_BIN, "--daemon-listen", ENDPOINT, "--fuse-mountpoint", mountpoint],
         stdin=subprocess.DEVNULL,
         stdout=log_file,
         stderr=subprocess.STDOUT,
@@ -626,6 +627,61 @@ def g1() -> None:
         scenario("G1-06", "CAS conflict is reported and retains original staging without overwriting winner", cas_conflict)
 
 
+def _relative_repository_operation() -> str:
+    source = Path(__file__).resolve().parents[1] / "README.adoc"
+    expected = source.read_bytes()
+    repo_parent = ARTIFACTS / "relative-repository"
+    repo_parent.mkdir(parents=True, exist_ok=True)
+    repository = repo_parent / "repository"
+    socket = ARTIFACTS / "run" / "relative-repository.sock"
+    init = subprocess.run([NANDO_BIN, "--repository", str(repository), "init"], capture_output=True, timeout=20)
+    if init.returncode != 0:
+        raise GateFailure(f"initialize relative-path E2E repository: {init.stderr.decode(errors='replace')}")
+
+    global REPOSITORY, SOCKET, ENDPOINT
+    previous = REPOSITORY, SOCKET, ENDPOINT
+    REPOSITORY, SOCKET, ENDPOINT = str(repository), str(socket), f"unix://{socket}"
+    daemon = subprocess.Popen(
+        [NANDO_BIN, "--repository", "./repository", "--daemon-listen", ENDPOINT, "daemon"],
+        cwd=repo_parent,
+        stdout=(ARTIFACTS / "daemon-relative-repository.log").open("wb"),
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    register_process(daemon, "daemon with relative repository path")
+    try:
+        daemon_ready()
+        source_copy = ARTIFACTS / "README.adoc"
+        source_copy.write_bytes(expected)
+        nando("put", str(source_copy), "/README.adoc")
+        actual = cat_bytes("/README.adoc")
+        if actual != expected:
+            raise GateFailure("daemon cat bytes differ after put against relative repository")
+
+        with fuse_mount("relative-repository") as mountpoint:
+            with source.open("rb") as src, open(os.path.join(mountpoint, "README-copy.adoc"), "xb") as dst:
+                dst.write(src.read())
+                dst.flush()
+                os.fsync(dst.fileno())
+            actual = cat_bytes("/README-copy.adoc")
+            if actual != expected:
+                raise GateFailure("daemon cat bytes differ after FUSE copy against relative repository")
+        return "put/cat bytes and FUSE copy/cat bytes match README.adoc"
+    finally:
+        if daemon.poll() is None:
+            terminate_process_group(daemon, "daemon with relative repository path")
+        ACTIVE_PROCESSES.pop(daemon.pid, None)
+        REPOSITORY, SOCKET, ENDPOINT = previous
+
+
+def relative_repository() -> None:
+    scenario(
+        "G1-07",
+        "daemon started with relative repository returns accessible Resource URIs for put/cat and FUSE copy/cat",
+        _relative_repository_operation,
+    )
+
+
 def request_json(url: str, method: str = "GET", body: dict | None = None, timeout: float = 3.0):
     data = None if body is None else json.dumps(body).encode()
     headers = {"Content-Type": "application/json"} if data is not None else {}
@@ -833,8 +889,14 @@ def g2_ack_replay() -> None:
             timeout=45,
         )
         after = proxy_control("status")
-        if after["replay_preconditions"] != 1 or after["upload_puts"] <= expected_state["upload_puts"]:
-            raise GateFailure(f"scheduler did not observe the already-existing object's conditional-create conflict before payload upload: before={expected_state}, after={after}")
+        # A resumed upload session may be rejected at its initial request, or
+        # the storage client may reconcile the committed object by attributes
+        # before starting a new upload. Both paths must avoid replacing the
+        # immutable object. fake-gcs-server can also accept an old session's
+        # final chunk, so requiring a specific 412 from that emulator is not a
+        # reliable statement of the repository contract.
+        if after["upload_puts"] != expected_state["upload_puts"]:
+            raise GateFailure(f"scheduler resent payload after the committed object was found: before={expected_state}, after={after}")
         metadata = gcs_object(content_id)
         if metadata is None or int(metadata["generation"]) != expected_state["generation"]:
             raise GateFailure(f"idempotent replay changed or lost the committed generation: {metadata}")
@@ -904,7 +966,7 @@ def g3_start_uncommitted() -> None:
         raise GateFailure("crash-test mountpoint was already mounted")
     log_file = (ARTIFACTS / "nando-fuse-g3-crash.log").open("ab", buffering=0)
     fuse = subprocess.Popen(
-        [FUSE_BIN, "-endpoint", ENDPOINT, "-mountpoint", mountpoint],
+        [FUSE_BIN, "--daemon-listen", ENDPOINT, "--fuse-mountpoint", mountpoint],
         stdin=subprocess.DEVNULL,
         stdout=log_file,
         stderr=subprocess.STDOUT,
@@ -1063,7 +1125,7 @@ def g3_verify_recovery() -> None:
         conflict_path = ARTIFACTS / "recovery-winner.bin"
         conflict_path.write_bytes(winner)
         put_winner = subprocess.run(
-            [NANDO_BIN, "--repository", REPOSITORY, "--daemon-endpoint", ENDPOINT, "put", str(conflict_path), "/recovery-conflict"],
+            [NANDO_BIN, "--repository", REPOSITORY, "--daemon-listen", ENDPOINT, "put", str(conflict_path), "/recovery-conflict"],
             text=True,
             capture_output=True,
             timeout=30,
@@ -1222,6 +1284,8 @@ def main() -> int:
             print("runner ready; daemon ping passed; /dev/fuse accessible")
         elif action == "g1":
             g1()
+        elif action == "relative-repository":
+            relative_repository()
         elif action == "g2-init":
             g2_init()
         elif action == "g2-proxy-ready":

@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Tests, race detector, and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .go-version
+          cache: false
+      - name: Verify workspace developer install commands
+        run: |
+          set -euo pipefail
+          test "$(go env GOWORK)" = "$GITHUB_WORKSPACE/go.work"
+          export GOBIN="$RUNNER_TEMP/workspace-bin"
+          mkdir -p "$GOBIN"
+          go install ./...
+          test -x "$GOBIN/nando"
+          test ! -e "$GOBIN/nando-fuse"
+          test ! -e "$GOBIN/nando-webdav"
+          go install ./cmd/nando
+          go install ./adapters/fuse/cmd/nando-fuse
+          go install ./adapters/webdav/cmd/nando-webdav
+          test -x "$GOBIN/nando"
+          test -x "$GOBIN/nando-fuse"
+          test -x "$GOBIN/nando-webdav"
+      - name: Test root module
+        run: go test ./...
+      - name: Race test root module
+        run: go test -race ./...
+      - name: Test FUSE module
+        working-directory: adapters/fuse
+        run: go test ./...
+      - name: Race test FUSE module
+        working-directory: adapters/fuse
+        run: go test -race ./...
+      - name: Test WebDAV module
+        working-directory: adapters/webdav
+        run: go test ./...
+      - name: Race test WebDAV module
+        working-directory: adapters/webdav
+        run: go test -race ./...
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.15.0
+          args: --timeout=5m ./...
+
+  cross-build:
+    name: Cross-build release targets
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .go-version
+          cache: false
+      - name: Install archive utilities
+        run: sudo apt-get update && sudo apt-get install -y zip
+      - name: Build all release executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOCACHE="$(mktemp -d)"
+          trap 'rm -rf "$GOCACHE"' EXIT
+          mkdir -p dist
+          build() {
+            local goos=$1 goarch=$2 name=$3 package=$4 module=${5:-.}
+            local suffix=""
+            [[ "$goos" == windows ]] && suffix=.exe
+            if [[ "$module" == . ]]; then
+              CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -o "dist/$name$suffix" "$package"
+            else
+              (cd "$module" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -o "$GITHUB_WORKSPACE/dist/$name$suffix" "$package")
+            fi
+          }
+          archive() {
+            local goos=$1 goarch=$2; shift 2
+            local staging="dist/staging-$goos-$goarch"
+            mkdir -p "$staging"
+            for item in "$@"; do cp "dist/$item" "$staging/"; done
+            cp README.adoc LICENSE "$staging/"
+            local base="nando_ci_${goos}_${goarch}"
+            if [[ "$goos" == windows ]]; then
+              (cd "$staging" && zip -q -r "../$base.zip" .)
+            else
+              tar -C "$staging" -czf "dist/$base.tar.gz" .
+            fi
+            rm -rf "$staging"
+            rm -f dist/nando dist/nando-fuse dist/nando-webdav dist/nando.exe dist/nando-webdav.exe
+          }
+          for arch in amd64 arm64; do
+            build linux "$arch" nando ./cmd/nando
+            build linux "$arch" nando-fuse ./cmd/nando-fuse adapters/fuse
+            build linux "$arch" nando-webdav ./cmd/nando-webdav adapters/webdav
+            archive linux "$arch" nando nando-fuse nando-webdav
+          done
+          for arch in amd64 arm64; do
+            build darwin "$arch" nando ./cmd/nando
+            build darwin "$arch" nando-webdav ./cmd/nando-webdav adapters/webdav
+            archive darwin "$arch" nando nando-webdav
+            build windows "$arch" nando ./cmd/nando
+            build windows "$arch" nando-webdav ./cmd/nando-webdav adapters/webdav
+            archive windows "$arch" nando.exe nando-webdav.exe
+          done
+          find dist -maxdepth 1 -type f -name 'nando_ci_*' -print
