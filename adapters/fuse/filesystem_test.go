@@ -41,6 +41,7 @@ type stubDaemon struct {
 	begins     int
 	commitErr  error
 	releaseErr error
+	resolveErr error
 }
 
 func newStub(t *testing.T, content []byte) *stubDaemon {
@@ -69,6 +70,9 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 	}
 	switch method {
 	case controlrpc.MethodResolveEntry:
+		if d.resolveErr != nil {
+			return d.resolveErr
+		}
 		if !d.exists || p["entry_id"] != d.entry.ID {
 			return &controlrpc.RemoteError{Code: controlrpc.CodeEntryNotFound, Message: "missing"}
 		}
@@ -270,12 +274,18 @@ func TestSetattrChangesLogicalModeWithoutChangingStageMode(t *testing.T) {
 	}
 }
 
-func TestReadHandleGetattrUsesRefreshedLogicalMode(t *testing.T) {
+func TestReadHandleGetattrUsesCachedLogicalModeWithoutResolveRPC(t *testing.T) {
 	ctx := context.Background()
 	daemon := newStub(t, []byte("content"))
 	daemon.entry.Mode = 0o640
 	adapter := New(daemon)
-	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	root := &entryNode{owner: adapter, entry: controlrpc.Entry{ID: "root", Kind: "directory"}, path: "/"}
+	_ = fs.NewNodeFS(root, &fs.Options{})
+	var entryOut fuse.EntryOut
+	if _, errno := root.Lookup(ctx, "file", &entryOut); errno != 0 {
+		t.Fatalf("lookup: %v", errno)
+	}
+	node := adapter.byID[daemon.entry.ID]
 	begin, file, lease, errno := adapter.beginRead(ctx, daemon.path, daemon.entry.ID)
 	if errno != 0 {
 		t.Fatalf("begin read: %v", errno)
@@ -295,17 +305,45 @@ func TestReadHandleGetattrUsesRefreshedLogicalMode(t *testing.T) {
 		t.Fatalf("read-handle mode=%o, want logical mode 640", got)
 	}
 
-	// An already open handle follows the same Entry identity across chmod and rename.
+	// Attribute reads use the node's last authoritative snapshot and remain
+	// available while the daemon cannot refresh it.
 	daemon.mu.Lock()
 	daemon.entry.Mode = 0o604
 	daemon.entry.Revision++
-	daemon.path = "/renamed"
+	daemon.resolveErr = errors.New("daemon unavailable")
 	daemon.mu.Unlock()
 	if errno := h.Getattr(ctx, &out); errno != 0 {
-		t.Fatalf("Getattr after chmod and rename: %v", errno)
+		t.Fatalf("Getattr while daemon unavailable: %v", errno)
+	}
+	if got := out.Mode & 0o7777; got != 0o640 {
+		t.Fatalf("cached read-handle mode=%o, want 640", got)
+	}
+	daemon.mu.Lock()
+	for _, method := range daemon.calls {
+		if method == controlrpc.MethodResolveEntry {
+			daemon.mu.Unlock()
+			t.Fatal("Getattr made a ResolveEntry RPC")
+		}
+	}
+	daemon.mu.Unlock()
+
+	// A successful refresh through the normal node path exposes chmod metadata
+	// while retaining the same stable inode identity after a rename.
+	daemon.mu.Lock()
+	daemon.resolveErr = nil
+	daemon.path = "/renamed"
+	daemon.mu.Unlock()
+	if errno := adapter.resolveNode(ctx, node); errno != 0 {
+		t.Fatalf("refresh node after chmod and rename: %v", errno)
+	}
+	if errno := h.Getattr(ctx, &out); errno != 0 {
+		t.Fatalf("Getattr after refresh: %v", errno)
 	}
 	if got := out.Mode & 0o7777; got != 0o604 {
 		t.Fatalf("refreshed read-handle mode=%o, want 604", got)
+	}
+	if out.Attr.Ino != entryOut.Attr.Ino {
+		t.Fatalf("inode after rename=%d, want stable inode %d", out.Attr.Ino, entryOut.Attr.Ino)
 	}
 }
 
@@ -431,6 +469,23 @@ func TestUnlinkMarksIntentAndKeepsOpenHandlePrivate(t *testing.T) {
 	}
 	if root.GetChild("file") == nil {
 		t.Fatal("Unlink callback changed inode tree before go-fuse rawBridge")
+	}
+	var attr fuse.AttrOut
+	stageInfo, err := state.file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errno := handle.Getattr(ctx, &attr); errno != 0 {
+		t.Fatalf("Getattr through unlinked write handle: %v", errno)
+	}
+	if got := attr.Mode & 0o7777; got != state.logicalMode {
+		t.Fatalf("unlinked handle mode=%o, want logical mode %o", got, state.logicalMode)
+	}
+	if attr.Attr.Ino != inodeNumber(node.entryID()) || attr.Mode&syscall.S_IFMT != syscall.S_IFREG {
+		t.Fatalf("unlinked handle identity/type: ino=%d mode=%o", attr.Attr.Ino, attr.Mode)
+	}
+	if attr.Size != uint64(stageInfo.Size()) || attr.Mtime != uint64(stageInfo.ModTime().Unix()) || attr.Mtimensec != uint32(stageInfo.ModTime().Nanosecond()) {
+		t.Fatalf("unlinked handle staged attributes: size=%d mtime=%d.%09d, want size=%d mtime=%s", attr.Size, attr.Mtime, attr.Mtimensec, stageInfo.Size(), stageInfo.ModTime().Format(time.RFC3339Nano))
 	}
 	if _, errno := handle.Write(ctx, []byte("private"), 0); errno != 0 {
 		t.Fatalf("write through unlinked open handle: %v", errno)

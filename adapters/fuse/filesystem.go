@@ -792,9 +792,10 @@ func (h *fileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Err
 	if err != nil {
 		return errnoFor(err)
 	}
-	if errno := h.node.owner.resolveNode(ctx, h.node); errno != 0 {
-		return errno
-	}
+	// Handle attributes describe the opened inode and resource. The node cache
+	// is refreshed by lookup and mutation paths; querying the daemon for every
+	// handle Getattr would make an open descriptor depend on daemon availability
+	// and would fail after unlink even though its resource remains valid.
 	entry := h.node.currentEntry()
 	mode := entry.Mode & 0o7777
 	if h.write != nil {
