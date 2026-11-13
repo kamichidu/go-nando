@@ -64,14 +64,16 @@ type writeState struct {
 }
 
 type fileHandle struct {
-	node     *entryNode
-	write    *writeState
-	readFile *os.File
-	readID   string
-	lease    *renewer
-	writable bool
-	append   bool
-	once     sync.Once
+	node        *entryNode
+	write       *writeState
+	readFile    *os.File
+	readID      string
+	lease       *renewer
+	writable    bool
+	append      bool
+	logicalMode uint32
+	mu          sync.Mutex
+	once        sync.Once
 }
 
 func New(client rpcClient) *FileSystem {
@@ -398,7 +400,7 @@ func (n *entryNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint
 		if errno != 0 {
 			return nil, 0, errno
 		}
-		h := &fileHandle{node: n, readFile: file, readID: begin.SessionID, lease: lease}
+		h := &fileHandle{node: n, readFile: file, readID: begin.SessionID, lease: lease, logicalMode: begin.Entry.Mode & 0o7777}
 		return h, fuse.FOPEN_DIRECT_IO, 0
 	}
 	id := n.entryID()
@@ -699,6 +701,30 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 		return n.Getattr(ctx, nil, out)
 	}
 	h, hasHandle := f.(*fileHandle)
+	if hasHandle && h.write == nil {
+		// A read Resource is immutable. fchmod is tracked on this descriptor's
+		// private attribute view; truncating it would mutate the read Resource.
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if sizeSet {
+			return syscall.EBADF
+		}
+		if modeSet {
+			h.logicalMode = mode & 0o7777
+		}
+		info, err := h.readFile.Stat()
+		if err != nil {
+			return errnoFor(err)
+		}
+		entry := n.currentEntry()
+		entry.Mode = entry.Mode&^0o7777 | h.logicalMode
+		setAttr(&out.Attr, entry, n.StableAttr().Ino)
+		out.Mode = inodeMode(entry)
+		out.Size = uint64(max(info.Size(), 0))
+		out.Mtime = uint64(info.ModTime().Unix())
+		out.Mtimensec = uint32(info.ModTime().Nanosecond())
+		return 0
+	}
 	var state *writeState
 	ephemeral := false
 	if hasHandle && h.write != nil {
@@ -713,6 +739,10 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 	}
 	state.mu.Lock()
 	if state.closed {
+		state.mu.Unlock()
+		return syscall.ESTALE
+	}
+	if state.file == nil {
 		state.mu.Unlock()
 		return syscall.ESTALE
 	}
@@ -734,9 +764,11 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 	}
 	if modeSet {
 		logicalMode := mode & 0o7777
-		if errno := n.owner.call(ctx, controlrpc.MethodSetMode, controlrpc.SetModeParams{SessionID: state.sessionID, Mode: logicalMode}, nil); errno != 0 {
-			state.mu.Unlock()
-			return errno
+		if !state.unlinked {
+			if errno := n.owner.call(ctx, controlrpc.MethodSetMode, controlrpc.SetModeParams{SessionID: state.sessionID, Mode: logicalMode}, nil); errno != 0 {
+				state.mu.Unlock()
+				return errno
+			}
 		}
 		state.logicalMode = logicalMode
 	}
@@ -748,9 +780,19 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 		state.mu.Unlock()
 		return errnoFor(err)
 	}
+	entry := n.currentEntry()
+	entry.Mode = entry.Mode&^0o7777 | logicalMode
+	setAttr(&out.Attr, entry, n.StableAttr().Ino)
+	out.Mode = inodeMode(entry)
+	out.Size = uint64(max(stagedInfo.Size(), 0))
+	out.Mtime = uint64(stagedInfo.ModTime().Unix())
+	out.Mtimensec = uint32(stagedInfo.ModTime().Nanosecond())
 	state.mu.Unlock()
 	if unlinked {
-		return (&fileHandle{node: n, write: state}).Getattr(ctx, out)
+		return 0
+	}
+	if hasHandle && h.write == state {
+		return 0
 	}
 	if ephemeral && !state.unlinked {
 		if errno := (&fileHandle{node: n, write: state, writable: true}).Fsync(ctx, 0); errno != 0 {
@@ -767,12 +809,6 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 			}
 		}
 	}
-	if errno := n.getattrWithMode(ctx, out, logicalMode); errno != 0 {
-		return errno
-	}
-	out.Size = uint64(max(stagedInfo.Size(), 0))
-	out.Mtime = uint64(stagedInfo.ModTime().Unix())
-	out.Mtimensec = uint32(stagedInfo.ModTime().Nanosecond())
 	return 0
 }
 
@@ -796,26 +832,23 @@ func (h *fileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Err
 	// is refreshed by lookup and mutation paths; querying the daemon for every
 	// handle Getattr would make an open descriptor depend on daemon availability
 	// and would fail after unlink even though its resource remains valid.
-	entry := h.node.currentEntry()
-	mode := entry.Mode & 0o7777
+	var mode uint32
 	if h.write != nil {
+		entry := h.node.currentEntry()
 		mode = h.write.logicalMode
+		setAttr(&out.Attr, entry, h.node.StableAttr().Ino)
+		out.Mode = inodeMode(entry)&^0o7777 | mode
+	} else {
+		h.mu.Lock()
+		mode = h.logicalMode
+		entry := h.node.currentEntry()
+		h.mu.Unlock()
+		setAttr(&out.Attr, entry, h.node.StableAttr().Ino)
+		out.Mode = inodeMode(entry)&^0o7777 | mode
 	}
-	setAttr(&out.Attr, entry, h.node.StableAttr().Ino)
-	out.Mode = inodeMode(entry)&^0o7777 | mode
 	out.Size = uint64(max(info.Size(), 0))
 	out.Mtime = uint64(info.ModTime().Unix())
 	out.Mtimensec = uint32(info.ModTime().Nanosecond())
-	return 0
-}
-
-func (n *entryNode) getattrWithMode(ctx context.Context, out *fuse.AttrOut, mode uint32) syscall.Errno {
-	if errno := n.owner.resolveNode(ctx, n); errno != 0 {
-		return errno
-	}
-	entry := n.currentEntry()
-	entry.Mode = entry.Mode&^0o7777 | mode&0o7777
-	setAttr(&out.Attr, entry, n.StableAttr().Ino)
 	return 0
 }
 

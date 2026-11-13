@@ -292,7 +292,7 @@ func TestReadHandleGetattrUsesCachedLogicalModeWithoutResolveRPC(t *testing.T) {
 	}
 	defer file.Close()
 	defer lease.close()
-	h := &fileHandle{node: node, readFile: file, readID: begin.SessionID, lease: lease}
+	h := &fileHandle{node: node, readFile: file, readID: begin.SessionID, lease: lease, logicalMode: begin.Entry.Mode & 0o7777}
 	defer h.Release(ctx)
 	if err := os.Chmod(file.Name(), 0o600); err != nil {
 		t.Fatal(err)
@@ -327,8 +327,8 @@ func TestReadHandleGetattrUsesCachedLogicalModeWithoutResolveRPC(t *testing.T) {
 	}
 	daemon.mu.Unlock()
 
-	// A successful refresh through the normal node path exposes chmod metadata
-	// while retaining the same stable inode identity after a rename.
+	// Refreshing the node after an external chmod and rename does not change
+	// the already-open handle's private attribute snapshot.
 	daemon.mu.Lock()
 	daemon.resolveErr = nil
 	daemon.path = "/renamed"
@@ -339,8 +339,8 @@ func TestReadHandleGetattrUsesCachedLogicalModeWithoutResolveRPC(t *testing.T) {
 	if errno := h.Getattr(ctx, &out); errno != 0 {
 		t.Fatalf("Getattr after refresh: %v", errno)
 	}
-	if got := out.Mode & 0o7777; got != 0o604 {
-		t.Fatalf("refreshed read-handle mode=%o, want 604", got)
+	if got := out.Mode & 0o7777; got != 0o640 {
+		t.Fatalf("refreshed read-handle mode=%o, want private mode 640", got)
 	}
 	if out.Attr.Ino != entryOut.Attr.Ino {
 		t.Fatalf("inode after rename=%d, want stable inode %d", out.Attr.Ino, entryOut.Attr.Ino)
@@ -501,6 +501,155 @@ func TestUnlinkMarksIntentAndKeepsOpenHandlePrivate(t *testing.T) {
 	}
 	if len(daemon.sessions) != 0 {
 		t.Fatalf("unlink left session state: %+v", daemon.sessions)
+	}
+}
+
+func TestUnlinkedOpenWriterOwnsAttributesAndResources(t *testing.T) {
+	for _, recovery := range []bool{false, true} {
+		name := "active session"
+		if recovery {
+			name = "recovery with cleared session ID"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			daemon := newStub(t, []byte("original"))
+			adapter := New(daemon)
+			node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+			state, errno := adapter.startWrite(ctx, node, false)
+			if errno != 0 {
+				t.Fatal(errno)
+			}
+			state.handles = 1
+			adapter.writes[node.entryID()] = state
+			handle := &fileHandle{node: node, write: state, writable: true}
+			if recovery {
+				if _, errno := handle.Write(ctx, []byte("old"), 0); errno != 0 {
+					t.Fatal(errno)
+				}
+				daemon.commitErr = &controlrpc.RemoteError{Code: controlrpc.CodeEntryConflict, Message: "conflict"}
+				if errno := handle.Fsync(ctx, 0); errno != syscall.EAGAIN {
+					t.Fatalf("failed commit errno=%v, want EAGAIN", errno)
+				}
+				if state.sessionID != "" || state.recoveryID == "" {
+					t.Fatalf("failed commit state session=%q recovery=%q", state.sessionID, state.recoveryID)
+				}
+				daemon.commitErr = nil
+			}
+			root := &entryNode{owner: adapter, entry: controlrpc.Entry{ID: "root", Kind: "directory"}, path: "/"}
+			_ = fs.NewNodeFS(root, &fs.Options{})
+			if errno := root.Unlink(ctx, "file"); errno != 0 {
+				t.Fatalf("unlink: %v", errno)
+			}
+			callsAfterUnlink := len(daemon.calls)
+
+			in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE | fuse.FATTR_MODE, Size: 4, Mode: 0o640}}
+			var attr fuse.AttrOut
+			if errno := node.Setattr(ctx, handle, in, &attr); errno != 0 {
+				t.Fatalf("handle Setattr after unlink: %v", errno)
+			}
+			if got := attr.Mode & 0o7777; got != 0o640 || attr.Size != 4 {
+				t.Fatalf("Setattr snapshot mode=%o size=%d, want 640 and 4", got, attr.Size)
+			}
+			if _, errno := handle.Write(ctx, []byte("data"), 0); errno != 0 {
+				t.Fatalf("Write after unlink: %v", errno)
+			}
+			result, errno := handle.Read(ctx, make([]byte, 4), 0)
+			if errno != 0 {
+				t.Fatalf("Read after unlink: %v", errno)
+			}
+			buf, status := result.Bytes(make([]byte, 4))
+			if status != fuse.OK || string(buf) != "data" {
+				t.Fatalf("Read result=%q status=%v", buf, status)
+			}
+			if errno := handle.Getattr(ctx, &attr); errno != 0 {
+				t.Fatalf("Getattr after unlink: %v", errno)
+			}
+			if attr.Size != 4 || attr.Mode&0o7777 != 0o640 {
+				t.Fatalf("handle Getattr mode=%o size=%d", attr.Mode&0o7777, attr.Size)
+			}
+			if errno := handle.Fsync(ctx, 0); errno != 0 {
+				t.Fatalf("Fsync after unlink: %v", errno)
+			}
+			info, err := state.file.Stat()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.Mode().Perm(); got != 0o600 {
+				t.Fatalf("staging permission mode=%o, want 600", got)
+			}
+			if len(daemon.calls) != callsAfterUnlink {
+				t.Fatalf("handle operations made daemon calls after unlink: %v", daemon.calls[callsAfterUnlink:])
+			}
+			if daemon.exists || daemon.commits != 0 || daemon.begins != 1 {
+				t.Fatalf("unlink handle operations changed repository/session state: exists=%v commits=%d begins=%d", daemon.exists, daemon.commits, daemon.begins)
+			}
+			if errno := handle.Release(ctx); errno != 0 {
+				t.Fatalf("Release: %v", errno)
+			}
+			if len(daemon.sessions) != 0 {
+				t.Fatalf("cleanup left session state: %+v", daemon.sessions)
+			}
+		})
+	}
+}
+
+func TestReadHandleSetattrAfterUnlinkKeepsImmutableResource(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("readable"))
+	adapter := New(daemon)
+	root := &entryNode{owner: adapter, entry: controlrpc.Entry{ID: "root", Kind: "directory"}, path: "/"}
+	_ = fs.NewNodeFS(root, &fs.Options{})
+	var out fuse.EntryOut
+	if _, errno := root.Lookup(ctx, "file", &out); errno != 0 {
+		t.Fatal(errno)
+	}
+	node := adapter.byID[daemon.entry.ID]
+	read, file, lease, errno := adapter.beginRead(ctx, daemon.path, daemon.entry.ID)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	handle := &fileHandle{node: node, readFile: file, readID: read.SessionID, lease: lease, logicalMode: daemon.entry.Mode & 0o7777}
+	if errno := root.Unlink(ctx, "file"); errno != 0 {
+		t.Fatalf("unlink: %v", errno)
+	}
+	callsAfterUnlink := len(daemon.calls)
+	var attr fuse.AttrOut
+	mode := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: 0o600}}
+	if errno := node.Setattr(ctx, handle, mode, &attr); errno != 0 {
+		t.Fatalf("read handle fchmod after unlink: %v", errno)
+	}
+	if attr.Mode&0o7777 != 0o600 {
+		t.Fatalf("private read-handle mode=%o, want 600", attr.Mode&0o7777)
+	}
+	size := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE, Size: 1}}
+	if errno := node.Setattr(ctx, handle, size, &attr); errno != syscall.EBADF {
+		t.Fatalf("read handle ftruncate errno=%v, want EBADF", errno)
+	}
+	result, errno := handle.Read(ctx, make([]byte, 8), 0)
+	if errno != 0 {
+		t.Fatalf("Read after unlink: %v", errno)
+	}
+	data, status := result.Bytes(make([]byte, 8))
+	if status != fuse.OK || string(data) != "readable" {
+		t.Fatalf("read bytes=%q status=%v", data, status)
+	}
+	if errno := handle.Getattr(ctx, &attr); errno != 0 {
+		t.Fatalf("Getattr after unlink: %v", errno)
+	}
+	if errno := handle.Fsync(ctx, 0); errno != 0 {
+		t.Fatalf("Fsync after unlink: %v", errno)
+	}
+	if len(daemon.calls) != callsAfterUnlink {
+		t.Fatalf("read handle operations made daemon calls after unlink: %v", daemon.calls[callsAfterUnlink:])
+	}
+	if daemon.exists || daemon.commits != 0 {
+		t.Fatalf("read handle operations resurrected Entry: exists=%v commits=%d", daemon.exists, daemon.commits)
+	}
+	if errno := handle.Release(ctx); errno != 0 {
+		t.Fatalf("Release: %v", errno)
+	}
+	if len(daemon.sessions) != 0 {
+		t.Fatalf("read session cleanup left state: %+v", daemon.sessions)
 	}
 }
 
