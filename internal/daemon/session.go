@@ -373,25 +373,10 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 	if commitErr == nil {
 		input := app.PutInput{LocalPath: session.StagingPath, RepositoryPath: session.RepositoryPath}
 		if session.LogicalMode != nil {
-			if writer, ok := m.app.(interface {
-				PutExpectedWithMode(context.Context, app.PutInput, repository.PutExpectation, *uint32) error
-				PutExpectedEntryIDWithMode(context.Context, app.PutInput, metadata.Entry, *uint32) error
-			}); ok {
-				if session.FollowEntryID {
-					commitErr = writer.PutExpectedEntryIDWithMode(ctx, input, session.ObservedEntry, session.LogicalMode)
-				} else {
-					commitErr = writer.PutExpectedWithMode(ctx, input, session.Expectation, session.LogicalMode)
-				}
+			if session.FollowEntryID {
+				commitErr = m.app.PutExpectedEntryIDWithMode(ctx, input, session.ObservedEntry, session.LogicalMode)
 			} else {
-				if stageModeMatches(session.StagingPath, *session.LogicalMode) {
-					if session.FollowEntryID {
-						commitErr = m.app.PutExpectedEntryID(ctx, input, session.ObservedEntry)
-					} else {
-						commitErr = m.app.PutExpected(ctx, input, session.Expectation)
-					}
-				} else {
-					commitErr = errors.New("repository app does not support logical mode commits")
-				}
+				commitErr = m.app.PutExpectedWithMode(ctx, input, session.Expectation, session.LogicalMode)
 			}
 		} else if session.FollowEntryID {
 			commitErr = m.app.PutExpectedEntryID(ctx, input, session.ObservedEntry)
@@ -715,25 +700,10 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 	input := app.PutInput{LocalPath: record.StagingPath, RepositoryPath: record.RepositoryPath}
 	var err error
 	if record.LogicalMode != nil {
-		if writer, ok := m.app.(interface {
-			PutExpectedWithMode(context.Context, app.PutInput, repository.PutExpectation, *uint32) error
-			PutExpectedEntryIDWithMode(context.Context, app.PutInput, metadata.Entry, *uint32) error
-		}); ok {
-			if record.FollowEntryID {
-				err = writer.PutExpectedEntryIDWithMode(ctx, input, record.ObservedEntry, record.LogicalMode)
-			} else {
-				err = writer.PutExpectedWithMode(ctx, input, record.Expectation, record.LogicalMode)
-			}
+		if record.FollowEntryID {
+			err = m.app.PutExpectedEntryIDWithMode(ctx, input, record.ObservedEntry, record.LogicalMode)
 		} else {
-			if stageModeMatches(record.StagingPath, *record.LogicalMode) {
-				if record.FollowEntryID {
-					err = m.app.PutExpectedEntryID(ctx, input, record.ObservedEntry)
-				} else {
-					err = m.app.PutExpected(ctx, input, record.Expectation)
-				}
-			} else {
-				err = errors.New("repository app does not support logical mode commits")
-			}
+			err = m.app.PutExpectedWithMode(ctx, input, record.Expectation, record.LogicalMode)
 		}
 	} else if record.FollowEntryID {
 		err = m.app.PutExpectedEntryID(ctx, input, record.ObservedEntry)
@@ -754,11 +724,6 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 		err = fmt.Errorf("recovery repository commit succeeded but completion record failed: %w", err)
 	}
 	return m.updateRecoveryFailure(record, err)
-}
-
-func stageModeMatches(path string, mode uint32) bool {
-	info, err := os.Stat(path)
-	return err == nil && uint32(info.Mode().Perm()) == mode&0o7777
 }
 
 func (m *sessionManager) updateRecoveryFailure(record *recoveryRecord, cause error) error {
@@ -1147,9 +1112,12 @@ func (m *sessionManager) resolveManifestStage(record *recoveryRecord) error {
 	return nil
 }
 
-// Legacy FUSE sessions could chmod their private stage to mode 000. The
-// manifest path is validated and resolved beneath rpc-sessions before this
-// repair, so recovery never changes a repository or user file.
+// Legacy FUSE sessions could chmod their private stage to mode 000. Old
+// manifests have no writer-kind field, so zero permissions are the only
+// recoverable signal for that legacy case. Other nil-mode records stay
+// mode-unspecified, preserving ordinary Resource commit semantics. A legacy
+// ordinary Resource deliberately chmodded to 000 is indistinguishable; in
+// that case recovery treats its captured zero mode as explicit.
 func (m *sessionManager) restoreLegacyStageAccess(record *recoveryRecord) error {
 	if record.Committed || record.Discarding {
 		return nil
@@ -1159,15 +1127,17 @@ func (m *sessionManager) restoreLegacyStageAccess(record *recoveryRecord) error 
 		return err
 	}
 	if record.LogicalMode == nil {
-		mode := uint32(info.Mode().Perm())
-		updated := *record
-		updated.LogicalMode = &mode
-		updated.UpdatedAt = time.Now().UTC()
-		if err := m.persistRecord(&updated); err != nil {
-			return fmt.Errorf("persist legacy stage mode: %w", err)
+		if info.Mode().Perm() == 0 {
+			mode := uint32(0)
+			updated := *record
+			updated.LogicalMode = &mode
+			updated.UpdatedAt = time.Now().UTC()
+			if err := m.persistRecord(&updated); err != nil {
+				return fmt.Errorf("persist legacy mode 000: %w", err)
+			}
+			record.LogicalMode = &mode
+			record.UpdatedAt = updated.UpdatedAt
 		}
-		record.LogicalMode = &mode
-		record.UpdatedAt = updated.UpdatedAt
 	}
 	if info.Mode().Perm()&0o600 == 0o600 {
 		return nil

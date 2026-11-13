@@ -27,6 +27,8 @@ type repositoryUseCases interface {
 	Mkdir(context.Context, string, uint32) error
 	PutExpected(context.Context, app.PutInput, repository.PutExpectation) error
 	PutExpectedEntryID(context.Context, app.PutInput, metadata.Entry) error
+	PutExpectedWithMode(context.Context, app.PutInput, repository.PutExpectation, *uint32) error
+	PutExpectedEntryIDWithMode(context.Context, app.PutInput, metadata.Entry, *uint32) error
 	Move(context.Context, app.MoveInput) error
 	MoveEntry(context.Context, metadata.EntryID, string) error
 	Remove(context.Context, string) error

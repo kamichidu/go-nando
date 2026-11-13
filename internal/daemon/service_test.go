@@ -28,6 +28,8 @@ type fakeRepositoryUseCases struct {
 	putContinue      chan struct{}
 	putErr           error
 	removeEntryErr   error
+	lastPutMode      *uint32
+	modePutCount     int
 }
 
 type failingSessionFiles struct {
@@ -253,12 +255,32 @@ func (f *fakeRepositoryUseCases) PutExpected(_ context.Context, input app.PutInp
 		f.entry.Revision++
 	}
 	f.entry.Size = int64(len(data))
+	if info, err := os.Stat(input.LocalPath); err == nil {
+		f.entry.Mode = uint32(info.Mode().Perm())
+	}
 	f.content = append([]byte(nil), data...)
 	return nil
 }
 
 func (f *fakeRepositoryUseCases) PutExpectedEntryID(ctx context.Context, input app.PutInput, observed metadata.Entry) error {
 	return f.PutExpected(ctx, input, repository.PutExpectation{EntryID: observed.ID, Revision: observed.Revision})
+}
+
+func (f *fakeRepositoryUseCases) PutExpectedWithMode(ctx context.Context, input app.PutInput, expected repository.PutExpectation, mode *uint32) error {
+	if err := f.PutExpected(ctx, input, expected); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.modePutCount++
+	value := *mode
+	f.lastPutMode = &value
+	f.entry.Mode = value
+	return nil
+}
+
+func (f *fakeRepositoryUseCases) PutExpectedEntryIDWithMode(ctx context.Context, input app.PutInput, observed metadata.Entry, mode *uint32) error {
+	return f.PutExpectedWithMode(ctx, input, repository.PutExpectation{EntryID: observed.ID, Revision: observed.Revision}, mode)
 }
 
 func TestResourceSessionsExpireRenewAndPersistRecovery(t *testing.T) {
@@ -554,7 +576,85 @@ func TestDaemonRestartPromotesActiveStagingToRecovery(t *testing.T) {
 		t.Fatalf("crash recovery did not persist the root-relative manifest: %+v", manifest)
 	}
 	if manifest.LogicalMode == nil || *manifest.LogicalMode != 0 {
-		t.Fatalf("legacy public mode was not preserved in the manifest: %+v", manifest.LogicalMode)
+		t.Fatalf("legacy zero mode was not preserved in the manifest: %+v", manifest.LogicalMode)
+	}
+}
+
+func TestLegacyModeZeroRecoveryPreservesModeAcrossPostRecoveryChmod(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	fake := &fakeRepositoryUseCases{}
+	first, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin, err := first.beginWrite(ctx, "/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, begin.ResourceURI)
+	if err := os.WriteFile(stage, []byte("legacy zero mode"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stage, 0); err != nil {
+		t.Fatal(err)
+	}
+	close(first.done)
+	first.wg.Wait()
+	restarted, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.close()
+	if err := os.Chmod(stage, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.retryRecovery(ctx, begin.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.entry == nil || fake.entry.Mode&0o7777 != 0 || fake.modePutCount != 1 || fake.lastPutMode == nil || *fake.lastPutMode != 0 {
+		t.Fatalf("recovered logical mode = %+v, entry=%+v", fake.lastPutMode, fake.entry)
+	}
+}
+
+func TestOrdinaryResourceRecoveryKeepsModeUnspecifiedUntilCommit(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	fake := &fakeRepositoryUseCases{}
+	first, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin, err := first.beginWrite(ctx, "/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, begin.ResourceURI)
+	if err := os.WriteFile(stage, []byte("ordinary resource"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	close(first.done)
+	first.wg.Wait()
+	restarted, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.close()
+	if rec := restarted.recoveries[begin.SessionID]; rec == nil || rec.LogicalMode != nil {
+		t.Fatalf("ordinary recovery mode = %+v, want nil", rec)
+	}
+	if err := os.Chmod(stage, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.retryRecovery(ctx, begin.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.entry == nil || fake.entry.Mode&0o7777 != 0o640 || fake.modePutCount != 0 {
+		t.Fatalf("ordinary commit mode = %o, explicit mode commits=%d", fake.entry.Mode&0o7777, fake.modePutCount)
 	}
 }
 
