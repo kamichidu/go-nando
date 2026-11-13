@@ -127,6 +127,17 @@ func (f *fakeRepositoryUseCases) ResolveEntry(_ context.Context, id metadata.Ent
 	return *f.entry, "/file", nil
 }
 
+func (f *fakeRepositoryUseCases) ChmodEntry(_ context.Context, id metadata.EntryID, mode uint32) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.entry == nil || f.entry.ID != id {
+		return metadata.ErrEntryNotFound
+	}
+	f.entry.Mode = f.entry.Mode&^0o7777 | mode&0o7777
+	f.entry.Revision++
+	return nil
+}
+
 func (f *fakeRepositoryUseCases) List(_ context.Context, _ string) ([]metadata.Entry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

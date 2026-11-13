@@ -28,6 +28,14 @@ type FileSystem struct {
 	mu     sync.Mutex
 	byID   map[string]*entryNode
 	writes map[string]*writeState
+	modes  map[string]*openMode
+}
+
+type openMode struct {
+	mu       sync.Mutex
+	mode     uint32
+	refs     int
+	unlinked bool
 }
 
 type entryNode struct {
@@ -72,12 +80,36 @@ type fileHandle struct {
 	writable    bool
 	append      bool
 	logicalMode uint32
+	modeState   *openMode
 	mu          sync.Mutex
 	once        sync.Once
 }
 
 func New(client rpcClient) *FileSystem {
-	return &FileSystem{client: client, byID: make(map[string]*entryNode), writes: make(map[string]*writeState)}
+	return &FileSystem{client: client, byID: make(map[string]*entryNode), writes: make(map[string]*writeState), modes: make(map[string]*openMode)}
+}
+
+func (f *FileSystem) retainMode(id string, mode uint32) *openMode {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s := f.modes[id]
+	if s == nil {
+		s = &openMode{mode: mode & 0o7777}
+		f.modes[id] = s
+	}
+	s.refs++
+	return s
+}
+func (f *FileSystem) releaseMode(id string, s *openMode) {
+	if s == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s.refs--
+	if s.refs == 0 && f.modes[id] == s {
+		delete(f.modes, id)
+	}
 }
 
 func (f *FileSystem) Root() fs.InodeEmbedder {
@@ -400,7 +432,7 @@ func (n *entryNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint
 		if errno != 0 {
 			return nil, 0, errno
 		}
-		h := &fileHandle{node: n, readFile: file, readID: begin.SessionID, lease: lease, logicalMode: begin.Entry.Mode & 0o7777}
+		h := &fileHandle{node: n, readFile: file, readID: begin.SessionID, lease: lease, logicalMode: begin.Entry.Mode & 0o7777, modeState: n.owner.retainMode(n.entryID(), begin.Entry.Mode)}
 		return h, fuse.FOPEN_DIRECT_IO, 0
 	}
 	id := n.entryID()
@@ -430,7 +462,7 @@ func (n *entryNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint
 		}
 		return openSharedWriter(ctx, n, state, flags)
 	}
-	return &fileHandle{node: n, write: state, writable: true, append: flags&uint32(os.O_APPEND) != 0}, fuse.FOPEN_DIRECT_IO, 0
+	return &fileHandle{node: n, write: state, writable: true, append: flags&uint32(os.O_APPEND) != 0, modeState: n.owner.retainMode(id, state.logicalMode)}, fuse.FOPEN_DIRECT_IO, 0
 }
 
 func openSharedWriter(ctx context.Context, node *entryNode, state *writeState, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
@@ -460,7 +492,7 @@ func openSharedWriter(ctx context.Context, node *entryNode, state *writeState, f
 		}
 		state.dirty = true
 	}
-	return &fileHandle{node: node, write: state, writable: true, append: flags&uint32(os.O_APPEND) != 0}, fuse.FOPEN_DIRECT_IO, 0
+	return &fileHandle{node: node, write: state, writable: true, append: flags&uint32(os.O_APPEND) != 0, modeState: node.owner.retainMode(node.entryID(), state.logicalMode)}, fuse.FOPEN_DIRECT_IO, 0
 }
 
 func (h *fileHandle) Read(_ context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
@@ -690,6 +722,7 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 				}
 			}
 		}
+		h.node.owner.releaseMode(h.node.entryID(), h.modeState)
 	})
 	return result
 }
@@ -701,23 +734,90 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 		return n.Getattr(ctx, nil, out)
 	}
 	h, hasHandle := f.(*fileHandle)
+	if modeSet && !sizeSet {
+		id := n.entryID()
+		var ms *openMode
+		if hasHandle {
+			ms = h.modeState
+		} else {
+			n.owner.mu.Lock()
+			ms = n.owner.modes[id]
+			n.owner.mu.Unlock()
+		}
+		if ms != nil {
+			ms.mu.Lock()
+		}
+		if ms != nil && ms.unlinked {
+			ms.mode = mode & 0o7777
+		} else {
+			if errno := n.owner.resolveNode(ctx, n); errno != 0 {
+				return errno
+			}
+			if errno := n.owner.call(ctx, controlrpc.MethodChmodEntry, controlrpc.ChmodEntryParams{EntryID: id, Mode: mode & 0o7777}, nil); errno != 0 {
+				return errno
+			}
+			if ms != nil {
+				ms.mode = mode & 0o7777
+			}
+			if errno := n.owner.resolveNode(ctx, n); errno != 0 {
+				return errno
+			}
+		}
+		entry := n.currentEntry()
+		if ms != nil {
+			entry.Mode = entry.Mode&^0o7777 | ms.mode
+		}
+		if ms != nil {
+			ms.mu.Unlock()
+		}
+		if hasHandle {
+			var file *os.File
+			if h.write != nil {
+				h.write.mu.Lock()
+				file = h.write.file
+				h.write.mu.Unlock()
+			} else {
+				file = h.readFile
+			}
+			if file == nil {
+				return syscall.ESTALE
+			}
+			info, err := file.Stat()
+			if err != nil {
+				return errnoFor(err)
+			}
+			setAttr(&out.Attr, entry, n.StableAttr().Ino)
+			out.Mode = inodeMode(entry)
+			out.Size = uint64(max(info.Size(), 0))
+			out.Mtime = uint64(info.ModTime().Unix())
+			out.Mtimensec = uint32(info.ModTime().Nanosecond())
+			return 0
+		}
+		setAttr(&out.Attr, entry, n.StableAttr().Ino)
+		out.Mode = inodeMode(entry)
+		return 0
+	}
 	if hasHandle && h.write == nil {
-		// A read Resource is immutable. fchmod is tracked on this descriptor's
-		// private attribute view; truncating it would mutate the read Resource.
-		h.mu.Lock()
-		defer h.mu.Unlock()
 		if sizeSet {
 			return syscall.EBADF
 		}
+		h.modeState.mu.Lock()
+		defer h.modeState.mu.Unlock()
 		if modeSet {
-			h.logicalMode = mode & 0o7777
+			if !h.modeState.unlinked {
+				if errno := n.owner.call(ctx, controlrpc.MethodChmodEntry, controlrpc.ChmodEntryParams{EntryID: n.entryID(), Mode: mode & 0o7777}, nil); errno != 0 {
+					return errno
+				}
+			} else {
+				h.modeState.mode = mode & 0o7777
+			}
 		}
 		info, err := h.readFile.Stat()
 		if err != nil {
 			return errnoFor(err)
 		}
 		entry := n.currentEntry()
-		entry.Mode = entry.Mode&^0o7777 | h.logicalMode
+		entry.Mode = entry.Mode&^0o7777 | h.modeState.mode
 		setAttr(&out.Attr, entry, n.StableAttr().Ino)
 		out.Mode = inodeMode(entry)
 		out.Size = uint64(max(info.Size(), 0))
@@ -736,6 +836,28 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 			return errno
 		}
 		ephemeral = true
+	}
+	ephemeralFinished := false
+	if ephemeral {
+		defer func() {
+			if ephemeralFinished {
+				return
+			}
+			state.mu.Lock()
+			if state.lease != nil {
+				state.lease.close()
+				state.lease = nil
+			}
+			if state.sessionID != "" {
+				_ = n.owner.call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": state.sessionID}, nil)
+				state.sessionID = ""
+			}
+			if state.file != nil {
+				_ = state.file.Close()
+				state.file = nil
+			}
+			state.mu.Unlock()
+		}()
 	}
 	state.mu.Lock()
 	if state.closed {
@@ -765,12 +887,17 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 	if modeSet {
 		logicalMode := mode & 0o7777
 		if !state.unlinked {
-			if errno := n.owner.call(ctx, controlrpc.MethodSetMode, controlrpc.SetModeParams{SessionID: state.sessionID, Mode: logicalMode}, nil); errno != 0 {
+			if errno := n.owner.call(ctx, controlrpc.MethodChmodEntry, controlrpc.ChmodEntryParams{EntryID: n.entryID(), Mode: logicalMode}, nil); errno != 0 {
 				state.mu.Unlock()
 				return errno
 			}
 		}
 		state.logicalMode = logicalMode
+		if hasHandle && h.modeState != nil {
+			h.modeState.mu.Lock()
+			h.modeState.mode = logicalMode
+			h.modeState.mu.Unlock()
+		}
 	}
 	state.dirty = true
 	unlinked := state.unlinked
@@ -808,6 +935,7 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 				log.Printf("close completed setattr staging descriptor for Entry %s: %v", n.entryID(), err)
 			}
 		}
+		ephemeralFinished = true
 	}
 	return 0
 }
@@ -836,13 +964,22 @@ func (h *fileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Err
 	if h.write != nil {
 		entry := h.node.currentEntry()
 		mode = h.write.logicalMode
+		if h.modeState != nil {
+			h.modeState.mu.Lock()
+			mode = h.modeState.mode
+			h.modeState.mu.Unlock()
+		}
 		setAttr(&out.Attr, entry, h.node.StableAttr().Ino)
 		out.Mode = inodeMode(entry)&^0o7777 | mode
 	} else {
-		h.mu.Lock()
-		mode = h.logicalMode
+		if h.modeState != nil {
+			h.modeState.mu.Lock()
+			mode = h.modeState.mode
+			h.modeState.mu.Unlock()
+		} else {
+			mode = h.logicalMode
+		}
 		entry := h.node.currentEntry()
-		h.mu.Unlock()
 		setAttr(&out.Attr, entry, h.node.StableAttr().Ino)
 		out.Mode = inodeMode(entry)&^0o7777 | mode
 	}
@@ -972,8 +1109,24 @@ func (n *entryNode) Unlink(ctx context.Context, name string) syscall.Errno {
 			}
 		}
 		state.unlinked = true
+		n.owner.mu.Lock()
+		if ms := n.owner.modes[entry.ID]; ms != nil {
+			ms.mu.Lock()
+			ms.unlinked = true
+			ms.mu.Unlock()
+		} else {
+			n.owner.modes[entry.ID] = &openMode{mode: entry.Mode & 0o7777, refs: state.handles, unlinked: true}
+		}
+		n.owner.mu.Unlock()
 		state.mu.Unlock()
 	}
+	n.owner.mu.Lock()
+	if ms := n.owner.modes[entry.ID]; ms != nil {
+		ms.mu.Lock()
+		ms.unlinked = true
+		ms.mu.Unlock()
+	}
+	n.owner.mu.Unlock()
 	if errno := n.owner.call(ctx, controlrpc.MethodRemoveEntry, controlrpc.RemoveEntryParams{EntryID: entry.ID}, nil); errno != 0 {
 		return errno
 	}

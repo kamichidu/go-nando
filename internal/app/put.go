@@ -57,3 +57,11 @@ func (a *App) PutExpectedEntryID(ctx context.Context, input PutInput, observed m
 	}
 	return err
 }
+
+func (a *App) ChmodEntry(ctx context.Context, id metadata.EntryID, mode uint32) error {
+	if err := a.repo.ChmodEntry(ctx, id, mode); err != nil {
+		return err
+	}
+	a.noteRepositoryWrite()
+	return nil
+}

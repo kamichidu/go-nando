@@ -23,6 +23,7 @@ const (
 type repositoryUseCases interface {
 	Stat(context.Context, string) (metadata.Entry, error)
 	ResolveEntry(context.Context, metadata.EntryID) (metadata.Entry, string, error)
+	ChmodEntry(context.Context, metadata.EntryID, uint32) error
 	List(context.Context, string) ([]metadata.Entry, error)
 	Mkdir(context.Context, string, uint32) error
 	PutExpected(context.Context, app.PutInput, repository.PutExpectation) error
@@ -94,6 +95,15 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, mapMethodError(err)
 		}
 		return controlrpc.ResolveEntryResult{Entry: protocolEntry(entry), Path: currentPath}, nil
+	case controlrpc.MethodChmodEntry:
+		var params controlrpc.ChmodEntryParams
+		if err := decodeParams(raw, &params); err != nil || params.EntryID == "" {
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: errors.New("entry_id and mode are required")}
+		}
+		if err := s.app.ChmodEntry(ctx, metadata.EntryID(params.EntryID), params.Mode); err != nil {
+			return nil, mapMethodError(err)
+		}
+		return struct{}{}, nil
 	case controlrpc.MethodList:
 		var params pathParams
 		if err := decodeParams(raw, &params); err != nil {

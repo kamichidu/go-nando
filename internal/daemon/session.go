@@ -393,9 +393,13 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 	if commitErr == nil {
 		input := app.PutInput{LocalPath: session.StagingPath, RepositoryPath: session.RepositoryPath}
 		if session.FollowEntryID {
-			commitErr = m.app.PutExpectedEntryIDWithMode(ctx, input, session.ObservedEntry, session.LogicalMode)
+			commitErr = m.app.PutExpectedEntryIDWithMode(ctx, input, session.ObservedEntry, nil)
 		} else {
-			commitErr = m.app.PutExpectedWithMode(ctx, input, session.Expectation, session.LogicalMode)
+			mode := session.LogicalMode
+			if session.Expectation.EntryID != "" {
+				mode = nil
+			}
+			commitErr = m.app.PutExpectedWithMode(ctx, input, session.Expectation, mode)
 		}
 	}
 	if commitErr != nil {

@@ -28,6 +28,7 @@ const (
 	MethodPing            = "daemon.ping"
 	MethodStat            = "repository.stat"
 	MethodResolveEntry    = "repository.resolveEntry"
+	MethodChmodEntry      = "repository.chmodEntry"
 	MethodList            = "repository.list"
 	MethodMkdir           = "repository.mkdir"
 	MethodMove            = "repository.move"
@@ -82,6 +83,11 @@ type BeginReadParams struct {
 
 type ResolveEntryParams struct {
 	EntryID string `json:"entry_id"`
+}
+
+type ChmodEntryParams struct {
+	EntryID string `json:"entry_id"`
+	Mode    uint32 `json:"mode"`
 }
 
 type MoveEntryParams struct {

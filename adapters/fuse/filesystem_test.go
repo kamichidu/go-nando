@@ -42,6 +42,7 @@ type stubDaemon struct {
 	commitErr  error
 	releaseErr error
 	resolveErr error
+	chmodErr   error
 }
 
 func newStub(t *testing.T, content []byte) *stubDaemon {
@@ -119,6 +120,20 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 		}
 		s.logicalMode, s.modeSet = uint32(mode), true
 		return nil
+	case controlrpc.MethodChmodEntry:
+		if d.chmodErr != nil {
+			return d.chmodErr
+		}
+		if !d.exists || p["entry_id"] != d.entry.ID {
+			return &controlrpc.RemoteError{Code: controlrpc.CodeEntryNotFound, Message: "missing"}
+		}
+		mode, ok := p["mode"].(float64)
+		if !ok {
+			return errors.New("missing mode")
+		}
+		d.entry.Mode = uint32(mode) & 0o7777
+		d.entry.Revision++
+		return nil
 	case controlrpc.MethodCommit:
 		s := d.sessions[id]
 		if s == nil || s.read || s.unlinked {
@@ -141,7 +156,7 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 		}
 		d.content = bytes
 		d.entry.Size = int64(len(bytes))
-		if s.modeSet {
+		if s.modeSet && !d.exists {
 			d.entry.Mode = s.logicalMode
 		}
 		d.exists = true
@@ -193,6 +208,104 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 		return nil
 	default:
 		return errors.New("unsupported test RPC: " + method)
+	}
+}
+
+func TestLinkedAndDetachedChmodSharedAcrossReadWriteHandles(t *testing.T) {
+	ctx := context.Background()
+	d := newStub(t, []byte("data"))
+	f := New(d)
+	root := &entryNode{owner: f, entry: controlrpc.Entry{ID: "root", Kind: "directory"}, path: "/"}
+	_ = fs.NewNodeFS(root, &fs.Options{})
+	var ent fuse.EntryOut
+	if _, e := root.Lookup(ctx, "file", &ent); e != 0 {
+		t.Fatal(e)
+	}
+	n := f.byID[d.entry.ID]
+	rh, _, e := n.Open(ctx, uint32(os.O_RDONLY))
+	if e != 0 {
+		t.Fatal(e)
+	}
+	wh, _, e := n.Open(ctx, uint32(os.O_WRONLY))
+	if e != 0 {
+		t.Fatal(e)
+	}
+	chmod := func(mode uint32) *fuse.SetAttrIn {
+		return &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: mode}}
+	}
+	var attr fuse.AttrOut
+	if e := n.Setattr(ctx, rh, chmod(0o640), &attr); e != 0 {
+		t.Fatalf("linked read fchmod: %v", e)
+	}
+	if d.entry.Mode&0o7777 != 0o640 {
+		t.Fatalf("metadata mode=%o", d.entry.Mode&0o7777)
+	}
+	if e := wh.(*fileHandle).Getattr(ctx, &attr); e != 0 || attr.Mode&0o7777 != 0o640 {
+		t.Fatalf("writer fstat mode=%o errno=%v", attr.Mode&0o7777, e)
+	}
+	if e := n.Setattr(ctx, wh, chmod(0o604), &attr); e != 0 {
+		t.Fatalf("linked write fchmod: %v", e)
+	}
+	if e := rh.(*fileHandle).Getattr(ctx, &attr); e != 0 || attr.Mode&0o7777 != 0o604 {
+		t.Fatalf("reader did not observe write-handle chmod: mode=%o errno=%v", attr.Mode&0o7777, e)
+	}
+	if e := n.Setattr(ctx, nil, chmod(0o620), &attr); e != 0 {
+		t.Fatalf("linked path chmod: %v", e)
+	}
+	if d.entry.Mode&0o7777 != 0o620 {
+		t.Fatalf("path chmod metadata=%o", d.entry.Mode&0o7777)
+	}
+	if e := root.Unlink(ctx, "file"); e != 0 {
+		t.Fatal(e)
+	}
+	d.mu.Lock()
+	calls := len(d.calls)
+	d.mu.Unlock()
+	if e := n.Setattr(ctx, wh, chmod(0o600), &attr); e != 0 {
+		t.Fatalf("detached write fchmod: %v", e)
+	}
+	if e := rh.(*fileHandle).Getattr(ctx, &attr); e != 0 || attr.Mode&0o7777 != 0o600 {
+		t.Fatalf("reader fstat mode=%o errno=%v", attr.Mode&0o7777, e)
+	}
+	d.mu.Lock()
+	if len(d.calls) != calls {
+		t.Fatalf("detached chmod made daemon calls: %v", d.calls[calls:])
+	}
+	if d.entry.Mode&0o7777 != 0o620 {
+		t.Fatalf("detached chmod changed metadata: %o", d.entry.Mode&0o7777)
+	}
+	d.mu.Unlock()
+	if e := rh.(*fileHandle).Release(ctx); e != 0 {
+		t.Fatal(e)
+	}
+	if f.modes[d.entry.ID] == nil {
+		t.Fatal("shared mode discarded before last close")
+	}
+	if e := wh.(*fileHandle).Release(ctx); e != 0 {
+		t.Fatal(e)
+	}
+	if f.modes[d.entry.ID] != nil {
+		t.Fatal("shared mode retained after last close")
+	}
+}
+
+func TestLinkedChmodFailedRPCLeavesEntryAndHandleMode(t *testing.T) {
+	ctx := context.Background()
+	d := newStub(t, []byte("data"))
+	f := New(d)
+	n := f.nodeFor(ctx, d.entry, d.path)
+	h, _, e := n.Open(ctx, uint32(os.O_RDONLY))
+	if e != 0 {
+		t.Fatal(e)
+	}
+	defer h.(*fileHandle).Release(ctx)
+	d.chmodErr = errors.New("rpc unavailable")
+	in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: 0o600}}
+	if e := n.Setattr(ctx, h, in, &fuse.AttrOut{}); e != syscall.EIO {
+		t.Fatalf("chmod errno=%v, want EIO", e)
+	}
+	if d.entry.Mode&0o7777 != 0o644 {
+		t.Fatalf("failed RPC changed mode: %o", d.entry.Mode&0o7777)
 	}
 }
 
@@ -368,8 +481,8 @@ func TestSetattrResponseReflectsUncommittedSession(t *testing.T) {
 	if out.Size != 3 {
 		t.Fatalf("Setattr response size=%d, want 3", out.Size)
 	}
-	if daemon.commits != 0 || daemon.entry.Mode != 0o644 || daemon.entry.Size != int64(len("content")) {
-		t.Fatalf("Setattr committed early: commits=%d Entry=%+v", daemon.commits, daemon.entry)
+	if daemon.commits != 0 || daemon.entry.Mode != 0o640 || daemon.entry.Size != int64(len("content")) {
+		t.Fatalf("Setattr metadata/content result: commits=%d Entry=%+v", daemon.commits, daemon.entry)
 	}
 	if errno := h.Fsync(ctx, 0); errno != 0 {
 		t.Fatalf("Fsync: %v", errno)
@@ -608,7 +721,7 @@ func TestReadHandleSetattrAfterUnlinkKeepsImmutableResource(t *testing.T) {
 	if errno != 0 {
 		t.Fatal(errno)
 	}
-	handle := &fileHandle{node: node, readFile: file, readID: read.SessionID, lease: lease, logicalMode: daemon.entry.Mode & 0o7777}
+	handle := &fileHandle{node: node, readFile: file, readID: read.SessionID, lease: lease, logicalMode: daemon.entry.Mode & 0o7777, modeState: adapter.retainMode(node.entryID(), daemon.entry.Mode)}
 	if errno := root.Unlink(ctx, "file"); errno != 0 {
 		t.Fatalf("unlink: %v", errno)
 	}

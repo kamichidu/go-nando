@@ -79,7 +79,7 @@ func (r *Repository) PutExpectedEntryIDWithMode(ctx context.Context, localPath s
 		return fmt.Errorf("resolve stable Entry for Put: %w", err)
 	}
 	if entry.Kind != observed.Kind || entry.ObjectID == nil || observed.ObjectID == nil || *entry.ObjectID != *observed.ObjectID ||
-		entry.Size != observed.Size || entry.Mtime != observed.Mtime || entry.Mode != observed.Mode ||
+		entry.Size != observed.Size || entry.Mtime != observed.Mtime ||
 		entry.ContentType != observed.ContentType || entry.CreatedAt != observed.CreatedAt {
 		return fmt.Errorf("stable Entry content changed since Resource session began: %w", metadata.ErrEntryConflict)
 	}
@@ -221,7 +221,7 @@ func (r *Repository) putWithMode(ctx context.Context, localPath string, repoPath
 			existing.MD5 = md5Sum
 			existing.Size = res.Size
 			existing.Mtime = metadata.TimestampFromTime(localStat.ModTime())
-			existing.Mode = uint32(localStat.Mode())
+			// Content-only replacements preserve the latest logical mode.
 			existing.ContentType = contentType
 			putEntry = existing
 		} else if errors.Is(err, metadata.ErrEntryNotFound) {
@@ -267,6 +267,17 @@ func (r *Repository) putWithMode(ctx context.Context, localPath string, repoPath
 		metadataCommitted = true
 		return nil
 	}()
+	return err
+}
+
+// ChmodEntry updates logical permissions independently from content Resources.
+func (r *Repository) ChmodEntry(ctx context.Context, id metadata.EntryID, mode uint32) error {
+	entry, err := r.metaStore.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	entry.Mode = entry.Mode&^0o7777 | mode&0o7777
+	_, err = r.metaStore.Update(ctx, entry)
 	return err
 }
 
