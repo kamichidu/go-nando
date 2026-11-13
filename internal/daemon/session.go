@@ -258,6 +258,9 @@ func (m *sessionManager) beginWriteMode(ctx context.Context, repositoryPath stri
 }
 
 func (m *sessionManager) createWriteSession(normalized string, expectation repository.PutExpectation, observedEntry metadata.Entry, followID bool, logicalMode *uint32) (controlrpc.BeginWriteResult, error) {
+	if logicalMode == nil {
+		return controlrpc.BeginWriteResult{}, errors.New("Resource session contract requires a resolved logical mode")
+	}
 	id := uuid.NewString()
 	resourcePath := filepath.Join(m.directory, id+".stage")
 	file, err := os.OpenFile(resourcePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
@@ -271,10 +274,6 @@ func (m *sessionManager) createWriteSession(normalized string, expectation repos
 	observedObjectID := ""
 	if observedEntry.ObjectID != nil {
 		observedObjectID = observedEntry.ObjectID.String()
-	}
-	if logicalMode == nil {
-		mode := uint32(0o644)
-		logicalMode = &mode
 	}
 	session := &writeSession{recoveryRecord: recoveryRecord{
 		Version: 2, SessionID: id, StagingPath: resourcePath, RepositoryPath: normalized, Expectation: expectation, FollowEntryID: followID && expectation.EntryID != "", ObservedEntry: observedEntry, LogicalMode: logicalMode,
@@ -376,6 +375,10 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 	if session.Discarding {
 		m.mu.Unlock()
 		return errSessionClosed
+	}
+	if session.LogicalMode == nil {
+		m.mu.Unlock()
+		return errors.New("Resource session violates contract: logical mode is missing")
 	}
 	if !time.Now().Before(session.expiresAt) {
 		session.expired = true
@@ -685,6 +688,10 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 		m.mu.Unlock()
 		return errSessionClosed
 	}
+	if record.LogicalMode == nil {
+		m.mu.Unlock()
+		return errors.New("Resource recovery record violates contract: logical mode is missing")
+	}
 	record.inFlight = true
 	m.mu.Unlock()
 	if err := m.files.SyncFile(record.StagingPath); err != nil {
@@ -898,6 +905,9 @@ func (m *sessionManager) preserve(record *recoveryRecord, reason string) error {
 }
 
 func (m *sessionManager) persistRecord(record *recoveryRecord) error {
+	if record.LogicalMode == nil {
+		return errors.New("Resource recovery record contract requires logical mode")
+	}
 	if err := m.validateRuntimeStage(record.SessionID, record.StagingPath, record.Committed || record.Discarding); err != nil {
 		return err
 	}
@@ -1005,14 +1015,17 @@ func (m *sessionManager) loadRecoveries() error {
 		if err := json.Unmarshal(data, &record); err != nil {
 			return fmt.Errorf("decode Resource recovery record %q: %w", path, err)
 		}
+		if record.LogicalMode == nil {
+			// A record without logical mode cannot be committed safely. Keep the
+			// evidence for operator inspection, but isolate it from healthy sessions.
+			log.Printf("invalid Resource recovery record %q: logical_mode is required; leaving record and staging untouched", path)
+			continue
+		}
 		if err := validateSessionID(record.SessionID); err != nil || (record.Committed && record.Discarding) || m.recordPath(record.SessionID) != path {
 			return fmt.Errorf("invalid Resource recovery record %q", path)
 		}
 		if err := m.resolveManifestStage(&record); err != nil {
 			return fmt.Errorf("invalid Resource recovery record %q: %w", path, err)
-		}
-		if err := m.restoreLegacyStageAccess(&record); err != nil {
-			return fmt.Errorf("restore access to legacy Resource staging %q: %w", path, err)
 		}
 		if record.ObservedObjectID != "" {
 			objectID, err := content.ParseID(record.ObservedObjectID)
@@ -1115,47 +1128,6 @@ func (m *sessionManager) resolveManifestStage(record *recoveryRecord) error {
 	}
 	record.StagingPath = stagePath
 	return nil
-}
-
-// Legacy FUSE sessions could chmod their private stage to mode 000. Old
-// manifests have no writer-kind field, so zero permissions are the only
-// recoverable signal for that legacy case. Other nil-mode records stay
-// mode-unspecified, preserving ordinary Resource commit semantics. A legacy
-// ordinary Resource deliberately chmodded to 000 is indistinguishable; in
-// that case recovery treats its captured zero mode as explicit.
-func (m *sessionManager) restoreLegacyStageAccess(record *recoveryRecord) error {
-	if record.Committed || record.Discarding {
-		return nil
-	}
-	info, err := os.Stat(record.StagingPath)
-	if err != nil {
-		return err
-	}
-	if record.LogicalMode == nil {
-		// Old FUSE sessions could chmod staging to 000, while ordinary Resource
-		// sessions generally left it 0600. This isolated migration preserves
-		// FUSE mode 000 when detectable; other old records use the captured
-		// stage mode as the best available estimate. Provenance is unavailable.
-		mode := uint32(info.Mode().Perm() & 0o7777)
-		if mode == 0o600 {
-			mode = 0o644 // legacy Resource API omission default
-		}
-		updated := *record
-		updated.LogicalMode = &mode
-		updated.UpdatedAt = time.Now().UTC()
-		if err := m.persistRecord(&updated); err != nil {
-			return fmt.Errorf("persist migrated legacy logical mode: %w", err)
-		}
-		record.LogicalMode = &mode
-		record.UpdatedAt = updated.UpdatedAt
-	}
-	if info.Mode().Perm()&0o600 == 0o600 {
-		return nil
-	}
-	if err := os.Chmod(record.StagingPath, 0o600); err != nil {
-		return err
-	}
-	return m.files.SyncFile(record.StagingPath)
 }
 
 func (m *sessionManager) close() error {

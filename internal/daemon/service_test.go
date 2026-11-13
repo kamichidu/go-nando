@@ -530,9 +530,6 @@ func TestDaemonRestartPromotesActiveStagingToRecovery(t *testing.T) {
 	if err := os.WriteFile(stagePath, []byte("survive daemon crash"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(stagePath, 0); err != nil {
-		t.Fatal(err)
-	}
 	livePath := filepath.Join(root, "xxx")
 	if err := os.WriteFile(livePath, []byte("live file unchanged"), 0o640); err != nil {
 		t.Fatal(err)
@@ -559,7 +556,7 @@ func TestDaemonRestartPromotesActiveStagingToRecovery(t *testing.T) {
 		t.Fatalf("restart lost interrupted staging: bytes=%q err=%v", data, err)
 	}
 	if info, err := os.Stat(stagePath); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("legacy stage mode=%v err=%v, want 0600", info, err)
+		t.Fatalf("staging mode=%v err=%v, want 0600", info, err)
 	}
 	if data, err := os.ReadFile(livePath); err != nil || string(data) != "live file unchanged" {
 		t.Fatalf("restart changed live file: bytes=%q err=%v", data, err)
@@ -580,7 +577,7 @@ func TestDaemonRestartPromotesActiveStagingToRecovery(t *testing.T) {
 	}
 }
 
-func TestLegacyModeZeroRecoveryPreservesModeAcrossPostRecoveryChmod(t *testing.T) {
+func TestRecoveryRejectsMissingLogicalModeWithoutBlockingHealthyRecords(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	fake := &fakeRepositoryUseCases{}
@@ -588,49 +585,65 @@ func TestLegacyModeZeroRecoveryPreservesModeAcrossPostRecoveryChmod(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	begin, err := first.beginWrite(ctx, "/file")
+	missing, err := first.beginWrite(ctx, "/missing")
 	if err != nil {
 		t.Fatal(err)
 	}
-	stage := resourcePathFromURI(t, begin.ResourceURI)
-	if err := os.WriteFile(stage, []byte("legacy zero mode"), 0); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(stage, 0); err != nil {
-		t.Fatal(err)
-	}
-	// Turn this into a genuine old-format record: legacy manifests had no
-	// logical_mode field. The stage's mode 000 is then the migration signal.
-	manifestBytes, err := os.ReadFile(first.recordPath(begin.SessionID))
+	healthy, err := first.beginWrite(ctx, "/healthy")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var legacy recoveryRecord
-	if err := json.Unmarshal(manifestBytes, &legacy); err != nil {
+	missingStage := resourcePathFromURI(t, missing.ResourceURI)
+	healthyStage := resourcePathFromURI(t, healthy.ResourceURI)
+	if err := os.WriteFile(missingStage, []byte("unusable"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	legacy.LogicalMode = nil
-	legacy.StagingPath = stage
-	if err := first.persistRecord(&legacy); err != nil {
+	if err := os.WriteFile(healthyStage, []byte("valid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bad := first.sessions[missing.SessionID].recoveryRecord
+	encoded, err := json.Marshal(&bad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var malformed map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &malformed); err != nil {
+		t.Fatal(err)
+	}
+	delete(malformed, "logical_mode")
+	relativeStage, err := json.Marshal(first.relativeStagePath(missing.SessionID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformed["staging_path"] = relativeStage
+	encoded, err = json.Marshal(malformed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(first.recordPath(missing.SessionID), encoded, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	close(first.done)
 	first.wg.Wait()
 	restarted, err := newSessionManagerWithTTL(fake, root, time.Hour)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("invalid record blocked startup: %v", err)
 	}
 	defer restarted.close()
-	if err := os.Chmod(stage, 0o640); err != nil {
-		t.Fatal(err)
+	if restarted.recoveries[missing.SessionID] != nil || restarted.recoveries[healthy.SessionID] == nil {
+		t.Fatalf("recovery map missing-mode=%v healthy=%v", restarted.recoveries[missing.SessionID], restarted.recoveries[healthy.SessionID])
 	}
-	if err := restarted.retryRecovery(ctx, begin.SessionID); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(first.recordPath(missing.SessionID)); err != nil {
+		t.Fatalf("invalid record was removed: %v", err)
 	}
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	if fake.entry == nil || fake.entry.Mode&0o7777 != 0 || fake.modePutCount != 1 || fake.lastPutMode == nil || *fake.lastPutMode != 0 {
-		t.Fatalf("recovered logical mode = %+v, entry=%+v", fake.lastPutMode, fake.entry)
+	if data, err := os.ReadFile(missingStage); err != nil || string(data) != "unusable" {
+		t.Fatalf("invalid staging was changed: %q %v", data, err)
+	}
+	if err := restarted.retryRecovery(ctx, healthy.SessionID); err != nil {
+		t.Fatalf("valid recovery retry: %v", err)
+	}
+	if _, err := os.Stat(missingStage); err != nil {
+		t.Fatalf("invalid staging was not retained: %v", err)
 	}
 }
 
