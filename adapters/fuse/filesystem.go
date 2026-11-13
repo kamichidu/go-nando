@@ -742,6 +742,12 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 	}
 	state.dirty = true
 	unlinked := state.unlinked
+	logicalMode := state.logicalMode
+	stagedInfo, err := state.file.Stat()
+	if err != nil {
+		state.mu.Unlock()
+		return errnoFor(err)
+	}
 	state.mu.Unlock()
 	if unlinked {
 		return (&fileHandle{node: n, write: state}).Getattr(ctx, out)
@@ -761,10 +767,16 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 			}
 		}
 	}
-	return n.Getattr(ctx, nil, out)
+	if errno := n.getattrWithMode(ctx, out, logicalMode); errno != 0 {
+		return errno
+	}
+	out.Size = uint64(max(stagedInfo.Size(), 0))
+	out.Mtime = uint64(stagedInfo.ModTime().Unix())
+	out.Mtimensec = uint32(stagedInfo.ModTime().Nanosecond())
+	return 0
 }
 
-func (h *fileHandle) Getattr(_ context.Context, out *fuse.AttrOut) syscall.Errno {
+func (h *fileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Errno {
 	var file *os.File
 	if h.write != nil {
 		h.write.mu.Lock()
@@ -780,16 +792,29 @@ func (h *fileHandle) Getattr(_ context.Context, out *fuse.AttrOut) syscall.Errno
 	if err != nil {
 		return errnoFor(err)
 	}
-	mode := uint32(info.Mode().Perm())
+	if errno := h.node.owner.resolveNode(ctx, h.node); errno != 0 {
+		return errno
+	}
+	entry := h.node.currentEntry()
+	mode := entry.Mode & 0o7777
 	if h.write != nil {
 		mode = h.write.logicalMode
 	}
-	out.Mode = syscall.S_IFREG | mode
-	out.Size = uint64(info.Size())
-	out.Nlink = 1
-	out.Uid, out.Gid = uint32(os.Getuid()), uint32(os.Getgid())
+	setAttr(&out.Attr, entry, h.node.StableAttr().Ino)
+	out.Mode = inodeMode(entry)&^0o7777 | mode
+	out.Size = uint64(max(info.Size(), 0))
 	out.Mtime = uint64(info.ModTime().Unix())
 	out.Mtimensec = uint32(info.ModTime().Nanosecond())
+	return 0
+}
+
+func (n *entryNode) getattrWithMode(ctx context.Context, out *fuse.AttrOut, mode uint32) syscall.Errno {
+	if errno := n.owner.resolveNode(ctx, n); errno != 0 {
+		return errno
+	}
+	entry := n.currentEntry()
+	entry.Mode = entry.Mode&^0o7777 | mode&0o7777
+	setAttr(&out.Attr, entry, n.StableAttr().Ino)
 	return 0
 }
 

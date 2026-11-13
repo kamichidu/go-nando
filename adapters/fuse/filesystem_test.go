@@ -270,6 +270,98 @@ func TestSetattrChangesLogicalModeWithoutChangingStageMode(t *testing.T) {
 	}
 }
 
+func TestReadHandleGetattrUsesRefreshedLogicalMode(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("content"))
+	daemon.entry.Mode = 0o640
+	adapter := New(daemon)
+	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	begin, file, lease, errno := adapter.beginRead(ctx, daemon.path, daemon.entry.ID)
+	if errno != 0 {
+		t.Fatalf("begin read: %v", errno)
+	}
+	defer file.Close()
+	defer lease.close()
+	h := &fileHandle{node: node, readFile: file, readID: begin.SessionID, lease: lease}
+	defer h.Release(ctx)
+	if err := os.Chmod(file.Name(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out fuse.AttrOut
+	if errno := h.Getattr(ctx, &out); errno != 0 {
+		t.Fatalf("Getattr: %v", errno)
+	}
+	if got := out.Mode & 0o7777; got != 0o640 {
+		t.Fatalf("read-handle mode=%o, want logical mode 640", got)
+	}
+
+	// An already open handle follows the same Entry identity across chmod and rename.
+	daemon.mu.Lock()
+	daemon.entry.Mode = 0o604
+	daemon.entry.Revision++
+	daemon.path = "/renamed"
+	daemon.mu.Unlock()
+	if errno := h.Getattr(ctx, &out); errno != 0 {
+		t.Fatalf("Getattr after chmod and rename: %v", errno)
+	}
+	if got := out.Mode & 0o7777; got != 0o604 {
+		t.Fatalf("refreshed read-handle mode=%o, want 604", got)
+	}
+}
+
+func TestSetattrResponseReflectsUncommittedSession(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("content"))
+	adapter := New(daemon)
+	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	state, errno := adapter.startWrite(ctx, node, false)
+	if errno != 0 {
+		t.Fatalf("start write: %v", errno)
+	}
+	h := &fileHandle{node: node, write: state, writable: true}
+	in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE | fuse.FATTR_MODE, Size: 3, Mode: 0o640}}
+	var out fuse.AttrOut
+	if errno := node.Setattr(ctx, h, in, &out); errno != 0 {
+		t.Fatalf("Setattr: %v", errno)
+	}
+	if got := out.Mode & 0o7777; got != 0o640 {
+		t.Fatalf("Setattr response mode=%o, want 640", got)
+	}
+	if out.Size != 3 {
+		t.Fatalf("Setattr response size=%d, want 3", out.Size)
+	}
+	if daemon.commits != 0 || daemon.entry.Mode != 0o644 || daemon.entry.Size != int64(len("content")) {
+		t.Fatalf("Setattr committed early: commits=%d Entry=%+v", daemon.commits, daemon.entry)
+	}
+	if errno := h.Fsync(ctx, 0); errno != 0 {
+		t.Fatalf("Fsync: %v", errno)
+	}
+	if daemon.entry.Mode != 0o640 || daemon.entry.Size != 3 {
+		t.Fatalf("committed Entry=%+v, want mode 640 size 3", daemon.entry)
+	}
+	if errno := h.Release(ctx); errno != 0 {
+		t.Fatalf("Release: %v", errno)
+	}
+}
+
+func TestEphemeralSetattrResponseAndCommitUseLogicalMode(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("content"))
+	adapter := New(daemon)
+	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: 0o604}}
+	var out fuse.AttrOut
+	if errno := node.Setattr(ctx, nil, in, &out); errno != 0 {
+		t.Fatalf("Setattr: %v", errno)
+	}
+	if got := out.Mode & 0o7777; got != 0o604 || daemon.entry.Mode != 0o604 {
+		t.Fatalf("response mode=%o committed mode=%o, want both 604", got, daemon.entry.Mode)
+	}
+	if out.Size != uint64(len("content")) {
+		t.Fatalf("mode-only Setattr changed size: %d", out.Size)
+	}
+}
+
 func TestSharedWriterHandlesFsyncAndContinueAfterCommit(t *testing.T) {
 	ctx := context.Background()
 	daemon := newStub(t, []byte("old"))
