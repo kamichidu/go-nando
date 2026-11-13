@@ -60,6 +60,7 @@ type writeState struct {
 	unlinked         bool
 	closed           bool
 	lastErr          error
+	logicalMode      uint32
 }
 
 type fileHandle struct {
@@ -181,7 +182,8 @@ func (f *FileSystem) startWrite(ctx context.Context, node *entryNode, truncate b
 	p := node.currentPath()
 	var begin controlrpc.BeginWriteResult
 	entryID := node.entryID()
-	params := controlrpc.BeginWriteParams{Path: p, ResourceSchemes: []string{"file"}, FollowEntryID: entryID != "" && entryID != "root"}
+	logicalMode := node.entryMode() & 0o7777
+	params := controlrpc.BeginWriteParams{Path: p, ResourceSchemes: []string{"file"}, FollowEntryID: entryID != "" && entryID != "root", LogicalMode: &logicalMode}
 	if params.FollowEntryID {
 		params.EntryID = entryID
 	}
@@ -212,12 +214,7 @@ func (f *FileSystem) startWrite(ctx context.Context, node *entryNode, truncate b
 			return nil, f.cleanupSessionError(ctx, begin.SessionID, err, stage)
 		}
 	}
-	if node.entryID() != "" && node.entryID() != "root" {
-		if err := stage.Chmod(os.FileMode(node.entryMode() & 0o7777)); err != nil {
-			return nil, f.cleanupSessionError(ctx, begin.SessionID, err, stage)
-		}
-	}
-	return &writeState{node: node, sessionID: begin.SessionID, resource: stagePath, file: stage, lease: f.startRenew(begin.SessionID), dirty: truncate}, 0
+	return &writeState{node: node, sessionID: begin.SessionID, resource: stagePath, file: stage, lease: f.startRenew(begin.SessionID), dirty: truncate, logicalMode: logicalMode}, 0
 }
 
 func (f *FileSystem) resolveNode(ctx context.Context, node *entryNode) syscall.Errno {
@@ -547,6 +544,7 @@ func (h *fileHandle) restartWrite(ctx context.Context, state *writeState) syscal
 	}
 	oldFile, oldLease := state.file, state.lease
 	state.sessionID, state.resource, state.file, state.lease = fresh.sessionID, fresh.resource, fresh.file, fresh.lease
+	state.logicalMode = fresh.logicalMode
 	state.dirty, state.lastErr = false, nil
 	state.recoveryID = ""
 	if oldFile != nil {
@@ -735,10 +733,12 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 		}
 	}
 	if modeSet {
-		if err := state.file.Chmod(os.FileMode(mode & 0o7777)); err != nil {
+		logicalMode := mode & 0o7777
+		if errno := n.owner.call(ctx, controlrpc.MethodSetMode, controlrpc.SetModeParams{SessionID: state.sessionID, Mode: logicalMode}, nil); errno != 0 {
 			state.mu.Unlock()
-			return errnoFor(err)
+			return errno
 		}
+		state.logicalMode = logicalMode
 	}
 	state.dirty = true
 	unlinked := state.unlinked
@@ -780,7 +780,11 @@ func (h *fileHandle) Getattr(_ context.Context, out *fuse.AttrOut) syscall.Errno
 	if err != nil {
 		return errnoFor(err)
 	}
-	out.Mode = syscall.S_IFREG | uint32(info.Mode().Perm())
+	mode := uint32(info.Mode().Perm())
+	if h.write != nil {
+		mode = h.write.logicalMode
+	}
+	out.Mode = syscall.S_IFREG | mode
 	out.Size = uint64(info.Size())
 	out.Nlink = 1
 	out.Uid, out.Gid = uint32(os.Getuid()), uint32(os.Getgid())
@@ -811,15 +815,9 @@ func (n *entryNode) Create(ctx context.Context, name string, flags uint32, mode 
 	// Publish an empty Entry at Create so the name is immediately visible and
 	// subsequent rename/unlink operations have a stable Entry identity.
 	var begin controlrpc.BeginWriteResult
-	if errno := n.owner.call(ctx, controlrpc.MethodBeginWrite, controlrpc.BeginWriteParams{Path: p, ResourceSchemes: []string{"file"}}, &begin); errno != 0 {
+	logicalMode := mode & 0o7777
+	if errno := n.owner.call(ctx, controlrpc.MethodBeginWrite, controlrpc.BeginWriteParams{Path: p, ResourceSchemes: []string{"file"}, LogicalMode: &logicalMode}, &begin); errno != 0 {
 		return nil, nil, 0, errno
-	}
-	stagePath, errno := localResourcePath(begin.ResourceURI)
-	if errno != 0 {
-		return nil, nil, 0, n.owner.abortSession(ctx, begin.SessionID, errno)
-	}
-	if err := os.Chmod(stagePath, os.FileMode(mode&0o7777)); err != nil {
-		return nil, nil, 0, n.owner.abortSession(ctx, begin.SessionID, errnoFor(err))
 	}
 	if errno := n.owner.call(ctx, controlrpc.MethodCommit, map[string]string{"session_id": begin.SessionID}, nil); errno != 0 {
 		if errno == syscall.EAGAIN {

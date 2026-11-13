@@ -18,12 +18,14 @@ import (
 )
 
 type stubSession struct {
-	path      string
-	file      string
-	read      bool
-	followID  bool
-	unlinked  bool
-	committed bool
+	path        string
+	file        string
+	read        bool
+	followID    bool
+	unlinked    bool
+	committed   bool
+	logicalMode uint32
+	modeSet     bool
 }
 
 type stubDaemon struct {
@@ -94,10 +96,25 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 			return err
 		}
 		sid := "write-session"
-		d.sessions[sid] = &stubSession{path: d.path, file: file, followID: p["follow_entry_id"] == true}
+		session := &stubSession{path: p["path"].(string), file: file, followID: p["follow_entry_id"] == true}
+		if mode, ok := p["logical_mode"].(float64); ok {
+			session.logicalMode, session.modeSet = uint32(mode), true
+		}
+		d.sessions[sid] = session
 		return assign(result, controlrpc.BeginWriteResult{SessionID: sid, ResourceURI: (&url.URL{Scheme: "file", Path: file}).String()})
 	case controlrpc.MethodRenew:
 		return assign(result, controlrpc.RenewResult{ExpiresAt: time.Now().Add(time.Minute)})
+	case controlrpc.MethodSetMode:
+		s := d.sessions[id]
+		if s == nil {
+			return errors.New("missing session")
+		}
+		mode, ok := p["mode"].(float64)
+		if !ok {
+			return errors.New("missing mode")
+		}
+		s.logicalMode, s.modeSet = uint32(mode), true
+		return nil
 	case controlrpc.MethodCommit:
 		s := d.sessions[id]
 		if s == nil || s.read || s.unlinked {
@@ -120,6 +137,10 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 		}
 		d.content = bytes
 		d.entry.Size = int64(len(bytes))
+		if s.modeSet {
+			d.entry.Mode = s.logicalMode
+		}
+		d.exists = true
 		d.entry.Revision++
 		d.commits++
 		s.committed = true
@@ -177,6 +198,76 @@ func assign(target, value any) error {
 		return err
 	}
 	return json.Unmarshal(data, target)
+}
+
+func TestFuseCreateModeZeroKeepsStagePrivateAndCommitsLogicalMode(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, nil)
+	daemon.exists = false
+	adapter := New(daemon)
+	root := adapter.Root().(*entryNode)
+	// Initialize the inode bridge so Create can publish its child inode.
+	fs.NewNodeFS(root, &fs.Options{})
+	var out fuse.EntryOut
+	_, handle, _, errno := root.Create(ctx, "file", uint32(os.O_RDWR), 0, &out)
+	if errno != 0 {
+		t.Fatalf("Create: %v", errno)
+	}
+	fh := handle.(*fileHandle)
+	info, err := fh.write.file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("staging permissions = %o, want 600", got)
+	}
+	if n, errno := fh.Write(ctx, []byte("payload"), 0); errno != 0 || n != 7 {
+		t.Fatalf("Write = %d, %v", n, errno)
+	}
+	if errno := fh.Fsync(ctx, 0); errno != 0 {
+		t.Fatalf("Fsync: %v", errno)
+	}
+	if got := daemon.entry.Mode & 0o7777; got != 0 {
+		t.Fatalf("committed mode = %o, want 0", got)
+	}
+	if got := string(daemon.content); got != "payload" {
+		t.Fatalf("committed bytes = %q", got)
+	}
+	if errno := fh.Release(ctx); errno != 0 {
+		t.Fatalf("Release: %v", errno)
+	}
+}
+
+func TestSetattrChangesLogicalModeWithoutChangingStageMode(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("content"))
+	adapter := New(daemon)
+	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	state, errno := adapter.startWrite(ctx, node, false)
+	if errno != 0 {
+		t.Fatalf("start write: %v", errno)
+	}
+	fh := &fileHandle{node: node, write: state, writable: true}
+	in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: 0o640}}
+	if errno := node.Setattr(ctx, fh, in, &fuse.AttrOut{}); errno != 0 {
+		t.Fatalf("Setattr chmod: %v", errno)
+	}
+	info, err := state.file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("staging permissions = %o, want 600", got)
+	}
+	if errno := fh.Fsync(ctx, 0); errno != 0 {
+		t.Fatalf("Fsync: %v", errno)
+	}
+	if got := daemon.entry.Mode & 0o7777; got != 0o640 {
+		t.Fatalf("committed mode = %o, want 640", got)
+	}
+	if errno := fh.Release(ctx); errno != 0 {
+		t.Fatalf("Release: %v", errno)
+	}
 }
 
 func TestSharedWriterHandlesFsyncAndContinueAfterCommit(t *testing.T) {

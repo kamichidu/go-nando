@@ -243,14 +243,23 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 		var result controlrpc.BeginWriteResult
 		var err error
 		if params.EntryID != "" {
-			result, err = s.sessions.beginWriteEntry(ctx, metadata.EntryID(params.EntryID))
+			result, err = s.sessions.beginWriteEntryMode(ctx, metadata.EntryID(params.EntryID), params.LogicalMode)
 		} else {
-			result, err = s.sessions.beginWrite(ctx, params.Path, params.FollowEntryID)
+			result, err = s.sessions.beginWriteMode(ctx, params.Path, params.FollowEntryID, params.LogicalMode)
 		}
 		if err != nil {
 			return nil, mapMethodError(err)
 		}
 		return result, nil
+	case controlrpc.MethodSetMode:
+		var params controlrpc.SetModeParams
+		if err := decodeParams(raw, &params); err != nil || params.SessionID == "" {
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: errors.New("session_id and mode are required")}
+		}
+		if err := s.sessions.setMode(params.SessionID, params.Mode); err != nil {
+			return nil, mapMethodError(err)
+		}
+		return struct{}{}, nil
 	case controlrpc.MethodCommit:
 		params, err := decodeSession(raw)
 		if err != nil {

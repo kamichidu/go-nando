@@ -32,6 +32,22 @@ func (a *App) PutExpected(ctx context.Context, input PutInput, expected reposito
 	return err
 }
 
+func (a *App) PutExpectedWithMode(ctx context.Context, input PutInput, expected repository.PutExpectation, mode *uint32) error {
+	err := a.repo.PutExpectedWithMode(ctx, input.LocalPath, input.RepositoryPath, expected, mode)
+	if err == nil {
+		a.noteRepositoryWrite()
+	}
+	return err
+}
+
+func (a *App) PutExpectedEntryIDWithMode(ctx context.Context, input PutInput, observed metadata.Entry, mode *uint32) error {
+	err := a.repo.PutExpectedEntryIDWithMode(ctx, input.LocalPath, observed, mode)
+	if err == nil {
+		a.noteRepositoryWrite()
+	}
+	return err
+}
+
 // PutExpectedEntryID commits to the current path of an Entry using its original
 // identity and revision as the compare-and-swap expectation.
 func (a *App) PutExpectedEntryID(ctx context.Context, input PutInput, observed metadata.Entry) error {

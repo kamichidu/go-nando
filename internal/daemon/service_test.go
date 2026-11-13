@@ -508,6 +508,13 @@ func TestDaemonRestartPromotesActiveStagingToRecovery(t *testing.T) {
 	if err := os.WriteFile(stagePath, []byte("survive daemon crash"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(stagePath, 0); err != nil {
+		t.Fatal(err)
+	}
+	livePath := filepath.Join(root, "xxx")
+	if err := os.WriteFile(livePath, []byte("live file unchanged"), 0o640); err != nil {
+		t.Fatal(err)
+	}
 	// Stop only the in-memory expiry loop to model process loss before its
 	// graceful shutdown preservation path can run.
 	close(first.done)
@@ -529,6 +536,12 @@ func TestDaemonRestartPromotesActiveStagingToRecovery(t *testing.T) {
 	if data, err := os.ReadFile(stagePath); err != nil || string(data) != "survive daemon crash" {
 		t.Fatalf("restart lost interrupted staging: bytes=%q err=%v", data, err)
 	}
+	if info, err := os.Stat(stagePath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("legacy stage mode=%v err=%v, want 0600", info, err)
+	}
+	if data, err := os.ReadFile(livePath); err != nil || string(data) != "live file unchanged" {
+		t.Fatalf("restart changed live file: bytes=%q err=%v", data, err)
+	}
 	manifestData, err := os.ReadFile(restarted.recordPath(result.SessionID))
 	if err != nil {
 		t.Fatal(err)
@@ -539,6 +552,9 @@ func TestDaemonRestartPromotesActiveStagingToRecovery(t *testing.T) {
 	}
 	if manifest.Version != 2 || manifest.StagingPath != filepath.ToSlash(filepath.Join("temp", "rpc-sessions", result.SessionID+".stage")) {
 		t.Fatalf("crash recovery did not persist the root-relative manifest: %+v", manifest)
+	}
+	if manifest.LogicalMode == nil || *manifest.LogicalMode != 0 {
+		t.Fatalf("legacy public mode was not preserved in the manifest: %+v", manifest.LogicalMode)
 	}
 }
 

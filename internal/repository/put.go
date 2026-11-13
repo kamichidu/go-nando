@@ -48,6 +48,10 @@ func (r *Repository) Put(ctx context.Context, localPath string, repoPath string)
 // PutExpected imports a complete file only if the target still has the state
 // observed when the caller opened its write Resource session.
 func (r *Repository) PutExpected(ctx context.Context, localPath, repoPath string, expected PutExpectation) error {
+	return r.PutExpectedWithMode(ctx, localPath, repoPath, expected, nil)
+}
+
+func (r *Repository) PutExpectedWithMode(ctx context.Context, localPath, repoPath string, expected PutExpectation, mode *uint32) error {
 	if expected.MustBeAbsent {
 		if expected.EntryID != "" || expected.Revision != 0 {
 			return fmt.Errorf("invalid absent-entry expectation: %w", metadata.ErrEntryConflict)
@@ -55,13 +59,18 @@ func (r *Repository) PutExpected(ctx context.Context, localPath, repoPath string
 	} else if expected.EntryID == "" || expected.Revision == 0 {
 		return fmt.Errorf("existing-entry expectation requires ID and revision: %w", metadata.ErrEntryConflict)
 	}
-	return r.put(ctx, localPath, repoPath, &expected)
+	return r.putWithMode(ctx, localPath, repoPath, &expected, mode)
 }
 
 // PutExpectedEntryID updates the current path of an existing Entry only if its
 // original identity and revision are still current. This lets open handles
 // follow a rename without weakening revision CAS.
 func (r *Repository) PutExpectedEntryID(ctx context.Context, localPath string, observed metadata.Entry) error {
+	return r.PutExpectedEntryIDWithMode(ctx, localPath, observed, nil)
+}
+
+// PutExpectedEntryIDWithMode commits file content with an optional POSIX mode.
+func (r *Repository) PutExpectedEntryIDWithMode(ctx context.Context, localPath string, observed metadata.Entry, mode *uint32) error {
 	if observed.ID == "" || observed.Revision == 0 {
 		return fmt.Errorf("stable Entry commit requires observed ID and revision: %w", metadata.ErrEntryConflict)
 	}
@@ -78,10 +87,14 @@ func (r *Repository) PutExpectedEntryID(ctx context.Context, localPath string, o
 	if err != nil {
 		return fmt.Errorf("resolve current path for stable Entry: %w", err)
 	}
-	return r.PutExpected(ctx, localPath, repoPath, PutExpectation{EntryID: observed.ID, Revision: entry.Revision})
+	return r.PutExpectedWithMode(ctx, localPath, repoPath, PutExpectation{EntryID: observed.ID, Revision: entry.Revision}, mode)
 }
 
 func (r *Repository) put(ctx context.Context, localPath string, repoPath string, expected *PutExpectation) (retErr error) {
+	return r.putWithMode(ctx, localPath, repoPath, expected, nil)
+}
+
+func (r *Repository) putWithMode(ctx context.Context, localPath string, repoPath string, expected *PutExpectation, mode *uint32) (retErr error) {
 	if err := r.settings.Validate(); err != nil {
 		return fmt.Errorf("invalid Repository settings: %w", err)
 	}
@@ -236,6 +249,9 @@ func (r *Repository) put(ctx context.Context, localPath string, repoPath string,
 		}
 		if err := r.validateLease(leaseCtx, operationID); err != nil {
 			return err
+		}
+		if mode != nil {
+			putEntry.Mode = *mode & 0o7777
 		}
 		if r.settings.DeliveryMode == DeliveryModeRemote {
 			if _, err := r.metaStore.CommitPut(leaseCtx, putEntry, true); err != nil {
