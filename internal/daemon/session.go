@@ -219,8 +219,17 @@ func (m *sessionManager) beginWriteWithMode(ctx context.Context, repositoryPath 
 		}
 		expectation = repository.PutExpectation{EntryID: entry.ID, Revision: entry.Revision}
 		observedEntry = entry
+		if logicalMode == nil {
+			mode := entry.Mode & 0o7777
+			logicalMode = &mode
+		}
 	} else if !errors.Is(err, metadata.ErrEntryNotFound) {
 		return controlrpc.BeginWriteResult{}, fmt.Errorf("inspect write target: %w", err)
+	} else if logicalMode == nil {
+		// Resource API writes have the POSIX regular-file default when the
+		// caller omits a mode. FUSE supplies its already-umask-adjusted mode.
+		mode := uint32(0o644)
+		logicalMode = &mode
 	}
 	return m.createWriteSession(normalized, expectation, observedEntry, followID, logicalMode)
 }
@@ -236,6 +245,10 @@ func (m *sessionManager) beginWriteEntryMode(ctx context.Context, entryID metada
 	}
 	if entry.Kind != metadata.EntryKindFile {
 		return controlrpc.BeginWriteResult{}, fmt.Errorf("write target is not a file: %w", metadata.ErrEntryConflict)
+	}
+	if mode == nil {
+		logicalMode := entry.Mode & 0o7777
+		mode = &logicalMode
 	}
 	return m.createWriteSession(repositoryPath, repository.PutExpectation{EntryID: entry.ID, Revision: entry.Revision}, entry, true, mode)
 }
@@ -258,6 +271,10 @@ func (m *sessionManager) createWriteSession(normalized string, expectation repos
 	observedObjectID := ""
 	if observedEntry.ObjectID != nil {
 		observedObjectID = observedEntry.ObjectID.String()
+	}
+	if logicalMode == nil {
+		mode := uint32(0o644)
+		logicalMode = &mode
 	}
 	session := &writeSession{recoveryRecord: recoveryRecord{
 		Version: 2, SessionID: id, StagingPath: resourcePath, RepositoryPath: normalized, Expectation: expectation, FollowEntryID: followID && expectation.EntryID != "", ObservedEntry: observedEntry, LogicalMode: logicalMode,
@@ -372,16 +389,10 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 	commitErr := m.files.SyncFile(session.StagingPath)
 	if commitErr == nil {
 		input := app.PutInput{LocalPath: session.StagingPath, RepositoryPath: session.RepositoryPath}
-		if session.LogicalMode != nil {
-			if session.FollowEntryID {
-				commitErr = m.app.PutExpectedEntryIDWithMode(ctx, input, session.ObservedEntry, session.LogicalMode)
-			} else {
-				commitErr = m.app.PutExpectedWithMode(ctx, input, session.Expectation, session.LogicalMode)
-			}
-		} else if session.FollowEntryID {
-			commitErr = m.app.PutExpectedEntryID(ctx, input, session.ObservedEntry)
+		if session.FollowEntryID {
+			commitErr = m.app.PutExpectedEntryIDWithMode(ctx, input, session.ObservedEntry, session.LogicalMode)
 		} else {
-			commitErr = m.app.PutExpected(ctx, input, session.Expectation)
+			commitErr = m.app.PutExpectedWithMode(ctx, input, session.Expectation, session.LogicalMode)
 		}
 	}
 	if commitErr != nil {
@@ -699,16 +710,10 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 	m.mu.Unlock()
 	input := app.PutInput{LocalPath: record.StagingPath, RepositoryPath: record.RepositoryPath}
 	var err error
-	if record.LogicalMode != nil {
-		if record.FollowEntryID {
-			err = m.app.PutExpectedEntryIDWithMode(ctx, input, record.ObservedEntry, record.LogicalMode)
-		} else {
-			err = m.app.PutExpectedWithMode(ctx, input, record.Expectation, record.LogicalMode)
-		}
-	} else if record.FollowEntryID {
-		err = m.app.PutExpectedEntryID(ctx, input, record.ObservedEntry)
+	if record.FollowEntryID {
+		err = m.app.PutExpectedEntryIDWithMode(ctx, input, record.ObservedEntry, record.LogicalMode)
 	} else {
-		err = m.app.PutExpected(ctx, input, record.Expectation)
+		err = m.app.PutExpectedWithMode(ctx, input, record.Expectation, record.LogicalMode)
 	}
 	if err == nil {
 		if err := m.markCommitted(record); err == nil {
@@ -1127,17 +1132,22 @@ func (m *sessionManager) restoreLegacyStageAccess(record *recoveryRecord) error 
 		return err
 	}
 	if record.LogicalMode == nil {
-		if info.Mode().Perm() == 0 {
-			mode := uint32(0)
-			updated := *record
-			updated.LogicalMode = &mode
-			updated.UpdatedAt = time.Now().UTC()
-			if err := m.persistRecord(&updated); err != nil {
-				return fmt.Errorf("persist legacy mode 000: %w", err)
-			}
-			record.LogicalMode = &mode
-			record.UpdatedAt = updated.UpdatedAt
+		// Old FUSE sessions could chmod staging to 000, while ordinary Resource
+		// sessions generally left it 0600. This isolated migration preserves
+		// FUSE mode 000 when detectable; other old records use the captured
+		// stage mode as the best available estimate. Provenance is unavailable.
+		mode := uint32(info.Mode().Perm() & 0o7777)
+		if mode == 0o600 {
+			mode = 0o644 // legacy Resource API omission default
 		}
+		updated := *record
+		updated.LogicalMode = &mode
+		updated.UpdatedAt = time.Now().UTC()
+		if err := m.persistRecord(&updated); err != nil {
+			return fmt.Errorf("persist migrated legacy logical mode: %w", err)
+		}
+		record.LogicalMode = &mode
+		record.UpdatedAt = updated.UpdatedAt
 	}
 	if info.Mode().Perm()&0o600 == 0o600 {
 		return nil

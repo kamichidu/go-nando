@@ -575,8 +575,8 @@ func TestDaemonRestartPromotesActiveStagingToRecovery(t *testing.T) {
 	if manifest.Version != 2 || manifest.StagingPath != filepath.ToSlash(filepath.Join("temp", "rpc-sessions", result.SessionID+".stage")) {
 		t.Fatalf("crash recovery did not persist the root-relative manifest: %+v", manifest)
 	}
-	if manifest.LogicalMode == nil || *manifest.LogicalMode != 0 {
-		t.Fatalf("legacy zero mode was not preserved in the manifest: %+v", manifest.LogicalMode)
+	if manifest.LogicalMode == nil || *manifest.LogicalMode != 0o644 {
+		t.Fatalf("new Resource session mode was not persisted: %+v", manifest.LogicalMode)
 	}
 }
 
@@ -599,6 +599,21 @@ func TestLegacyModeZeroRecoveryPreservesModeAcrossPostRecoveryChmod(t *testing.T
 	if err := os.Chmod(stage, 0); err != nil {
 		t.Fatal(err)
 	}
+	// Turn this into a genuine old-format record: legacy manifests had no
+	// logical_mode field. The stage's mode 000 is then the migration signal.
+	manifestBytes, err := os.ReadFile(first.recordPath(begin.SessionID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy recoveryRecord
+	if err := json.Unmarshal(manifestBytes, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	legacy.LogicalMode = nil
+	legacy.StagingPath = stage
+	if err := first.persistRecord(&legacy); err != nil {
+		t.Fatal(err)
+	}
 	close(first.done)
 	first.wg.Wait()
 	restarted, err := newSessionManagerWithTTL(fake, root, time.Hour)
@@ -619,7 +634,7 @@ func TestLegacyModeZeroRecoveryPreservesModeAcrossPostRecoveryChmod(t *testing.T
 	}
 }
 
-func TestOrdinaryResourceRecoveryKeepsModeUnspecifiedUntilCommit(t *testing.T) {
+func TestNewResourceRecoveryUsesPersistedDefaultMode(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	fake := &fakeRepositoryUseCases{}
@@ -642,8 +657,8 @@ func TestOrdinaryResourceRecoveryKeepsModeUnspecifiedUntilCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer restarted.close()
-	if rec := restarted.recoveries[begin.SessionID]; rec == nil || rec.LogicalMode != nil {
-		t.Fatalf("ordinary recovery mode = %+v, want nil", rec)
+	if rec := restarted.recoveries[begin.SessionID]; rec == nil || rec.LogicalMode == nil || *rec.LogicalMode != 0o644 {
+		t.Fatalf("ordinary recovery mode = %+v, want persisted 0644", rec)
 	}
 	if err := os.Chmod(stage, 0o640); err != nil {
 		t.Fatal(err)
@@ -653,10 +668,50 @@ func TestOrdinaryResourceRecoveryKeepsModeUnspecifiedUntilCommit(t *testing.T) {
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if fake.entry == nil || fake.entry.Mode&0o7777 != 0o640 || fake.modePutCount != 0 {
+	if fake.entry == nil || fake.entry.Mode&0o7777 != 0o644 || fake.modePutCount != 1 {
 		t.Fatalf("ordinary commit mode = %o, explicit mode commits=%d", fake.entry.Mode&0o7777, fake.modePutCount)
 	}
 }
+
+func TestWriteSessionPersistsResolvedLogicalMode(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		existing *metadata.Entry
+		explicit *uint32
+		want     uint32
+	}{
+		{name: "new omitted mode defaults to 0644", want: 0o644},
+		{name: "explicit mode overrides default", explicit: ptrUint32(0o640), want: 0o640},
+		{name: "existing entry mode is inherited", existing: &metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 3, Mode: 0o751}, want: 0o751},
+		{name: "explicit mode overrides existing entry", existing: &metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 3, Mode: 0o751}, explicit: ptrUint32(0o600), want: 0o600},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeRepositoryUseCases{entry: tc.existing}
+			manager, err := newSessionManagerWithTTL(fake, t.TempDir(), time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer manager.close()
+			begin, err := manager.beginWriteMode(context.Background(), "/file", false, tc.explicit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var record recoveryRecord
+			data, err := os.ReadFile(manager.recordPath(begin.SessionID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.LogicalMode == nil || *record.LogicalMode != tc.want {
+				t.Fatalf("persisted logical mode = %v, want %04o", record.LogicalMode, tc.want)
+			}
+		})
+	}
+}
+
+func ptrUint32(value uint32) *uint32 { return &value }
 
 func TestRecoveryRetryAfterRepositoryRelocationUsesRootRelativeManifest(t *testing.T) {
 	ctx := context.Background()
