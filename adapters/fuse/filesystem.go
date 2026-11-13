@@ -66,9 +66,12 @@ type writeState struct {
 	handles          int
 	dirty            bool
 	unlinked         bool
-	closed           bool
-	lastErr          error
-	logicalMode      uint32
+	// unlinkIntent means the daemon has durably tombstoned this write session.
+	// It blocks Commit even if namespace removal has not succeeded yet.
+	unlinkIntent bool
+	closed       bool
+	lastErr      error
+	logicalMode  uint32
 }
 
 type fileHandle struct {
@@ -475,7 +478,7 @@ func openSharedWriter(ctx context.Context, node *entryNode, state *writeState, f
 		return nil, 0, errnoFor(state.lastErr)
 	}
 	state.handles++
-	if flags&uint32(os.O_TRUNC) != 0 && !state.unlinked {
+	if flags&uint32(os.O_TRUNC) != 0 && !state.unlinked && !state.unlinkIntent {
 		if state.sessionID == "" {
 			if errno := (&fileHandle{node: node}).restartWrite(ctx, state); errno != 0 {
 				state.handles--
@@ -527,7 +530,7 @@ func (h *fileHandle) Write(ctx context.Context, data []byte, off int64) (uint32,
 	if state.closed {
 		return 0, syscall.ESTALE
 	}
-	if state.unlinked {
+	if state.unlinked || state.unlinkIntent {
 		if state.file == nil {
 			return 0, syscall.ESTALE
 		}
@@ -602,7 +605,7 @@ func (h *fileHandle) Fsync(ctx context.Context, _ uint32) syscall.Errno {
 	if state.closed {
 		return syscall.ESTALE
 	}
-	if state.unlinked {
+	if state.unlinked || state.unlinkIntent {
 		if state.file == nil {
 			return syscall.ESTALE
 		}
@@ -661,7 +664,7 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 			state.handles--
 			if state.handles == 0 {
 				state.closed = true
-				if state.dirty && !state.unlinked {
+				if state.dirty && !state.unlinked && !state.unlinkIntent {
 					if err := state.file.Sync(); err != nil {
 						result = errnoFor(err)
 					} else if err := state.lease.failure(); err != nil {
@@ -675,7 +678,7 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 				}
 				if state.sessionID != "" {
 					method := controlrpc.MethodRelease
-					if !state.dirty && !state.unlinked {
+					if !state.dirty && !state.unlinked && !state.unlinkIntent {
 						method = controlrpc.MethodAbort
 					}
 					if errno := state.node.owner.call(ctx, method, map[string]string{"session_id": state.sessionID}, nil); result == 0 {
@@ -687,7 +690,7 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 						result = errno
 					}
 				}
-				if state.unlinked && state.recoveryID != "" {
+				if (state.unlinked || state.unlinkIntent) && state.recoveryID != "" {
 					if errno := state.node.owner.call(ctx, controlrpc.MethodRelease, map[string]string{"session_id": state.recoveryID}, nil); result == 0 {
 						result = errno
 					}
@@ -747,8 +750,20 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 		if ms != nil {
 			ms.mu.Lock()
 		}
+		modeLocked := ms != nil
+		defer func() {
+			if modeLocked {
+				ms.mu.Unlock()
+			}
+		}()
+		detached := ms != nil && ms.unlinked
+		detachedMode := uint32(0)
+		if detached {
+			detachedMode = ms.mode
+		}
 		if ms != nil && ms.unlinked {
 			ms.mode = mode & 0o7777
+			detachedMode = ms.mode
 		} else {
 			if errno := n.owner.resolveNode(ctx, n); errno != 0 {
 				return errno
@@ -763,12 +778,13 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 				return errno
 			}
 		}
-		entry := n.currentEntry()
-		if ms != nil {
-			entry.Mode = entry.Mode&^0o7777 | ms.mode
-		}
-		if ms != nil {
+		if modeLocked {
 			ms.mu.Unlock()
+			modeLocked = false
+		}
+		entry := n.currentEntry()
+		if detached {
+			entry.Mode = entry.Mode&^0o7777 | detachedMode
 		}
 		if hasHandle {
 			var file *os.File
@@ -868,11 +884,11 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 		state.mu.Unlock()
 		return syscall.ESTALE
 	}
-	if state.lastErr != nil && !state.unlinked {
+	if state.lastErr != nil && !state.unlinked && !state.unlinkIntent {
 		state.mu.Unlock()
 		return errnoFor(state.lastErr)
 	}
-	if !state.unlinked && state.sessionID == "" {
+	if !state.unlinked && !state.unlinkIntent && state.sessionID == "" {
 		if errno := (&fileHandle{node: n}).restartWrite(ctx, state); errno != 0 {
 			state.mu.Unlock()
 			return errno
@@ -886,7 +902,7 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 	}
 	if modeSet {
 		logicalMode := mode & 0o7777
-		if !state.unlinked {
+		if !state.unlinked && !state.unlinkIntent {
 			if errno := n.owner.call(ctx, controlrpc.MethodChmodEntry, controlrpc.ChmodEntryParams{EntryID: n.entryID(), Mode: logicalMode}, nil); errno != 0 {
 				state.mu.Unlock()
 				return errno
@@ -921,7 +937,7 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 	if hasHandle && h.write == state {
 		return 0
 	}
-	if ephemeral && !state.unlinked {
+	if ephemeral && !state.unlinked && !state.unlinkIntent {
 		if errno := (&fileHandle{node: n, write: state, writable: true}).Fsync(ctx, 0); errno != 0 {
 			if state.file != nil {
 				if err := state.file.Close(); err != nil {
@@ -956,26 +972,38 @@ func (h *fileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Err
 	if err != nil {
 		return errnoFor(err)
 	}
-	// Handle attributes describe the opened inode and resource. The node cache
-	// is refreshed by lookup and mutation paths; querying the daemon for every
-	// handle Getattr would make an open descriptor depend on daemon availability
-	// and would fail after unlink even though its resource remains valid.
+	// Linked Entry metadata owns logical mode, including changes made by other
+	// clients. Detached handles instead retain their volatile open-inode mode.
 	var mode uint32
 	if h.write != nil {
-		entry := h.node.currentEntry()
 		mode = h.write.logicalMode
 		if h.modeState != nil {
 			h.modeState.mu.Lock()
+			detached := h.modeState.unlinked
 			mode = h.modeState.mode
 			h.modeState.mu.Unlock()
+			if !detached {
+				if errno := h.node.owner.resolveNode(ctx, h.node); errno != 0 {
+					return errno
+				}
+				mode = h.node.currentEntry().Mode & 0o7777
+			}
 		}
+		entry := h.node.currentEntry()
 		setAttr(&out.Attr, entry, h.node.StableAttr().Ino)
 		out.Mode = inodeMode(entry)&^0o7777 | mode
 	} else {
 		if h.modeState != nil {
 			h.modeState.mu.Lock()
+			detached := h.modeState.unlinked
 			mode = h.modeState.mode
 			h.modeState.mu.Unlock()
+			if !detached {
+				if errno := h.node.owner.resolveNode(ctx, h.node); errno != 0 {
+					return errno
+				}
+				mode = h.node.currentEntry().Mode & 0o7777
+			}
 		} else {
 			mode = h.logicalMode
 		}
@@ -1084,7 +1112,8 @@ func (n *entryNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	if entry.Kind == "directory" {
 		return syscall.EISDIR
 	}
-	if state := n.owner.writeState(entry.ID); state != nil {
+	state := n.owner.writeState(entry.ID)
+	if state != nil {
 		state.mu.Lock()
 		if state.closed {
 			state.mu.Unlock()
@@ -1101,23 +1130,25 @@ func (n *entryNode) Unlink(ctx context.Context, name string) syscall.Errno {
 				state.mu.Unlock()
 				return errno
 			}
+			state.unlinkIntent = true
 		}
 		if state.recoveryID != "" {
 			if errno := n.owner.call(ctx, controlrpc.MethodMarkUnlinked, map[string]string{"session_id": state.recoveryID}, nil); errno != 0 {
 				state.mu.Unlock()
 				return errno
 			}
+			state.unlinkIntent = true
 		}
+		state.unlinkIntent = true
+	}
+	if errno := n.owner.call(ctx, controlrpc.MethodRemoveEntry, controlrpc.RemoveEntryParams{EntryID: entry.ID}, nil); errno != 0 {
+		if state != nil {
+			state.mu.Unlock()
+		}
+		return errno
+	}
+	if state != nil {
 		state.unlinked = true
-		n.owner.mu.Lock()
-		if ms := n.owner.modes[entry.ID]; ms != nil {
-			ms.mu.Lock()
-			ms.unlinked = true
-			ms.mu.Unlock()
-		} else {
-			n.owner.modes[entry.ID] = &openMode{mode: entry.Mode & 0o7777, refs: state.handles, unlinked: true}
-		}
-		n.owner.mu.Unlock()
 		state.mu.Unlock()
 	}
 	n.owner.mu.Lock()
@@ -1125,11 +1156,10 @@ func (n *entryNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		ms.mu.Lock()
 		ms.unlinked = true
 		ms.mu.Unlock()
+	} else if state != nil {
+		n.owner.modes[entry.ID] = &openMode{mode: entry.Mode & 0o7777, refs: state.handles, unlinked: true}
 	}
 	n.owner.mu.Unlock()
-	if errno := n.owner.call(ctx, controlrpc.MethodRemoveEntry, controlrpc.RemoveEntryParams{EntryID: entry.ID}, nil); errno != 0 {
-		return errno
-	}
 	// go-fuse's rawBridge removes the cached child after this callback returns.
 	// Sending a synchronous FUSE notification here can block the request whose
 	// reply the kernel is waiting for; duplicate RmChild also races the bridge.
