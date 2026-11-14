@@ -22,6 +22,7 @@ import (
 	"github.com/kamichidu/go-nando/internal/objectstore"
 	"github.com/kamichidu/go-nando/internal/objectstore/gcs"
 	"github.com/kamichidu/go-nando/internal/objectstore/local"
+	s3store "github.com/kamichidu/go-nando/internal/objectstore/s3"
 	"github.com/kamichidu/go-nando/internal/repository"
 	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
 	"github.com/kamichidu/go-nando/runtimeconfig"
@@ -377,11 +378,8 @@ func NewAppAtRepository(ctx context.Context, repoDir string) (*app.App, string, 
 
 	validatingMetaStore := metadata.NewValidatingStore(metaStore)
 	var remoteStore objectstore.RemoteObjectStore
-	var gcsClient io.Closer
+	var remoteClient io.Closer
 	if repoSettings.DeliveryMode == repository.DeliveryModeRemote {
-		if repoSettings.RemoteBackend != "" && repoSettings.RemoteBackend != "gcs" {
-			return nil, "", nil, errors.Join(fmt.Errorf("unsupported remote object storage backend %q", repoSettings.RemoteBackend), metaStore.Close())
-		}
 		cfg, err := ResolveConfigFromContext(ctx)
 		if err != nil {
 			return nil, "", nil, errors.Join(err, metaStore.Close())
@@ -389,21 +387,40 @@ func NewAppAtRepository(ctx context.Context, repoDir string) (*app.App, string, 
 		if cfg.Remote.URI != "" && cfg.Remote.URI != repoSettings.RemoteURI {
 			return nil, "", nil, errors.Join(fmt.Errorf("configured remote_uri %q does not match repository remote_uri", cfg.Remote.URI), metaStore.Close())
 		}
-		gcsStore, client, err := gcs.NewClientStore(ctx, repoSettings.RemoteURI)
-		if err != nil {
-			return nil, "", nil, errors.Join(err, metaStore.Close())
+		backend := repoSettings.RemoteBackend
+		if backend == "" {
+			backend = "gcs"
 		}
-		remoteStore, gcsClient = gcsStore, client
+		switch backend {
+		case "gcs":
+			store, client, err := gcs.NewClientStore(ctx, repoSettings.RemoteURI)
+			if err != nil {
+				return nil, "", nil, errors.Join(err, metaStore.Close())
+			}
+			remoteStore, remoteClient = store, client
+		case "s3":
+			store, client, err := s3store.NewClientStore(ctx, repoSettings.RemoteURI, s3store.ClientConfig{
+				Endpoint: cfg.Remote.Endpoint, Region: cfg.Remote.Region,
+				AccessKeyID: cfg.Remote.AccessKeyID, SecretAccessKey: cfg.Remote.SecretAccessKey,
+				SessionToken: cfg.Remote.SessionToken,
+			})
+			if err != nil {
+				return nil, "", nil, errors.Join(err, metaStore.Close())
+			}
+			remoteStore, remoteClient = store, client
+		default:
+			return nil, "", nil, errors.Join(fmt.Errorf("unsupported remote object storage backend %q", backend), metaStore.Close())
+		}
 	}
 	coordinator, err := coordinatorsqlite.Open(filepath.Join(repoDir, "coordination.db"))
 	if err != nil {
-		return nil, "", nil, errors.Join(fmt.Errorf("failed to open repository coordinator: %w", err), closeIfNotNil(gcsClient), metaStore.Close())
+		return nil, "", nil, errors.Join(fmt.Errorf("failed to open repository coordinator: %w", err), closeIfNotNil(remoteClient), metaStore.Close())
 	}
 	repo := repository.NewRepositoryWithRemoteObjectStore(validatingMetaStore, objStore, remoteStore, hasher, coordinator, repoSettings)
 	application := app.NewApp(repo)
 
 	cleanup := func() error {
-		return errors.Join(coordinator.Close(), closeIfNotNil(gcsClient), metaStore.Close())
+		return errors.Join(coordinator.Close(), closeIfNotNil(remoteClient), metaStore.Close())
 	}
 
 	return application, repoDir, cleanup, nil
