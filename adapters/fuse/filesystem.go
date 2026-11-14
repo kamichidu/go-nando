@@ -667,10 +667,17 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 				if state.dirty && !state.unlinked && !state.unlinkIntent {
 					if err := state.file.Sync(); err != nil {
 						result = errnoFor(err)
+						log.Printf("final-close staging Sync failed for Entry %s session %s: %v", state.node.entryID(), state.sessionID, result)
 					} else if err := state.lease.failure(); err != nil {
 						result = errnoFor(err)
+						log.Printf("final-close lease check failed for Entry %s session %s: %v", state.node.entryID(), state.sessionID, result)
 					} else {
 						result = state.node.owner.call(ctx, controlrpc.MethodCommit, map[string]string{"session_id": state.sessionID}, nil)
+						if result != 0 {
+							state.lastErr = result
+							state.recoveryID = state.sessionID
+							log.Printf("final-close Commit failed for Entry %s session %s: %v", state.node.entryID(), state.sessionID, result)
+						}
 					}
 				}
 				if state.lease != nil {
@@ -681,8 +688,11 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 					if !state.dirty && !state.unlinked && !state.unlinkIntent {
 						method = controlrpc.MethodAbort
 					}
-					if errno := state.node.owner.call(ctx, method, map[string]string{"session_id": state.sessionID}, nil); result == 0 {
-						result = errno
+					if errno := state.node.owner.call(ctx, method, map[string]string{"session_id": state.sessionID}, nil); errno != 0 {
+						log.Printf("final-close %s cleanup failed for Entry %s session %s: %v", method, state.node.entryID(), state.sessionID, errno)
+						if result == 0 {
+							result = errno
+						}
 					}
 				}
 				if state.pendingReleaseID != "" {

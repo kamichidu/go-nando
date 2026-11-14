@@ -512,10 +512,25 @@ def g1() -> None:
         def final_close():
             path = os.path.join(mountpoint, "close-commit.txt")
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o644)
-            os.write(fd, b"final-close-commit")
+            expected = b"final-close-commit"
+            written = os.write(fd, expected)
+            if written != len(expected):
+                os.close(fd)
+                raise GateFailure(f"short final-close write: {written}/{len(expected)} bytes")
             os.close(fd)
-            if cat_bytes("/close-commit.txt") != b"final-close-commit":
-                raise GateFailure("final Release did not commit dirty staging")
+            deadline = time.monotonic() + 15.0
+            last = None
+            while time.monotonic() < deadline:
+                last = cat_bytes("/close-commit.txt")
+                if last == expected:
+                    break
+                time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+            else:
+                raise GateFailure(
+                    "timed out after close waiting for final Release commit of /close-commit.txt; "
+                    f"expected {len(expected)} exact bytes {expected!r}, last observed "
+                    f"{len(last)} bytes {last!r}"
+                )
             return "final Release committed dirty bytes; daemon cat confirmed content"
 
         scenario("G1-02", "Fsync and final close make complete bytes externally visible", final_close)

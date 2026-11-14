@@ -1002,6 +1002,41 @@ func TestCASFailureMakesSharedWriterTerminal(t *testing.T) {
 	}
 }
 
+func TestFinalCloseCommitFailureRetainsRecoveryAndPrimaryError(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("old"))
+	adapter := New(daemon)
+	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	state, errno := adapter.startWrite(ctx, node, false)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	state.handles = 1
+	adapter.writes[node.entryID()] = state
+	handle := &fileHandle{node: node, write: state, writable: true}
+	if _, errno := handle.Write(ctx, []byte("new"), 0); errno != 0 {
+		t.Fatal(errno)
+	}
+	daemon.commitErr = &controlrpc.RemoteError{Code: controlrpc.CodeEntryConflict, Message: "revision changed"}
+	daemon.releaseErr = errors.New("cleanup transport failed")
+	if errno := handle.Release(ctx); errno != syscall.EAGAIN {
+		t.Fatalf("final close errno=%v, want Commit EAGAIN despite cleanup failure", errno)
+	}
+	if state.sessionID == "" || state.recoveryID != state.sessionID || state.lastErr != syscall.EAGAIN {
+		t.Fatalf("final-close failure state session=%q recovery=%q lastErr=%v", state.sessionID, state.recoveryID, state.lastErr)
+	}
+	session := daemon.sessions[state.recoveryID]
+	if session == nil {
+		t.Fatal("failed final-close Commit session was not retained for recovery")
+	}
+	if data, err := os.ReadFile(session.file); err != nil || string(data) != "new" {
+		t.Fatalf("recovery staging=%q err=%v, want exact failed bytes", data, err)
+	}
+	if daemon.commits != 0 || string(daemon.content) != "old" {
+		t.Fatalf("failed Commit changed visible content: content=%q commits=%d", daemon.content, daemon.commits)
+	}
+}
+
 func TestWritableOpenUsesDirectIOAndCleanCloseAborts(t *testing.T) {
 	ctx := context.Background()
 	daemon := newStub(t, []byte("unchanged"))
