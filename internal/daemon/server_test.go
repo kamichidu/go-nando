@@ -411,15 +411,16 @@ func TestRecoveryRetryPreservesLatestModeForExistingEntries(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := application.ChmodEntry(ctx, entry.ID, 0o600); err != nil {
+			// A chmod after Begin remains the Repository authority at Commit.
+			if err := application.ChmodEntry(ctx, entry.ID, 0o604); err != nil {
 				t.Fatal(err)
 			}
 			if err := manager.commit(ctx, ordinary.SessionID); err != nil {
 				t.Fatal(err)
 			}
 			entry, err = application.Stat(ctx, path)
-			if err != nil || entry.Mode&0o7777 != 0o600 {
-				t.Fatalf("mode after ordinary commit = %04o, err=%v; want 0600", entry.Mode&0o7777, err)
+			if err != nil || entry.Mode&0o7777 != 0o604 {
+				t.Fatalf("mode after ordinary commit = %04o, err=%v; want 0604", entry.Mode&0o7777, err)
 			}
 		})
 	}

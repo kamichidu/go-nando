@@ -697,17 +697,17 @@ func TestNewResourceRecoveryUsesPersistedDefaultMode(t *testing.T) {
 	}
 }
 
-func TestWriteSessionPersistsResolvedLogicalMode(t *testing.T) {
+func TestWriteSessionPersistsLogicalModeOnlyForNewEntry(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		existing *metadata.Entry
 		explicit *uint32
-		want     uint32
+		want     *uint32
 	}{
-		{name: "new omitted mode defaults to 0644", want: 0o644},
-		{name: "explicit mode overrides default", explicit: ptrUint32(0o640), want: 0o640},
-		{name: "existing entry mode is inherited", existing: &metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 3, Mode: 0o751}, want: 0o751},
-		{name: "explicit mode overrides existing entry", existing: &metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 3, Mode: 0o751}, explicit: ptrUint32(0o600), want: 0o600},
+		{name: "new omitted mode defaults to 0644", want: ptrUint32(0o644)},
+		{name: "explicit mode overrides default", explicit: ptrUint32(0o640), want: ptrUint32(0o640)},
+		{name: "existing Entry does not capture mode", existing: &metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 3, Mode: 0o751}},
+		{name: "explicit mode is ignored for existing Entry", existing: &metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 3, Mode: 0o751}, explicit: ptrUint32(0o600)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeRepositoryUseCases{entry: tc.existing}
@@ -728,8 +728,11 @@ func TestWriteSessionPersistsResolvedLogicalMode(t *testing.T) {
 			if err := json.Unmarshal(data, &record); err != nil {
 				t.Fatal(err)
 			}
-			if record.LogicalMode == nil || *record.LogicalMode != tc.want {
-				t.Fatalf("persisted logical mode = %v, want %04o", record.LogicalMode, tc.want)
+			if tc.want == nil && record.LogicalMode != nil {
+				t.Fatalf("existing Entry captured logical mode %04o", *record.LogicalMode)
+			}
+			if tc.want != nil && (record.LogicalMode == nil || *record.LogicalMode != *tc.want) {
+				t.Fatalf("persisted logical mode = %v, want %04o", record.LogicalMode, *tc.want)
 			}
 		})
 	}
