@@ -13,7 +13,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	awsS3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/kamichidu/go-nando/internal/content"
 	coordinatorsqlite "github.com/kamichidu/go-nando/internal/coordinator/sqlite"
@@ -29,19 +28,17 @@ func TestS3RepositoryDeliveryAndVerifiedReadThrough(t *testing.T) {
 		t.Skip("set NANDO_S3_INTEGRATION=1 to run against the project-scoped RustFS service")
 	}
 	ctx := context.Background()
+	t.Setenv("AWS_ACCESS_KEY_ID", os.Getenv("NANDO_S3_ACCESS_KEY_ID"))
+	t.Setenv("AWS_SECRET_ACCESS_KEY", os.Getenv("NANDO_S3_SECRET_ACCESS_KEY"))
 	bucket := "nando-repository-e2e"
 	remoteURI := "s3://" + bucket + "/repository-e2e/"
 	remote, _, err := s3store.NewClientStore(ctx, remoteURI, s3store.ClientConfig{
 		Endpoint: os.Getenv("NANDO_S3_ENDPOINT"), Region: os.Getenv("NANDO_S3_REGION"),
-		AccessKeyID: os.Getenv("NANDO_S3_ACCESS_KEY_ID"), SecretAccessKey: os.Getenv("NANDO_S3_SECRET_ACCESS_KEY"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	awsConfig, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion(os.Getenv("NANDO_S3_REGION")),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(os.Getenv("NANDO_S3_ACCESS_KEY_ID"), os.Getenv("NANDO_S3_SECRET_ACCESS_KEY"), "")),
-	)
+	awsConfig, err := config.LoadDefaultConfig(ctx, config.WithRegion(os.Getenv("NANDO_S3_REGION")))
 	if err != nil {
 		t.Fatal(err)
 	}

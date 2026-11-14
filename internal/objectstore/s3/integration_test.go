@@ -42,9 +42,10 @@ func TestS3CompatibleSinglePutAndReconciliation(t *testing.T) {
 		t.Skip("set NANDO_S3_INTEGRATION=1 to run against the project-scoped RustFS service")
 	}
 	ctx := context.Background()
+	t.Setenv("AWS_ACCESS_KEY_ID", os.Getenv("NANDO_S3_ACCESS_KEY_ID"))
+	t.Setenv("AWS_SECRET_ACCESS_KEY", os.Getenv("NANDO_S3_SECRET_ACCESS_KEY"))
 	store, _, err := NewClientStore(ctx, "s3://"+os.Getenv("NANDO_S3_BUCKET")+"/integration/", ClientConfig{
 		Endpoint: os.Getenv("NANDO_S3_ENDPOINT"), Region: os.Getenv("NANDO_S3_REGION"),
-		AccessKeyID: os.Getenv("NANDO_S3_ACCESS_KEY_ID"), SecretAccessKey: os.Getenv("NANDO_S3_SECRET_ACCESS_KEY"),
 	})
 	if err != nil {
 		t.Fatal(err)

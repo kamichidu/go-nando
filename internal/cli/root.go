@@ -393,6 +393,9 @@ func NewAppAtRepository(ctx context.Context, repoDir string) (*app.App, string, 
 		}
 		switch backend {
 		case "gcs":
+			if err := cfg.ValidateRemoteBackend(backend); err != nil {
+				return nil, "", nil, errors.Join(err, metaStore.Close())
+			}
 			store, client, err := gcs.NewClientStore(ctx, repoSettings.RemoteURI)
 			if err != nil {
 				return nil, "", nil, errors.Join(err, metaStore.Close())
@@ -400,9 +403,7 @@ func NewAppAtRepository(ctx context.Context, repoDir string) (*app.App, string, 
 			remoteStore, remoteClient = store, client
 		case "s3":
 			store, client, err := s3store.NewClientStore(ctx, repoSettings.RemoteURI, s3store.ClientConfig{
-				Endpoint: cfg.Remote.Endpoint, Region: cfg.Remote.Region,
-				AccessKeyID: cfg.Remote.AccessKeyID, SecretAccessKey: cfg.Remote.SecretAccessKey,
-				SessionToken: cfg.Remote.SessionToken,
+				Endpoint: cfg.Remote.S3.Endpoint, Region: cfg.Remote.S3.Region,
 			})
 			if err != nil {
 				return nil, "", nil, errors.Join(err, metaStore.Close())

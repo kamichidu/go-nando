@@ -22,17 +22,18 @@
 # "s3://bucket/archive/". The literal prefix preserves trailing slashes and
 # no separator is inserted. When set, it must match the URI persisted at init.
 # remote_uri = "s3://my-nando-bucket/archive/"
-# For Wasabi or custom S3-compatible endpoints; omit endpoint for AWS S3.
-# endpoint = "https://s3.us-west-1.wasabisys.com"
-# region = "us-west-1"
-# Optional static credentials; otherwise the AWS credential chain is used.
-# access_key_id = "..."
-# secret_access_key = "..."
-# session_token = "..."
 # sync_idle_interval = "30s"
 # sync_periodic_interval = "5m"
 # max_delivery_delay = "30m"
 # sync_parallelism = 2
+
+# Optional S3-compatible connection settings. Used only by repositories whose
+# persisted remote_backend is "s3". AWS S3 can omit endpoint; region defaults
+# to us-east-1. AWS SDK v2 Default Credential Chain supplies credentials.
+# Optional S3-specific values follow in [remote.s3].
+[remote.s3]
+# endpoint = "https://s3.us-west-1.wasabisys.com"
+# region = "us-west-1"
 
 # Daemon transport and credentials. `listen` configures both the daemon's
 # listening address and the address all client commands connect to, including

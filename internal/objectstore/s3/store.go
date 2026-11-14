@@ -14,7 +14,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	awsS3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -34,15 +33,11 @@ type api interface {
 	ListObjectsV2(context.Context, *awsS3.ListObjectsV2Input, ...func(*awsS3.Options)) (*awsS3.ListObjectsV2Output, error)
 }
 
-// ClientConfig selects endpoint, region, and optional static credentials.
-// Empty credentials use the AWS SDK credential chain (environment, profiles,
-// web identity, or instance credentials).
+// ClientConfig selects an optional endpoint and region. AWS SDK v2's default
+// credential chain supplies credentials.
 type ClientConfig struct {
-	Endpoint        string
-	Region          string
-	AccessKeyID     string
-	SecretAccessKey string
-	SessionToken    string
+	Endpoint string
+	Region   string
 }
 
 type Store struct {
@@ -62,14 +57,7 @@ func NewClientStore(ctx context.Context, remoteURI string, settings ClientConfig
 	if region == "" {
 		region = "us-east-1"
 	}
-	options := []func(*config.LoadOptions) error{config.WithRegion(region)}
-	if settings.AccessKeyID != "" || settings.SecretAccessKey != "" || settings.SessionToken != "" {
-		if settings.AccessKeyID == "" || settings.SecretAccessKey == "" {
-			return nil, nil, errors.New("S3 access key ID and secret access key must be configured together")
-		}
-		options = append(options, config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(settings.AccessKeyID, settings.SecretAccessKey, settings.SessionToken)))
-	}
-	awsConfig, err := config.LoadDefaultConfig(ctx, options...)
+	awsConfig, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
 		return nil, nil, fmt.Errorf("load S3 credentials: %w", err)
 	}

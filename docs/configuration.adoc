@@ -83,11 +83,12 @@ GCS selection is persisted with `nando init --delivery-mode remote
 selection uses `--remote-backend s3 --remote-uri s3://bucket[/prefix]`. These
 values are persisted in repository-owned `repository.json`.
 The optional `[remote].remote_uri` TOML value must match that persisted URI
-when present. S3-compatible configuration uses `[remote].endpoint` and
-`[remote].region`; omit the endpoint for AWS S3. The AWS credential chain is
-used when static keys are absent. `access_key_id`, `secret_access_key`, and
-`session_token` are optional runtime credentials and are never stored in
-repository-owned `repository.json`. Prefixes are literal object-key strings: `gs://bucket/hoge` and
+when present. S3-compatible connection configuration uses `[remote.s3].endpoint`
+and `[remote.s3].region`; omit the endpoint for AWS S3. S3 credentials always
+come from AWS SDK v2 Default Credential Chain (environment, shared profile,
+web identity, or IAM role). TOML credential fields are unsupported. GCS uses
+Google Application Default Credentials. S3 connection settings are rejected
+when the repository selects GCS. Prefixes are literal object-key strings: `gs://bucket/hoge` and
 `gs://bucket/hoge/` remain distinct, with no normalization or automatic
 separator insertion. With the current `objects/{content_id}` suffix,
 `gs://bucket/hoge` maps to `hogeobjects/{content_id}` and
@@ -103,6 +104,18 @@ sync_periodic_interval = "5m"
 max_delivery_delay = "30m"
 sync_parallelism = 2
 ----
+
+S3-compatible connection settings are optional and isolated in a nested table:
+
+[source,toml]
+----
+[remote.s3]
+endpoint = "https://s3.us-west-1.wasabisys.com"
+region = "us-west-1"
+----
+
+Only `endpoint` and `region` are accepted in `[remote.s3]`. The common scheduler
+and optional compatibility `remote_uri` remain in `[remote]`.
 
 These values are examples, not operational defaults. Select them for the
 deployment. Intervals must be positive Go durations and parallelism must be

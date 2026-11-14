@@ -87,7 +87,7 @@ func TestLoadConfigReadsFUSEMountOptions(t *testing.T) {
 
 func TestLoadConfigReadsS3RemoteSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	contents := "[remote]\nremote_uri = \"s3://archive/prefix/\"\nendpoint = \"http://127.0.0.1:9000\"\nregion = \"us-east-1\"\naccess_key_id = \"access\"\nsecret_access_key = \"secret\"\nsession_token = \"session\"\n"
+	contents := "[remote]\nremote_uri = \"s3://archive/prefix/\"\n[remote.s3]\nendpoint = \"http://127.0.0.1:9000\"\nregion = \"us-east-1\"\n"
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,37 @@ func TestLoadConfigReadsS3RemoteSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Remote.URI != "s3://archive/prefix/" || cfg.Remote.Endpoint != "http://127.0.0.1:9000" || cfg.Remote.Region != "us-east-1" || cfg.Remote.AccessKeyID != "access" || cfg.Remote.SecretAccessKey != "secret" || cfg.Remote.SessionToken != "session" {
+	if cfg.Remote.URI != "s3://archive/prefix/" || cfg.Remote.S3.Endpoint != "http://127.0.0.1:9000" || cfg.Remote.S3.Region != "us-east-1" {
 		t.Fatalf("S3 remote settings=%+v", cfg.Remote)
+	}
+}
+
+func TestLoadConfigRejectsLegacyS3Settings(t *testing.T) {
+	for _, contents := range []string{
+		"[remote]\nendpoint = \"http://127.0.0.1:9000\"\n",
+		"[remote]\naccess_key_id = \"access\"\n",
+		"[remote]\nsecret_access_key = \"secret\"\n",
+		"[remote]\nsession_token = \"session\"\n",
+	} {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(path); err == nil {
+			t.Errorf("legacy S3 setting accepted: %s", contents)
+		}
+	}
+}
+
+func TestS3SettingsAreRejectedForGCSBackend(t *testing.T) {
+	cfg := Config{Remote: RemoteConfig{S3: S3Config{Endpoint: "http://localhost:9000"}}}
+	if err := cfg.ValidateRemoteBackend("gcs"); err == nil {
+		t.Fatal("S3 settings were accepted for GCS backend")
+	}
+	if err := cfg.ValidateRemoteBackend("s3"); err != nil {
+		t.Fatalf("S3 settings rejected for S3 backend: %v", err)
+	}
+	if err := (Config{}).ValidateRemoteBackend("gcs"); err != nil {
+		t.Fatalf("empty S3 settings rejected for GCS backend: %v", err)
 	}
 }

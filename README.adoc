@@ -74,9 +74,10 @@ HEAD metadata; multipart is unsupported pending Wasabi validation.
 
 Using a prebuilt release requires a supported operating system and
 architecture listed with that release. Building from source requires Go 1.25.1
-or later. GCS repositories require Google Cloud credentials. S3-compatible repositories
-use the AWS credential chain or configured access keys, plus an endpoint and
-region for services such as Wasabi. Local repositories need no cloud credentials.
+or later. GCS repositories use Google Application Default Credentials.
+S3-compatible repositories use AWS SDK v2 Default Credential Chain and
+optional endpoint and region settings. Local repositories need no cloud
+credentials.
 
 == Installation
 
@@ -223,8 +224,11 @@ GCS uses `delivery_mode: "remote"`, `remote_backend: "gcs"`, and a
 `remote_backend: "s3"` and an `s3://bucket[/prefix]` URI. For AWS S3, the
 AWS credential chain supplies credentials and the SDK selects the regional
 endpoint by default. For Wasabi or another compatible endpoint, set
-`[remote].endpoint` and `[remote].region`; optional static credentials can be
-set in the same runtime TOML table. The optional TOML `[remote].remote_uri`
+`[remote.s3].endpoint` and `[remote.s3].region`. Credentials come from the AWS
+SDK v2 Default Credential Chain, including environment variables, shared
+profiles, web identity, or IAM roles; credentials cannot be set in TOML. S3
+connection settings are rejected when the repository selects GCS. The optional
+TOML `[remote].remote_uri`
 must match the repository URI when set. Prefix bytes are
 literal object-key prefixes: a prefix ending in `/` is distinct from one that
 does not, and no separator is inserted automatically. The current content key suffix is
