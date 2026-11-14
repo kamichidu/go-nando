@@ -8,10 +8,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsS3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/kamichidu/go-nando/internal/content"
 )
@@ -64,6 +66,40 @@ func TestUploadRejectsMismatchedExistingKeyWithoutPut(t *testing.T) {
 	}
 }
 
+func TestListRemoteObjectsTruncatedWithoutTokenReturnsPartialResultsAndError(t *testing.T) {
+	ctx := context.Background()
+	payload := []byte("valid listed object")
+	id, err := content.NewHasher().Sum(ctx, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	md5sum := md5.Sum(payload)
+	api := &testAPI{
+		present: true,
+		data:    payload,
+		metadata: map[string]string{
+			"nando-content-id": id.String(),
+			"nando-md5":        base64.StdEncoding.EncodeToString(md5sum[:]),
+		},
+		listOutput: &awsS3.ListObjectsV2Output{
+			Contents:    []types.Object{{Key: aws.String("objects/" + id.String())}},
+			IsTruncated: aws.Bool(true),
+		},
+	}
+	store, err := NewStoreWithAPI("s3://bucket/", api)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.ListRemoteObjects(ctx)
+	if err == nil || !strings.Contains(err.Error(), "truncated response omitted continuation token") {
+		t.Fatalf("ListRemoteObjects error=%v, want missing continuation token error", err)
+	}
+	if len(got) != 1 || got[0].ID != id {
+		t.Fatalf("ListRemoteObjects results=%+v, want retained valid object %s", got, id)
+	}
+}
+
 type testAPI struct {
 	putErr            error
 	putCalls          int
@@ -73,6 +109,7 @@ type testAPI struct {
 	ifNoneMatch       string
 	putContentMD5     string
 	putChecksumSHA256 string
+	listOutput        *awsS3.ListObjectsV2Output
 }
 
 func (a *testAPI) PutObject(_ context.Context, input *awsS3.PutObjectInput, _ ...func(*awsS3.Options)) (*awsS3.PutObjectOutput, error) {
@@ -106,7 +143,10 @@ func (*testAPI) GetObject(context.Context, *awsS3.GetObjectInput, ...func(*awsS3
 	return nil, errors.New("unexpected GetObject")
 }
 
-func (*testAPI) ListObjectsV2(context.Context, *awsS3.ListObjectsV2Input, ...func(*awsS3.Options)) (*awsS3.ListObjectsV2Output, error) {
+func (a *testAPI) ListObjectsV2(context.Context, *awsS3.ListObjectsV2Input, ...func(*awsS3.Options)) (*awsS3.ListObjectsV2Output, error) {
+	if a.listOutput != nil {
+		return a.listOutput, nil
+	}
 	return &awsS3.ListObjectsV2Output{}, nil
 }
 

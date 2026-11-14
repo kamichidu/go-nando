@@ -274,7 +274,11 @@ func (s *Store) ListRemoteObjects(ctx context.Context) ([]objectstore.RemoteObje
 			}
 			result = append(result, attrs.info)
 		}
-		if page.IsTruncated == nil || !*page.IsTruncated || page.NextContinuationToken == nil {
+		if page.IsTruncated == nil || !*page.IsTruncated {
+			break
+		}
+		if page.NextContinuationToken == nil {
+			failures = append(failures, errors.New("list S3 objects: truncated response omitted continuation token"))
 			break
 		}
 		token = page.NextContinuationToken
