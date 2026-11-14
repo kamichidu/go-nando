@@ -313,6 +313,171 @@ func TestStableEntryWriteSessionFollowsRenameWithOriginalCAS(t *testing.T) {
 	}
 }
 
+func TestRecoveryRetryPreservesLatestModeForExistingEntries(t *testing.T) {
+	for _, followEntryID := range []bool{false, true} {
+		name := "path expectation"
+		if followEntryID {
+			name = "stable Entry ID across rename"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			if err := app.InitRepository(ctx, root); err != nil {
+				t.Fatal(err)
+			}
+			application, closeRepository := openTestApplication(t, root)
+			defer closeRepository()
+			initial := filepath.Join(t.TempDir(), "initial")
+			if err := os.WriteFile(initial, []byte("before"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := application.Put(ctx, app.PutInput{LocalPath: initial, RepositoryPath: "/old"}); err != nil {
+				t.Fatal(err)
+			}
+			manager, err := newSessionManager(application, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer manager.close()
+			begin, err := manager.beginWrite(ctx, "/old", followEntryID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stage := resourcePathFromURI(t, begin.ResourceURI)
+			if err := os.WriteFile(stage, []byte("after"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if followEntryID {
+				id, err := application.Stat(ctx, "/old")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := application.MoveEntry(ctx, id.ID, "/new"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			path := "/old"
+			if followEntryID {
+				path = "/new"
+			}
+			entry, err := application.Stat(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := application.ChmodEntry(ctx, entry.ID, 0o640); err != nil {
+				t.Fatal(err)
+			}
+			if !followEntryID {
+				// Path/revision CAS correctly rejects an Entry changed by chmod.
+				if err := manager.commit(ctx, begin.SessionID); !errors.Is(err, metadata.ErrEntryConflict) {
+					t.Fatalf("commit after external chmod = %v, want Entry conflict", err)
+				}
+				return
+			}
+			// Fail before the repository commit, then retry from the durable
+			// record after chmod. Stable Entry ID semantics permit this while
+			// retaining the original content identity checks.
+			manager.files = &failNextSyncFile{sessionFiles: manager.files}
+			if err := manager.commit(ctx, begin.SessionID); err == nil {
+				t.Fatal("first commit unexpectedly succeeded")
+			}
+			if manager.recoveries[begin.SessionID] == nil {
+				t.Fatal("failed commit was not preserved for recovery")
+			}
+			// Reopen the durable record to exercise the restart/recovery path.
+			if err := manager.close(); err != nil {
+				t.Fatal(err)
+			}
+			manager, err = newSessionManager(application, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.retryRecovery(ctx, begin.SessionID); err != nil {
+				t.Fatal(err)
+			}
+			entry, err = application.Stat(ctx, path)
+			if err != nil || entry.Mode&0o7777 != 0o640 {
+				t.Fatalf("mode after retry = %04o, err=%v; want 0640", entry.Mode&0o7777, err)
+			}
+			// The ordinary commit path uses the same mode rule.
+			ordinary, err := manager.beginWrite(ctx, path, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(resourcePathFromURI(t, ordinary.ResourceURI), []byte("ordinary commit"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			entry, err = application.Stat(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := application.ChmodEntry(ctx, entry.ID, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.commit(ctx, ordinary.SessionID); err != nil {
+				t.Fatal(err)
+			}
+			entry, err = application.Stat(ctx, path)
+			if err != nil || entry.Mode&0o7777 != 0o600 {
+				t.Fatalf("mode after ordinary commit = %04o, err=%v; want 0600", entry.Mode&0o7777, err)
+			}
+		})
+	}
+}
+
+func TestRecoveryRetryAppliesBeginModeForNewEntry(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	if err := app.InitRepository(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	application, closeRepository := openTestApplication(t, root)
+	defer closeRepository()
+	manager, err := newSessionManager(application, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.close()
+	begin, err := manager.beginWrite(ctx, "/new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resourcePathFromURI(t, begin.ResourceURI), []byte("new content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager.files = &failNextSyncFile{sessionFiles: manager.files}
+	if err := manager.commit(ctx, begin.SessionID); err == nil {
+		t.Fatal("first commit unexpectedly succeeded")
+	}
+	if err := manager.close(); err != nil {
+		t.Fatal(err)
+	}
+	manager, err = newSessionManager(application, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.retryRecovery(ctx, begin.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := application.Stat(ctx, "/new")
+	if err != nil || entry.Mode&0o7777 != 0o644 {
+		t.Fatalf("new Entry recovery mode = %04o, err=%v; want 0644", entry.Mode&0o7777, err)
+	}
+}
+
+type failNextSyncFile struct {
+	sessionFiles
+	failed bool
+}
+
+func (f *failNextSyncFile) SyncFile(path string) error {
+	if !f.failed {
+		f.failed = true
+		return errors.New("injected staging sync failure")
+	}
+	return f.sessionFiles.SyncFile(path)
+}
+
 func beginEntryIDForTest(t *testing.T, application *app.App, ctx context.Context, repositoryPath string) string {
 	t.Helper()
 	entry, err := application.Stat(ctx, repositoryPath)

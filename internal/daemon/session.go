@@ -392,15 +392,7 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 	commitErr := m.files.SyncFile(session.StagingPath)
 	if commitErr == nil {
 		input := app.PutInput{LocalPath: session.StagingPath, RepositoryPath: session.RepositoryPath}
-		if session.FollowEntryID {
-			commitErr = m.app.PutExpectedEntryIDWithMode(ctx, input, session.ObservedEntry, nil)
-		} else {
-			mode := session.LogicalMode
-			if session.Expectation.EntryID != "" {
-				mode = nil
-			}
-			commitErr = m.app.PutExpectedWithMode(ctx, input, session.Expectation, mode)
-		}
+		commitErr = m.putSessionContent(ctx, input, session.recoveryRecord)
 	}
 	if commitErr != nil {
 		preserveErr := m.preserve(&session.recoveryRecord, commitErr.Error())
@@ -721,11 +713,7 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 	m.mu.Unlock()
 	input := app.PutInput{LocalPath: record.StagingPath, RepositoryPath: record.RepositoryPath}
 	var err error
-	if record.FollowEntryID {
-		err = m.app.PutExpectedEntryIDWithMode(ctx, input, record.ObservedEntry, record.LogicalMode)
-	} else {
-		err = m.app.PutExpectedWithMode(ctx, input, record.Expectation, record.LogicalMode)
-	}
+	err = m.putSessionContent(ctx, input, *record)
 	if err == nil {
 		if err := m.markCommitted(record); err == nil {
 			m.mu.Lock()
@@ -740,6 +728,20 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 		err = fmt.Errorf("recovery repository commit succeeded but completion record failed: %w", err)
 	}
 	return m.updateRecoveryFailure(record, err)
+}
+
+// putSessionContent applies the Begin-time mode only when creating an absent
+// path. Existing Entries retain their current mode, including FollowEntryID
+// writes whose path may have changed since Begin.
+func (m *sessionManager) putSessionContent(ctx context.Context, input app.PutInput, record recoveryRecord) error {
+	mode := record.LogicalMode
+	if record.Expectation.EntryID != "" {
+		mode = nil
+	}
+	if record.FollowEntryID {
+		return m.app.PutExpectedEntryIDWithMode(ctx, input, record.ObservedEntry, mode)
+	}
+	return m.app.PutExpectedWithMode(ctx, input, record.Expectation, mode)
 }
 
 func (m *sessionManager) updateRecoveryFailure(record *recoveryRecord, cause error) error {
