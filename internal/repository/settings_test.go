@@ -13,6 +13,7 @@ func TestSettingsReadCanonicalRepositoryJSON(t *testing.T) {
 	}{
 		{"local", `{"delivery_mode":"local"}`, Settings{DeliveryMode: DeliveryModeLocal}},
 		{"remote GCS", `{"delivery_mode":"remote","remote_backend":"gcs","remote_uri":"gs://archive","max_local_bytes":42}`, Settings{DeliveryMode: DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://archive", MaxLocalBytes: 42}},
+		{"remote S3-compatible", `{"delivery_mode":"remote","remote_backend":"s3","remote_uri":"s3://archive/prefix/"}`, Settings{DeliveryMode: DeliveryModeRemote, RemoteBackend: "s3", RemoteURI: "s3://archive/prefix/"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -33,6 +34,7 @@ func TestSettingsReadCanonicalRepositoryJSON(t *testing.T) {
 		`{"delivery_mode":"remote","gcs_bucket":"archive"}`,
 		`{"delivery_mode":"unsupported"}`,
 		`{"delivery_mode":"remote","remote_backend":"other","remote_uri":"gs://archive"}`,
+		`{"delivery_mode":"remote","remote_backend":"s3","remote_uri":"gs://archive"}`,
 		`{"delivery_mode":"remote","remote_uri":"gs://archive","max_local_bytes":-1}`,
 	} {
 		t.Run("reject "+raw, func(t *testing.T) {

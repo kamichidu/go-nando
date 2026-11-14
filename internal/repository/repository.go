@@ -340,12 +340,12 @@ func (r *Repository) RestoreRemoteOrphansTo(ctx context.Context, recoveryDirecto
 		failures = append(failures, fmt.Errorf("list remote objects (valid listed candidates will still be processed): %w", err))
 	}
 	for _, remoteObject := range all {
-		if err := remoteObject.ID.Validate(); err != nil || remoteObject.Generation <= 0 || remoteObject.ContentID != "" && remoteObject.ContentID != remoteObject.ID.String() {
-			failures = append(failures, fmt.Errorf("invalid GCS API object record %q: require a valid Content ID and generation", remoteObject.ContentID))
+		if err := remoteObject.ID.Validate(); err != nil || remoteObject.ContentID != remoteObject.ID.String() {
+			failures = append(failures, fmt.Errorf("invalid remote API object record %q: require a valid Content ID", remoteObject.ContentID))
 			continue
 		}
 		if len(remoteObject.MD5) != 16 {
-			failures = append(failures, fmt.Errorf("GCS object %s has missing or invalid MD5 metadata (%d bytes); verify the object attributes in GCS and restore only after a valid 16-byte MD5 is available", remoteObject.ID, len(remoteObject.MD5)))
+			failures = append(failures, fmt.Errorf("remote object %s has missing or invalid MD5 metadata (%d bytes); verify its API attributes and retry only after a valid 16-byte MD5 is available", remoteObject.ID, len(remoteObject.MD5)))
 			continue
 		}
 		name := remoteObject.ID.String()

@@ -43,6 +43,11 @@ type DaemonConfig struct {
 }
 type RemoteConfig struct {
 	URI                  string `toml:"remote_uri"`
+	Endpoint             string `toml:"endpoint"`
+	Region               string `toml:"region"`
+	AccessKeyID          string `toml:"access_key_id"`
+	SecretAccessKey      string `toml:"secret_access_key"`
+	SessionToken         string `toml:"session_token"`
 	SyncIdleInterval     string `toml:"sync_idle_interval"`
 	SyncPeriodicInterval string `toml:"sync_periodic_interval"`
 	MaxDeliveryDelay     string `toml:"max_delivery_delay"`

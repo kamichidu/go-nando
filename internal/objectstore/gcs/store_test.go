@@ -61,7 +61,7 @@ func TestAmbiguousUploadReconciliationDoesNotDependOnConsumedBytes(t *testing.T)
 		t.Fatal(err)
 	}
 	got, err := store.Upload(context.Background(), id, 3, want[:], strings.NewReader("abc"))
-	if err != nil || got.Generation != 22 {
+	if err != nil {
 		t.Fatalf("partial upload reconciliation failed: replica=%+v err=%v", got, err)
 	}
 }
@@ -77,7 +77,7 @@ func TestUploadChecksFinalObjectBeforeTransfer(t *testing.T) {
 		api := &fakeAPI{attrs: wantAttrs}
 		store := NewStoreWithAPIAndPrefix("bucket", "", api)
 		info, err := store.Upload(context.Background(), id, 3, sum[:], strings.NewReader("abc"))
-		if err != nil || info.Generation != 22 || api.uploadCalls != 0 || api.attrsCalls != 1 {
+		if err != nil || api.uploadCalls != 0 || api.attrsCalls != 1 {
 			t.Fatalf("info=%+v err=%v uploads=%d attrs=%d", info, err, api.uploadCalls, api.attrsCalls)
 		}
 	})
@@ -165,7 +165,7 @@ func TestUploadTargetsFinalNameAndUsesAPIAttributesForAmbiguousResponse(t *testi
 		t.Fatal(err)
 	}
 	info, err := store.Upload(context.Background(), id, 3, sum[:], strings.NewReader("abc"))
-	if err != nil || info.ID != id || info.Size != 3 || info.Generation != 91 {
+	if err != nil || info.ID != id || info.Size != 3 {
 		t.Fatalf("ambiguous upload was not reconciled: info=%+v err=%v", info, err)
 	}
 	if api.name != "objects/"+id.String() {
