@@ -28,6 +28,24 @@ type stubSession struct {
 	modeSet     bool
 }
 
+func mustFileHandle(t testing.TB, handle fs.FileHandle) *fileHandle {
+	t.Helper()
+	file, ok := handle.(*fileHandle)
+	if !ok {
+		t.Fatalf("handle has unexpected type %T", handle)
+	}
+	return file
+}
+
+func mustEntryNode(t testing.TB, node fs.InodeEmbedder) *entryNode {
+	t.Helper()
+	entry, ok := node.(*entryNode)
+	if !ok {
+		t.Fatalf("node has unexpected type %T", node)
+	}
+	return entry
+}
+
 type stubDaemon struct {
 	mu         sync.Mutex
 	root       string
@@ -102,7 +120,11 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 			return err
 		}
 		sid := "write-session"
-		session := &stubSession{path: p["path"].(string), file: file, followID: p["follow_entry_id"] == true}
+		path, ok := p["path"].(string)
+		if !ok {
+			return errors.New("begin write path is not a string")
+		}
+		session := &stubSession{path: path, file: file, followID: p["follow_entry_id"] == true}
 		if mode, ok := p["logical_mode"].(float64); ok {
 			session.logicalMode, session.modeSet = uint32(mode), true
 		}
@@ -244,14 +266,22 @@ func TestLinkedAndDetachedChmodSharedAcrossReadWriteHandles(t *testing.T) {
 	if d.entry.Mode&0o7777 != 0o640 {
 		t.Fatalf("metadata mode=%o", d.entry.Mode&0o7777)
 	}
-	if e := wh.(*fileHandle).Getattr(ctx, &attr); e != 0 || attr.Mode&0o7777 != 0o640 {
-		t.Fatalf("writer fstat mode=%o errno=%v", attr.Mode&0o7777, e)
+	writer := mustFileHandle(t, wh)
+	if e := writer.Getattr(ctx, &attr); e != 0 {
+		t.Fatalf("writer fstat: %v", e)
+	}
+	if attr.Mode&0o7777 != 0o640 {
+		t.Fatalf("writer fstat mode=%o, want 0640", attr.Mode&0o7777)
 	}
 	if e := n.Setattr(ctx, wh, chmod(0o604), &attr); e != 0 {
 		t.Fatalf("linked write fchmod: %v", e)
 	}
-	if e := rh.(*fileHandle).Getattr(ctx, &attr); e != 0 || attr.Mode&0o7777 != 0o604 {
-		t.Fatalf("reader did not observe write-handle chmod: mode=%o errno=%v", attr.Mode&0o7777, e)
+	reader := mustFileHandle(t, rh)
+	if e := reader.Getattr(ctx, &attr); e != 0 {
+		t.Fatalf("reader fstat: %v", e)
+	}
+	if attr.Mode&0o7777 != 0o604 {
+		t.Fatalf("reader did not observe write-handle chmod: mode=%o, want 0604", attr.Mode&0o7777)
 	}
 	if e := n.Setattr(ctx, nil, chmod(0o620), &attr); e != 0 {
 		t.Fatalf("linked path chmod: %v", e)
@@ -268,8 +298,11 @@ func TestLinkedAndDetachedChmodSharedAcrossReadWriteHandles(t *testing.T) {
 	if e := n.Setattr(ctx, wh, chmod(0o600), &attr); e != 0 {
 		t.Fatalf("detached write fchmod: %v", e)
 	}
-	if e := rh.(*fileHandle).Getattr(ctx, &attr); e != 0 || attr.Mode&0o7777 != 0o600 {
-		t.Fatalf("reader fstat mode=%o errno=%v", attr.Mode&0o7777, e)
+	if e := reader.Getattr(ctx, &attr); e != 0 {
+		t.Fatalf("reader fstat: %v", e)
+	}
+	if attr.Mode&0o7777 != 0o600 {
+		t.Fatalf("reader fstat mode=%o, want 0600", attr.Mode&0o7777)
 	}
 	d.mu.Lock()
 	if len(d.calls) != calls {
@@ -279,13 +312,13 @@ func TestLinkedAndDetachedChmodSharedAcrossReadWriteHandles(t *testing.T) {
 		t.Fatalf("detached chmod changed metadata: %o", d.entry.Mode&0o7777)
 	}
 	d.mu.Unlock()
-	if e := rh.(*fileHandle).Release(ctx); e != 0 {
+	if e := mustFileHandle(t, rh).Release(ctx); e != 0 {
 		t.Fatal(e)
 	}
 	if f.modes[d.entry.ID] == nil {
 		t.Fatal("shared mode discarded before last close")
 	}
-	if e := wh.(*fileHandle).Release(ctx); e != 0 {
+	if e := mustFileHandle(t, wh).Release(ctx); e != 0 {
 		t.Fatal(e)
 	}
 	if f.modes[d.entry.ID] != nil {
@@ -302,7 +335,11 @@ func TestLinkedChmodFailedRPCLeavesEntryAndHandleMode(t *testing.T) {
 	if e != 0 {
 		t.Fatal(e)
 	}
-	defer h.(*fileHandle).Release(ctx)
+	defer func() {
+		if errno := mustFileHandle(t, h).Release(ctx); errno != 0 {
+			t.Errorf("release file handle: %v", errno)
+		}
+	}()
 	d.chmodErr = errors.New("rpc unavailable")
 	in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: 0o600}}
 	if e := n.Setattr(ctx, h, in, &fuse.AttrOut{}); e != syscall.EIO {
@@ -322,7 +359,11 @@ func TestFailedModeRPCUnlocksStateAndRetryWorks(t *testing.T) {
 	if e != 0 {
 		t.Fatal(e)
 	}
-	defer h.(*fileHandle).Release(ctx)
+	defer func() {
+		if errno := mustFileHandle(t, h).Release(ctx); errno != 0 {
+			t.Errorf("release file handle: %v", errno)
+		}
+	}()
 	d.chmodErr = errors.New("rpc unavailable")
 	in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: 0o600}}
 	if e := n.Setattr(ctx, h, in, &fuse.AttrOut{}); e != syscall.EIO {
@@ -333,7 +374,7 @@ func TestFailedModeRPCUnlocksStateAndRetryWorks(t *testing.T) {
 	if e := n.Setattr(ctx, h, in, &fuse.AttrOut{}); e != 0 {
 		t.Fatalf("retry chmod=%v", e)
 	}
-	if e := h.(*fileHandle).Getattr(ctx, &fuse.AttrOut{}); e != 0 {
+	if e := mustFileHandle(t, h).Getattr(ctx, &fuse.AttrOut{}); e != 0 {
 		t.Fatalf("independent fstat after retry=%v", e)
 	}
 }
@@ -347,7 +388,11 @@ func TestFailedResolveUnlocksStateAndRetryWorks(t *testing.T) {
 	if e != 0 {
 		t.Fatal(e)
 	}
-	defer h.(*fileHandle).Release(ctx)
+	defer func() {
+		if errno := mustFileHandle(t, h).Release(ctx); errno != 0 {
+			t.Errorf("release file handle: %v", errno)
+		}
+	}()
 	d.resolveErr = errors.New("resolve unavailable")
 	in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: 0o600}}
 	if e := n.Setattr(ctx, h, in, &fuse.AttrOut{}); e != syscall.EIO {
@@ -393,7 +438,7 @@ func TestUnlinkRemovalFailureKeepsLinkedModeAndRetries(t *testing.T) {
 	d.entry.Revision++
 	d.mu.Unlock()
 	var linkedAttr fuse.AttrOut
-	if e := rh.(*fileHandle).Getattr(ctx, &linkedAttr); e != 0 || linkedAttr.Mode&0o7777 != 0o601 {
+	if e := mustFileHandle(t, rh).Getattr(ctx, &linkedAttr); e != 0 || linkedAttr.Mode&0o7777 != 0o601 {
 		t.Fatalf("pending-intent handle mode=%o errno=%v", linkedAttr.Mode&0o7777, e)
 	}
 	if e := h.Fsync(ctx, 0); e != 0 || d.commits != 0 {
@@ -409,10 +454,10 @@ func TestUnlinkRemovalFailureKeepsLinkedModeAndRetries(t *testing.T) {
 	if e := h.Release(ctx); e != 0 {
 		t.Fatalf("release after retry=%v", e)
 	}
-	if e := rh.(*fileHandle).Getattr(ctx, &linkedAttr); e != 0 {
+	if e := mustFileHandle(t, rh).Getattr(ctx, &linkedAttr); e != 0 {
 		t.Fatalf("detached read getattr=%v", e)
 	}
-	if e := rh.(*fileHandle).Release(ctx); e != 0 {
+	if e := mustFileHandle(t, rh).Release(ctx); e != 0 {
 		t.Fatalf("read release=%v", e)
 	}
 }
@@ -463,10 +508,10 @@ func TestConcurrentModeSetattrAndUnlinkCompletes(t *testing.T) {
 	if setattr != 0 {
 		t.Fatalf("concurrent setattr=%v", setattr)
 	}
-	if e := h.(*fileHandle).Release(ctx); e != 0 {
+	if e := mustFileHandle(t, h).Release(ctx); e != 0 {
 		t.Fatal(e)
 	}
-	if e := wh.(*fileHandle).Release(ctx); e != 0 {
+	if e := mustFileHandle(t, wh).Release(ctx); e != 0 {
 		t.Fatal(e)
 	}
 }
@@ -480,13 +525,17 @@ func TestLinkedHandleGetattrSeesExternalModeMutation(t *testing.T) {
 	if e != 0 {
 		t.Fatal(e)
 	}
-	defer h.(*fileHandle).Release(ctx)
+	defer func() {
+		if errno := mustFileHandle(t, h).Release(ctx); errno != 0 {
+			t.Errorf("release file handle: %v", errno)
+		}
+	}()
 	d.mu.Lock()
 	d.entry.Mode = 0o601
 	d.entry.Revision++
 	d.mu.Unlock()
 	var out fuse.AttrOut
-	if e := h.(*fileHandle).Getattr(ctx, &out); e != 0 || out.Mode&0o7777 != 0o601 {
+	if e := mustFileHandle(t, h).Getattr(ctx, &out); e != 0 || out.Mode&0o7777 != 0o601 {
 		t.Fatalf("external chmod fstat mode=%o errno=%v", out.Mode&0o7777, e)
 	}
 }
@@ -504,7 +553,7 @@ func TestFuseCreateModeZeroKeepsStagePrivateAndCommitsLogicalMode(t *testing.T) 
 	daemon := newStub(t, nil)
 	daemon.exists = false
 	adapter := New(daemon)
-	root := adapter.Root().(*entryNode)
+	root := mustEntryNode(t, adapter.Root())
 	// Initialize the inode bridge so Create can publish its child inode.
 	fs.NewNodeFS(root, &fs.Options{})
 	var out fuse.EntryOut
@@ -512,7 +561,7 @@ func TestFuseCreateModeZeroKeepsStagePrivateAndCommitsLogicalMode(t *testing.T) 
 	if errno != 0 {
 		t.Fatalf("Create: %v", errno)
 	}
-	fh := handle.(*fileHandle)
+	fh := mustFileHandle(t, handle)
 	info, err := fh.write.file.Stat()
 	if err != nil {
 		t.Fatal(err)
@@ -578,13 +627,17 @@ func TestReadHandleGetattrRefreshesLinkedMetadata(t *testing.T) {
 	if errno != 0 {
 		t.Fatal(errno)
 	}
-	defer h.(*fileHandle).Release(ctx)
+	defer func() {
+		if errno := mustFileHandle(t, h).Release(ctx); errno != 0 {
+			t.Errorf("release file handle: %v", errno)
+		}
+	}()
 	daemon.mu.Lock()
 	daemon.entry.Mode = 0o604
 	daemon.entry.Revision++
 	daemon.mu.Unlock()
 	var out fuse.AttrOut
-	if errno := h.(*fileHandle).Getattr(ctx, &out); errno != 0 {
+	if errno := mustFileHandle(t, h).Getattr(ctx, &out); errno != 0 {
 		t.Fatalf("Getattr: %v", errno)
 	}
 	if got := out.Mode & 0o7777; got != 0o604 {
@@ -726,8 +779,8 @@ func TestUnlinkMarksIntentAndKeepsOpenHandlePrivate(t *testing.T) {
 	if got := attr.Mode & 0o7777; got != state.logicalMode {
 		t.Fatalf("unlinked handle mode=%o, want logical mode %o", got, state.logicalMode)
 	}
-	if attr.Attr.Ino != inodeNumber(node.entryID()) || attr.Mode&syscall.S_IFMT != syscall.S_IFREG {
-		t.Fatalf("unlinked handle identity/type: ino=%d mode=%o", attr.Attr.Ino, attr.Mode)
+	if attr.Ino != inodeNumber(node.entryID()) || attr.Mode&syscall.S_IFMT != syscall.S_IFREG {
+		t.Fatalf("unlinked handle identity/type: ino=%d mode=%o", attr.Ino, attr.Mode)
 	}
 	if attr.Size != uint64(stageInfo.Size()) || attr.Mtime != uint64(stageInfo.ModTime().Unix()) || attr.Mtimensec != uint32(stageInfo.ModTime().Nanosecond()) {
 		t.Fatalf("unlinked handle staged attributes: size=%d mtime=%d.%09d, want size=%d mtime=%s", attr.Size, attr.Mtime, attr.Mtimensec, stageInfo.Size(), stageInfo.ModTime().Format(time.RFC3339Nano))
@@ -1050,10 +1103,7 @@ func TestWritableOpenUsesDirectIOAndCleanCloseAborts(t *testing.T) {
 	if flags&fuse.FOPEN_DIRECT_IO == 0 {
 		t.Fatalf("open flags=%#x, want direct I/O", flags)
 	}
-	file, ok := handle.(*fileHandle)
-	if !ok {
-		t.Fatal("open returned an unexpected handle type")
-	}
+	file := mustFileHandle(t, handle)
 	releaseErrno := file.Release(ctx)
 	if releaseErrno != 0 {
 		t.Fatal(releaseErrno)

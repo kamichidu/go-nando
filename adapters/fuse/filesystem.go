@@ -875,7 +875,9 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 				state.lease = nil
 			}
 			if state.sessionID != "" {
-				_ = n.owner.call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": state.sessionID}, nil)
+				if errno := n.owner.call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": state.sessionID}, nil); errno != 0 {
+					log.Printf("release ephemeral write session %s: %v", state.sessionID, errno)
+				}
 				state.sessionID = ""
 			}
 			if state.file != nil {

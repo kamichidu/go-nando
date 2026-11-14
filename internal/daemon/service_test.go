@@ -640,7 +640,11 @@ func TestRecoveryRejectsMissingLogicalModeWithoutBlockingHealthyRecords(t *testi
 	if err != nil {
 		t.Fatalf("invalid record blocked startup: %v", err)
 	}
-	defer restarted.close()
+	defer func() {
+		if err := restarted.close(); err != nil {
+			t.Errorf("close restarted session manager: %v", err)
+		}
+	}()
 	if restarted.recoveries[missing.SessionID] != nil || restarted.recoveries[healthy.SessionID] == nil {
 		t.Fatalf("recovery map missing-mode=%v healthy=%v", restarted.recoveries[missing.SessionID], restarted.recoveries[healthy.SessionID])
 	}
@@ -680,7 +684,11 @@ func TestNewResourceRecoveryUsesPersistedDefaultMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer restarted.close()
+	defer func() {
+		if err := restarted.close(); err != nil {
+			t.Errorf("close restarted session manager: %v", err)
+		}
+	}()
 	if rec := restarted.recoveries[begin.SessionID]; rec == nil || rec.LogicalMode == nil || *rec.LogicalMode != 0o644 {
 		t.Fatalf("ordinary recovery mode = %+v, want persisted 0644", rec)
 	}
@@ -715,7 +723,11 @@ func TestWriteSessionPersistsLogicalModeOnlyForNewEntry(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer manager.close()
+			defer func() {
+				if err := manager.close(); err != nil {
+					t.Errorf("close session manager: %v", err)
+				}
+			}()
 			begin, err := manager.beginWriteMode(context.Background(), "/file", false, tc.explicit)
 			if err != nil {
 				t.Fatal(err)

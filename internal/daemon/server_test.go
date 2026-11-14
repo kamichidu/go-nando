@@ -326,7 +326,11 @@ func TestRecoveryRetryPreservesLatestModeForExistingEntries(t *testing.T) {
 				t.Fatal(err)
 			}
 			application, closeRepository := openTestApplication(t, root)
-			defer closeRepository()
+			defer func() {
+				if err := closeRepository(); err != nil {
+					t.Errorf("close repository: %v", err)
+				}
+			}()
 			initial := filepath.Join(t.TempDir(), "initial")
 			if err := os.WriteFile(initial, []byte("before"), 0o600); err != nil {
 				t.Fatal(err)
@@ -338,7 +342,11 @@ func TestRecoveryRetryPreservesLatestModeForExistingEntries(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer manager.close()
+			defer func() {
+				if err := manager.close(); err != nil {
+					t.Errorf("close session manager: %v", err)
+				}
+			}()
 			begin, err := manager.beginWrite(ctx, "/old", followEntryID)
 			if err != nil {
 				t.Fatal(err)
@@ -433,12 +441,20 @@ func TestRecoveryRetryAppliesBeginModeForNewEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	application, closeRepository := openTestApplication(t, root)
-	defer closeRepository()
+	defer func() {
+		if err := closeRepository(); err != nil {
+			t.Errorf("close repository: %v", err)
+		}
+	}()
 	manager, err := newSessionManager(application, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.close()
+	defer func() {
+		if err := manager.close(); err != nil {
+			t.Errorf("close session manager: %v", err)
+		}
+	}()
 	begin, err := manager.beginWrite(ctx, "/new")
 	if err != nil {
 		t.Fatal(err)

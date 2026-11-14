@@ -254,7 +254,7 @@ func (m *sessionManager) createWriteSession(normalized string, expectation repos
 		logicalMode = nil
 	}
 	if expectation.EntryID == "" && logicalMode == nil {
-		return controlrpc.BeginWriteResult{}, errors.New("Resource session contract requires a resolved logical mode")
+		return controlrpc.BeginWriteResult{}, errors.New("resource session contract requires a resolved logical mode")
 	}
 	id := uuid.NewString()
 	resourcePath := filepath.Join(m.directory, id+".stage")
@@ -373,7 +373,7 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 	}
 	if session.Expectation.EntryID == "" && session.LogicalMode == nil {
 		m.mu.Unlock()
-		return errors.New("Resource session violates contract: logical mode is missing")
+		return errors.New("resource session violates contract: logical mode is missing")
 	}
 	if !time.Now().Before(session.expiresAt) {
 		session.expired = true
@@ -685,7 +685,7 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 	}
 	if record.Expectation.EntryID == "" && record.LogicalMode == nil {
 		m.mu.Unlock()
-		return errors.New("Resource recovery record violates contract: logical mode is missing")
+		return errors.New("resource recovery record violates contract: logical mode is missing")
 	}
 	record.inFlight = true
 	m.mu.Unlock()
