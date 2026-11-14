@@ -94,7 +94,7 @@ func (r *Repository) ProcessTransferQueueParallel(ctx context.Context, paralleli
 					}
 					return errors.Join(uploadErr, closeErr)
 				}
-				if info.ID != id || info.Size != size || info.Generation <= 0 || len(info.MD5) != 16 || !bytes.Equal(info.MD5, expectedMD5) {
+				if info.ID != id || info.Size != size || info.ContentID != id.String() || len(info.MD5) != 16 || !bytes.Equal(info.MD5, expectedMD5) {
 					return fmt.Errorf("remote upload returned mismatched API attributes for %s: %+v", id, info)
 				}
 				if err := r.validateLease(transferCtx, operationID); err != nil {

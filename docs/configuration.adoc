@@ -78,16 +78,22 @@ file sources avoid placing the token value in the TOML file.
 
 == Remote delivery scheduler
 
-GCS selection is persisted by `nando init --delivery-mode remote
---remote-uri gs://bucket[/prefix]` in repository-owned `repository.json`.
+GCS selection is persisted with `nando init --delivery-mode remote
+--remote-backend gcs --remote-uri gs://bucket[/prefix]`. S3-compatible
+selection uses `--remote-backend s3 --remote-uri s3://bucket[/prefix]`. These
+values are persisted in repository-owned `repository.json`.
 The optional `[remote].remote_uri` TOML value must match that persisted URI
-when present. Prefixes are literal object-key strings: `gs://bucket/hoge` and
+when present. S3-compatible configuration uses `[remote].endpoint` and
+`[remote].region`; omit the endpoint for AWS S3. The AWS credential chain is
+used when static keys are absent. `access_key_id`, `secret_access_key`, and
+`session_token` are optional runtime credentials and are never stored in
+repository-owned `repository.json`. Prefixes are literal object-key strings: `gs://bucket/hoge` and
 `gs://bucket/hoge/` remain distinct, with no normalization or automatic
 separator insertion. With the current `objects/{content_id}` suffix,
 `gs://bucket/hoge` maps to `hogeobjects/{content_id}` and
 `gs://bucket/hoge/` maps to `hoge/objects/{content_id}`.
 
-Remote delivery to the currently supported GCS backend requires all four scheduler settings in the daemon's TOML file. The only supported scheduler keys are grouped under `[remote]`: `sync_idle_interval`, `sync_periodic_interval`, `max_delivery_delay`, and `sync_parallelism`. Other scheduler key spellings are unknown configuration keys and are rejected.
+Remote delivery requires all four scheduler settings in the daemon's TOML file. The only supported scheduler keys are grouped under `[remote]`: `sync_idle_interval`, `sync_periodic_interval`, `max_delivery_delay`, and `sync_parallelism`. Other scheduler key spellings are unknown configuration keys and are rejected.
 
 [source,toml]
 ----
@@ -105,7 +111,10 @@ settings are provided.
 
 == Recovery directory
 
-For remote-object orphan recovery using the current GCS backend, the logical destination defaults to `/recyclebin`. Override it with:
+For remote-object orphan recovery using GCS or the S3-compatible backend, the
+logical destination defaults to `/recyclebin`. Recovery trusts Content ID,
+size, and MD5 API metadata without downloading object bodies. S3 recovery does
+not interpret ETag as MD5. Override the destination with:
 
 [source,toml]
 ----

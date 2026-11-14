@@ -84,3 +84,18 @@ func TestLoadConfigReadsFUSEMountOptions(t *testing.T) {
 		t.Fatalf("mount options=%q, want %q", cfg.Fuse.MountOptions, want)
 	}
 }
+
+func TestLoadConfigReadsS3RemoteSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	contents := "[remote]\nremote_uri = \"s3://archive/prefix/\"\nendpoint = \"http://127.0.0.1:9000\"\nregion = \"us-east-1\"\naccess_key_id = \"access\"\nsecret_access_key = \"secret\"\nsession_token = \"session\"\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Remote.URI != "s3://archive/prefix/" || cfg.Remote.Endpoint != "http://127.0.0.1:9000" || cfg.Remote.Region != "us-east-1" || cfg.Remote.AccessKeyID != "access" || cfg.Remote.SecretAccessKey != "secret" || cfg.Remote.SessionToken != "session" {
+		t.Fatalf("S3 remote settings=%+v", cfg.Remote)
+	}
+}

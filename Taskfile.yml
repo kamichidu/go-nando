@@ -130,6 +130,11 @@ tasks:
     cmds:
       - PATH="$(pwd)/{{.BIN_DIR}}:$PATH" ./e2e/run.sh
 
+  s3-integration:
+    desc: Run S3 adapter integration tests against an isolated MinIO Compose project and clean it up
+    cmds:
+      - python3 e2e/s3_integration.py
+
   package:
     desc: Build a local Debian package with nfpm
     deps: [init]

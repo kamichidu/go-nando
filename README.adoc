@@ -28,11 +28,7 @@ Examples include:
 * A local-first repository with asynchronous delivery to remote object
   storage.
 
-For remote delivery, nando currently supports Google Cloud Storage (GCS).
-Content is committed locally first; delivery to GCS is asynchronous. A
-repository uses local storage alone or local storage with one remote backend.
-GCS is the only implemented remote backend. Combining multiple remote backends
-in one repository is not supported and is not planned.
+For remote delivery, nando supports Google Cloud Storage (GCS) and one S3-compatible adapter for AWS S3 or Wasabi. Content is committed locally first; delivery to the selected remote backend is asynchronous. A repository uses local storage alone or local storage with exactly one remote backend. Combining multiple remote backends in one repository is unsupported.
 
 == Architecture
 
@@ -40,7 +36,7 @@ nando separates the Repository, Metadata Store, and Object Storage
 responsibilities. The Repository coordinates operations and consistency. The
 Metadata Store owns file and directory names, hierarchy, and revisions. Object
 Storage holds immutable file content; its interface is abstract, with local
-storage and GCS implementations.
+storage, GCS, and S3-compatible implementations.
 
 The Metadata Store is also an abstract interface. SQLite is the current
 backend. Other databases, including Firestore, could implement the same
@@ -57,28 +53,30 @@ flowchart LR
     APP --> REPO["Repository coordination"]
     REPO -->|entries, namespace, delivery queue| SQLITE[("SQLite Metadata Store\ncommitted metadata authority")]
     REPO -->|stage, publish, read| LOCAL[("Local object storage\ndurable objects or remote-mode cache")]
-    REPO -.->|queued asynchronous upload| GCS[("GCS object storage\nselected by remote_uri")]
-    GCS -.->|read-through on Local cache miss| REPO
+    REPO -.->|queued asynchronous upload| REMOTE[("GCS or S3-compatible object storage\nselected by remote settings")]
+    REMOTE -.->|read-through on Local cache miss| REPO
 
     classDef config fill:#fff,stroke:#777,stroke-dasharray:4 3,color:#333
-    URI["remote_uri: gs://bucket[/prefix]\nliteral prefix + objects/{content_id}"]:::config
-    URI -. config .-> GCS
+    URI["remote_uri: gs://bucket[/prefix] or s3://bucket[/prefix]\nliteral prefix + objects/{content_id}"]:::config
+    URI -. config .-> REMOTE
 ....
 
 Solid arrows show request or local object access. Dashed arrows show remote
 configuration and remote transfer/read-through. In remote mode, complete Local
 content is published as a separate operation before the SQLite transaction.
 That transaction atomically commits the Entry reference and durable
-remote-delivery queue obligation; GCS delivery is asynchronous. If the SQLite
+remote-delivery queue obligation; remote delivery is asynchronous. If the SQLite
 transaction fails, the published Local object remains unreferenced for later
-cleanup. GCS is the only implemented remote backend.
+cleanup. S3-compatible uploads use one conditional PutObject and reconcile by
+HEAD metadata; multipart is unsupported pending Wasabi validation.
 
 == Requirements
 
 Using a prebuilt release requires a supported operating system and
 architecture listed with that release. Building from source requires Go 1.25.1
-or later. GCS repositories also require Google Cloud credentials with access
-to the configured bucket. Local repositories do not require cloud credentials.
+or later. GCS repositories require Google Cloud credentials. S3-compatible repositories
+use the AWS credential chain or configured access keys, plus an endpoint and
+region for services such as Wasabi. Local repositories need no cloud credentials.
 
 == Installation
 
@@ -194,8 +192,8 @@ path = "/home/alex/nando-data"
 verbose = false
 ----
 
-To initialize remote delivery with the currently supported GCS backend, select
-the backend and provide a GCS URI:
+To initialize remote delivery with GCS, select the backend and provide a GCS
+URI:
 
 [source,bash]
 ----
@@ -216,14 +214,18 @@ sync_parallelism = 2
 
 Repositories use either `local` delivery or `remote` delivery. Remote mode
 keeps complete content in Local durable staging/cache and delivers it
-asynchronously to exactly one selected backend. GCS is the only implemented
-remote backend. Multiple backends, fanout, failover, and tiering are
-unsupported and not planned.
+asynchronously to exactly one selected backend. GCS and the S3-compatible
+adapter are supported. Multiple backends, fanout, failover, and tiering are
+unsupported.
 
-The current GCS backend is selected with `delivery_mode: "remote"`,
-`remote_backend: "gcs"`, and `remote_uri` in the repository settings. Use
-`--remote-uri gs://bucket[/prefix]` when initializing. The optional TOML
-`[remote].remote_uri` must match the repository URI when set. Prefix bytes are
+GCS uses `delivery_mode: "remote"`, `remote_backend: "gcs"`, and a
+`gs://bucket[/prefix]` URI. S3-compatible storage uses
+`remote_backend: "s3"` and an `s3://bucket[/prefix]` URI. For AWS S3, the
+AWS credential chain supplies credentials and the SDK selects the regional
+endpoint by default. For Wasabi or another compatible endpoint, set
+`[remote].endpoint` and `[remote].region`; optional static credentials can be
+set in the same runtime TOML table. The optional TOML `[remote].remote_uri`
+must match the repository URI when set. Prefix bytes are
 literal object-key prefixes: a prefix ending in `/` is distinct from one that
 does not, and no separator is inserted automatically. The current content key suffix is
 `objects/{content_id}`; thus `gs://bucket/hoge` yields
@@ -283,7 +285,7 @@ current implementation status and open decisions.
 == Project Status
 
 nando is under active development. Local object storage and asynchronous
-delivery to the single selected GCS backend are implemented, alongside the
+delivery to one selected GCS or S3-compatible backend are implemented, alongside the
 daemon, CLI, FUSE, and WebDAV clients. User-directed repository-to-repository
 synchronization is not implemented. Consult the
 link:docs/phase-a-completion-review.adoc[Phase A completion review]

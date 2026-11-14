@@ -1,0 +1,16 @@
+services:
+  rustfs:
+    image: rustfs/rustfs:1.0.5
+    command: /data
+    environment:
+      RUSTFS_ACCESS_KEY: nando-test-access
+      RUSTFS_SECRET_KEY: nando-test-secret-key
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "false"
+    ports:
+      - "127.0.0.1:${NANDO_S3_HOST_PORT:-19000}:9000"
+    volumes:
+      - rustfs-data:/data
+
+volumes:
+  rustfs-data:

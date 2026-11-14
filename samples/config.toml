@@ -18,10 +18,17 @@
 # Remote repositories require all four values. Durations must be positive.
 # Local repositories can also use these values to schedule maintenance.
 [remote]
-# GCS repository URI, for example "gs://my-nando-bucket/archive/".
-# The prefix is literal: trailing slashes are preserved and no separator is
-# inserted. When set, it must match the URI persisted at repository init.
-# remote_uri = "gs://my-nando-bucket/archive/"
+# GCS or S3-compatible URI, for example "gs://bucket/archive/" or
+# "s3://bucket/archive/". The literal prefix preserves trailing slashes and
+# no separator is inserted. When set, it must match the URI persisted at init.
+# remote_uri = "s3://my-nando-bucket/archive/"
+# For Wasabi or custom S3-compatible endpoints; omit endpoint for AWS S3.
+# endpoint = "https://s3.us-west-1.wasabisys.com"
+# region = "us-west-1"
+# Optional static credentials; otherwise the AWS credential chain is used.
+# access_key_id = "..."
+# secret_access_key = "..."
+# session_token = "..."
 # sync_idle_interval = "30s"
 # sync_periodic_interval = "5m"
 # max_delivery_delay = "30m"
@@ -65,7 +72,7 @@
 # listen = "127.0.0.1:8080"
 
 # Logical directory inside nando for `nando admin recover` when restoring
-# unreferenced GCS objects. Actual default: /recyclebin. This is not the local
+# unreferenced GCS or S3-compatible objects. Actual default: /recyclebin. This is not the local
 # repository directory configured by [repository].path.
 [recovery]
 # directory = "/recyclebin"

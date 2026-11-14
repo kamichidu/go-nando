@@ -30,13 +30,12 @@ type fixedIDMetadataStore struct {
 }
 
 type fakeRemoteObjectStore struct {
-	fail       bool
-	calls      int
-	stored     map[content.ID][]byte
-	listed     []objectstore.RemoteObjectInfo
-	attrsErr   error
-	attrsMD5   []byte
-	generation int64
+	fail     bool
+	calls    int
+	stored   map[content.ID][]byte
+	listed   []objectstore.RemoteObjectInfo
+	attrsErr error
+	attrsMD5 []byte
 }
 
 func (s *fakeRemoteObjectStore) Upload(_ context.Context, id content.ID, size int64, expectedMD5 []byte, src io.Reader) (objectstore.RemoteObjectInfo, error) {
@@ -55,7 +54,7 @@ func (s *fakeRemoteObjectStore) Upload(_ context.Context, id content.ID, size in
 		s.stored = make(map[content.ID][]byte)
 	}
 	s.stored[id] = data
-	return objectstore.RemoteObjectInfo{ID: id, Size: size, Generation: 1, MD5: append([]byte(nil), expectedMD5...)}, nil
+	return objectstore.RemoteObjectInfo{ID: id, ContentID: id.String(), Size: size, MD5: append([]byte(nil), expectedMD5...)}, nil
 }
 func (s *fakeRemoteObjectStore) OpenRemote(_ context.Context, id content.ID) (io.ReadCloser, error) {
 	data, ok := s.stored[id]
@@ -77,17 +76,19 @@ func (s *fakeRemoteObjectStore) RemoteAttrs(_ context.Context, id content.ID) (o
 	if s.attrsErr != nil {
 		return objectstore.RemoteObjectInfo{}, s.attrsErr
 	}
-	generation := s.generation
-	if generation == 0 {
-		generation = 1
-	}
 	if s.attrsMD5 != nil {
-		return objectstore.RemoteObjectInfo{ID: id, Size: int64(len(data)), Generation: generation, MD5: s.attrsMD5}, nil
+		return objectstore.RemoteObjectInfo{ID: id, Size: int64(len(data)), MD5: s.attrsMD5}, nil
 	}
-	return objectstore.RemoteObjectInfo{ID: id, Size: int64(len(data)), Generation: generation, MD5: append([]byte{}, sum[:]...)}, nil
+	return objectstore.RemoteObjectInfo{ID: id, Size: int64(len(data)), MD5: append([]byte{}, sum[:]...)}, nil
 }
 func (s *fakeRemoteObjectStore) ListRemoteObjects(context.Context) ([]objectstore.RemoteObjectInfo, error) {
-	return append([]objectstore.RemoteObjectInfo(nil), s.listed...), nil
+	listed := append([]objectstore.RemoteObjectInfo(nil), s.listed...)
+	for i := range listed {
+		if listed[i].ContentID == "" && listed[i].ID.Validate() == nil {
+			listed[i].ContentID = listed[i].ID.String()
+		}
+	}
+	return listed, nil
 }
 func TestResourceLeasesProtectPutAndReadsFromGC(t *testing.T) {
 	ctx := context.Background()
@@ -223,7 +224,7 @@ func TestGCLeavesUnreferencedGCSReplicaUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	remoteObjectStore := &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: 3, Generation: 73}}}
+	remoteObjectStore := &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: 3}}}
 	coordinator, err := coordinatorsqlite.Open(filepath.Join(root, "coordination.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -282,7 +283,7 @@ func TestGCSOrphanRecoveryRestoresRecyclebinEntryIdempotently(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := md5.Sum([]byte("abc"))
-	remote := &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: 3, Generation: 41, MD5: sum[:]}}, stored: map[content.ID][]byte{id: []byte("abc")}}
+	remote := &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: 3, MD5: sum[:]}}, stored: map[content.ID][]byte{id: []byte("abc")}}
 	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://test"})
 	if recovered, err := repo.RestoreRemoteOrphans(ctx); err != nil || recovered != 1 {
 		t.Fatalf("recovered=%d err=%v", recovered, err)
@@ -325,7 +326,7 @@ func TestGCSOrphanRecoveryPreservesConflictingRecyclebinPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: 3, Generation: 41}}}, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://test"})
+	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: 3}}}, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://test"})
 	if err := repo.Mkdir(ctx, "/recyclebin", 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -380,8 +381,8 @@ func TestGCSOrphanRecoveryRequiresMD5AndContinuesValidObjects(t *testing.T) {
 	}
 	validMD5 := md5.Sum([]byte("abc"))
 	remote := &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{
-		{ID: missingID, Size: 5, Generation: 1},
-		{ID: validID, Size: 3, Generation: 1, MD5: validMD5[:]},
+		{ID: missingID, Size: 5},
+		{ID: validID, Size: 3, MD5: validMD5[:]},
 	}}
 	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://test"})
 	if recovered, err := repo.RestoreRemoteOrphans(ctx); err == nil || recovered != 1 || !strings.Contains(err.Error(), "valid 16-byte MD5") {
@@ -416,7 +417,7 @@ func TestGCSOrphanRecoverySerializesWithPutAndRechecksReferences(t *testing.T) {
 	}()
 	id := hasherID(t, hasher, []byte("racing content"))
 	md5sum := md5.Sum([]byte("racing content"))
-	remote := &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: int64(len("racing content")), Generation: 1, MD5: md5sum[:]}}}
+	remote := &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: int64(len("racing content")), MD5: md5sum[:]}}}
 	recoveryRepo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://test"})
 	putRepo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://test"})
 	file := filepath.Join(root, "input")
@@ -471,7 +472,7 @@ func TestGCSOrphanRecoveryFailureCanBeRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 	validMD5 := md5.Sum([]byte("abc"))
-	remote := &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: 3, Generation: 1, MD5: validMD5[:]}}}
+	remote := &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: 3, MD5: validMD5[:]}}}
 	base := metadata.NewValidatingStore(metaStore)
 	failing := &failOnceCreateStore{MetadataStore: base}
 	repo := repository.NewRepositoryWithRemoteObjectStore(failing, objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://test"})

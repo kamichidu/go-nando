@@ -168,7 +168,7 @@ func matches(attrs apiAttrs, id content.ID, size int64, localMD5 []byte) bool {
 }
 
 func toRemoteObjectInfo(attrs apiAttrs) objectstore.RemoteObjectInfo {
-	return objectstore.RemoteObjectInfo{ID: attrs.ID, ContentID: attrs.ContentID, Size: attrs.Size, Generation: attrs.Generation, MD5: append([]byte(nil), attrs.MD5...)}
+	return objectstore.RemoteObjectInfo{ID: attrs.ID, ContentID: attrs.ContentID, Size: attrs.Size, MD5: append([]byte(nil), attrs.MD5...)}
 }
 
 func (s *Store) RemoteAttrs(ctx context.Context, id content.ID) (objectstore.RemoteObjectInfo, error) {
