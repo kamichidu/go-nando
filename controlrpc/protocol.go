@@ -28,6 +28,7 @@ const (
 	MethodPing            = "daemon.ping"
 	MethodStat            = "repository.stat"
 	MethodResolveEntry    = "repository.resolveEntry"
+	MethodChmodEntry      = "repository.chmodEntry"
 	MethodList            = "repository.list"
 	MethodMkdir           = "repository.mkdir"
 	MethodMove            = "repository.move"
@@ -40,6 +41,7 @@ const (
 	MethodSync            = "repository.sync"
 	MethodBeginRead       = "resource.beginRead"
 	MethodBeginWrite      = "resource.beginWrite"
+	MethodSetMode         = "resource.setMode"
 	MethodCommit          = "resource.commit"
 	MethodAbort           = "resource.abort"
 	MethodMarkUnlinked    = "resource.markUnlinked"
@@ -65,6 +67,12 @@ type BeginWriteParams struct {
 	EntryID         string   `json:"entry_id,omitempty"`
 	ResourceSchemes []string `json:"resource_schemes"`
 	FollowEntryID   bool     `json:"follow_entry_id,omitempty"`
+	LogicalMode     *uint32  `json:"logical_mode,omitempty"`
+}
+
+type SetModeParams struct {
+	SessionID string `json:"session_id"`
+	Mode      uint32 `json:"mode"`
 }
 
 type BeginReadParams struct {
@@ -75,6 +83,11 @@ type BeginReadParams struct {
 
 type ResolveEntryParams struct {
 	EntryID string `json:"entry_id"`
+}
+
+type ChmodEntryParams struct {
+	EntryID string `json:"entry_id"`
+	Mode    uint32 `json:"mode"`
 }
 
 type MoveEntryParams struct {

@@ -28,6 +28,8 @@ type fakeRepositoryUseCases struct {
 	putContinue      chan struct{}
 	putErr           error
 	removeEntryErr   error
+	lastPutMode      *uint32
+	modePutCount     int
 }
 
 type failingSessionFiles struct {
@@ -123,6 +125,17 @@ func (f *fakeRepositoryUseCases) ResolveEntry(_ context.Context, id metadata.Ent
 		return metadata.Entry{}, "", metadata.ErrEntryNotFound
 	}
 	return *f.entry, "/file", nil
+}
+
+func (f *fakeRepositoryUseCases) ChmodEntry(_ context.Context, id metadata.EntryID, mode uint32) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.entry == nil || f.entry.ID != id {
+		return metadata.ErrEntryNotFound
+	}
+	f.entry.Mode = f.entry.Mode&^0o7777 | mode&0o7777
+	f.entry.Revision++
+	return nil
 }
 
 func (f *fakeRepositoryUseCases) List(_ context.Context, _ string) ([]metadata.Entry, error) {
@@ -253,12 +266,32 @@ func (f *fakeRepositoryUseCases) PutExpected(_ context.Context, input app.PutInp
 		f.entry.Revision++
 	}
 	f.entry.Size = int64(len(data))
+	if info, err := os.Stat(input.LocalPath); err == nil {
+		f.entry.Mode = uint32(info.Mode().Perm())
+	}
 	f.content = append([]byte(nil), data...)
 	return nil
 }
 
 func (f *fakeRepositoryUseCases) PutExpectedEntryID(ctx context.Context, input app.PutInput, observed metadata.Entry) error {
 	return f.PutExpected(ctx, input, repository.PutExpectation{EntryID: observed.ID, Revision: observed.Revision})
+}
+
+func (f *fakeRepositoryUseCases) PutExpectedWithMode(ctx context.Context, input app.PutInput, expected repository.PutExpectation, mode *uint32) error {
+	if err := f.PutExpected(ctx, input, expected); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.modePutCount++
+	value := *mode
+	f.lastPutMode = &value
+	f.entry.Mode = value
+	return nil
+}
+
+func (f *fakeRepositoryUseCases) PutExpectedEntryIDWithMode(ctx context.Context, input app.PutInput, observed metadata.Entry, mode *uint32) error {
+	return f.PutExpectedWithMode(ctx, input, repository.PutExpectation{EntryID: observed.ID, Revision: observed.Revision}, mode)
 }
 
 func TestResourceSessionsExpireRenewAndPersistRecovery(t *testing.T) {
@@ -508,6 +541,10 @@ func TestDaemonRestartPromotesActiveStagingToRecovery(t *testing.T) {
 	if err := os.WriteFile(stagePath, []byte("survive daemon crash"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	livePath := filepath.Join(root, "xxx")
+	if err := os.WriteFile(livePath, []byte("live file unchanged"), 0o640); err != nil {
+		t.Fatal(err)
+	}
 	// Stop only the in-memory expiry loop to model process loss before its
 	// graceful shutdown preservation path can run.
 	close(first.done)
@@ -529,6 +566,12 @@ func TestDaemonRestartPromotesActiveStagingToRecovery(t *testing.T) {
 	if data, err := os.ReadFile(stagePath); err != nil || string(data) != "survive daemon crash" {
 		t.Fatalf("restart lost interrupted staging: bytes=%q err=%v", data, err)
 	}
+	if info, err := os.Stat(stagePath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("staging mode=%v err=%v, want 0600", info, err)
+	}
+	if data, err := os.ReadFile(livePath); err != nil || string(data) != "live file unchanged" {
+		t.Fatalf("restart changed live file: bytes=%q err=%v", data, err)
+	}
 	manifestData, err := os.ReadFile(restarted.recordPath(result.SessionID))
 	if err != nil {
 		t.Fatal(err)
@@ -540,7 +583,174 @@ func TestDaemonRestartPromotesActiveStagingToRecovery(t *testing.T) {
 	if manifest.Version != 2 || manifest.StagingPath != filepath.ToSlash(filepath.Join("temp", "rpc-sessions", result.SessionID+".stage")) {
 		t.Fatalf("crash recovery did not persist the root-relative manifest: %+v", manifest)
 	}
+	if manifest.LogicalMode == nil || *manifest.LogicalMode != 0o644 {
+		t.Fatalf("new Resource session mode was not persisted: %+v", manifest.LogicalMode)
+	}
 }
+
+func TestRecoveryRejectsMissingLogicalModeWithoutBlockingHealthyRecords(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	fake := &fakeRepositoryUseCases{}
+	first, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing, err := first.beginWrite(ctx, "/missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthy, err := first.beginWrite(ctx, "/healthy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingStage := resourcePathFromURI(t, missing.ResourceURI)
+	healthyStage := resourcePathFromURI(t, healthy.ResourceURI)
+	if err := os.WriteFile(missingStage, []byte("unusable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(healthyStage, []byte("valid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bad := first.sessions[missing.SessionID].recoveryRecord
+	encoded, err := json.Marshal(&bad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var malformed map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &malformed); err != nil {
+		t.Fatal(err)
+	}
+	delete(malformed, "logical_mode")
+	relativeStage, err := json.Marshal(first.relativeStagePath(missing.SessionID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformed["staging_path"] = relativeStage
+	encoded, err = json.Marshal(malformed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(first.recordPath(missing.SessionID), encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	close(first.done)
+	first.wg.Wait()
+	restarted, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatalf("invalid record blocked startup: %v", err)
+	}
+	defer func() {
+		if err := restarted.close(); err != nil {
+			t.Errorf("close restarted session manager: %v", err)
+		}
+	}()
+	if restarted.recoveries[missing.SessionID] != nil || restarted.recoveries[healthy.SessionID] == nil {
+		t.Fatalf("recovery map missing-mode=%v healthy=%v", restarted.recoveries[missing.SessionID], restarted.recoveries[healthy.SessionID])
+	}
+	if _, err := os.Stat(first.recordPath(missing.SessionID)); err != nil {
+		t.Fatalf("invalid record was removed: %v", err)
+	}
+	if data, err := os.ReadFile(missingStage); err != nil || string(data) != "unusable" {
+		t.Fatalf("invalid staging was changed: %q %v", data, err)
+	}
+	if err := restarted.retryRecovery(ctx, healthy.SessionID); err != nil {
+		t.Fatalf("valid recovery retry: %v", err)
+	}
+	if _, err := os.Stat(missingStage); err != nil {
+		t.Fatalf("invalid staging was not retained: %v", err)
+	}
+}
+
+func TestNewResourceRecoveryUsesPersistedDefaultMode(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	fake := &fakeRepositoryUseCases{}
+	first, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin, err := first.beginWrite(ctx, "/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := resourcePathFromURI(t, begin.ResourceURI)
+	if err := os.WriteFile(stage, []byte("ordinary resource"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	close(first.done)
+	first.wg.Wait()
+	restarted, err := newSessionManagerWithTTL(fake, root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := restarted.close(); err != nil {
+			t.Errorf("close restarted session manager: %v", err)
+		}
+	}()
+	if rec := restarted.recoveries[begin.SessionID]; rec == nil || rec.LogicalMode == nil || *rec.LogicalMode != 0o644 {
+		t.Fatalf("ordinary recovery mode = %+v, want persisted 0644", rec)
+	}
+	if err := os.Chmod(stage, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.retryRecovery(ctx, begin.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.entry == nil || fake.entry.Mode&0o7777 != 0o644 || fake.modePutCount != 1 {
+		t.Fatalf("ordinary commit mode = %o, explicit mode commits=%d", fake.entry.Mode&0o7777, fake.modePutCount)
+	}
+}
+
+func TestWriteSessionPersistsLogicalModeOnlyForNewEntry(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		existing *metadata.Entry
+		explicit *uint32
+		want     *uint32
+	}{
+		{name: "new omitted mode defaults to 0644", want: ptrUint32(0o644)},
+		{name: "explicit mode overrides default", explicit: ptrUint32(0o640), want: ptrUint32(0o640)},
+		{name: "existing Entry does not capture mode", existing: &metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 3, Mode: 0o751}},
+		{name: "explicit mode is ignored for existing Entry", existing: &metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 3, Mode: 0o751}, explicit: ptrUint32(0o600)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeRepositoryUseCases{entry: tc.existing}
+			manager, err := newSessionManagerWithTTL(fake, t.TempDir(), time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := manager.close(); err != nil {
+					t.Errorf("close session manager: %v", err)
+				}
+			}()
+			begin, err := manager.beginWriteMode(context.Background(), "/file", false, tc.explicit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var record recoveryRecord
+			data, err := os.ReadFile(manager.recordPath(begin.SessionID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &record); err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == nil && record.LogicalMode != nil {
+				t.Fatalf("existing Entry captured logical mode %04o", *record.LogicalMode)
+			}
+			if tc.want != nil && (record.LogicalMode == nil || *record.LogicalMode != *tc.want) {
+				t.Fatalf("persisted logical mode = %v, want %04o", record.LogicalMode, *tc.want)
+			}
+		})
+	}
+}
+
+func ptrUint32(value uint32) *uint32 { return &value }
 
 func TestRecoveryRetryAfterRepositoryRelocationUsesRootRelativeManifest(t *testing.T) {
 	ctx := context.Background()

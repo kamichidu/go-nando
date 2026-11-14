@@ -36,6 +36,7 @@ type recoveryRecord struct {
 	Committed        bool                      `json:"committed"`
 	Discarding       bool                      `json:"discarding,omitempty"`
 	FollowEntryID    bool                      `json:"follow_entry_id,omitempty"`
+	LogicalMode      *uint32                   `json:"logical_mode,omitempty"`
 	UnlinkEntryID    metadata.EntryID          `json:"unlink_entry_id,omitempty"`
 	SessionID        string                    `json:"session_id"`
 	StagingPath      string                    `json:"staging_path"`
@@ -201,6 +202,10 @@ func (m *sessionManager) beginRead(ctx context.Context, repositoryPath string, e
 
 func (m *sessionManager) beginWrite(ctx context.Context, repositoryPath string, followEntryID ...bool) (controlrpc.BeginWriteResult, error) {
 	followID := len(followEntryID) > 0 && followEntryID[0]
+	return m.beginWriteWithMode(ctx, repositoryPath, followID, nil)
+}
+
+func (m *sessionManager) beginWriteWithMode(ctx context.Context, repositoryPath string, followID bool, logicalMode *uint32) (controlrpc.BeginWriteResult, error) {
 	normalized, err := paths.NormalizeLogicalPath(repositoryPath)
 	if err != nil || normalized == "/" {
 		return controlrpc.BeginWriteResult{}, fmt.Errorf("invalid write path %q", repositoryPath)
@@ -216,11 +221,20 @@ func (m *sessionManager) beginWrite(ctx context.Context, repositoryPath string, 
 		observedEntry = entry
 	} else if !errors.Is(err, metadata.ErrEntryNotFound) {
 		return controlrpc.BeginWriteResult{}, fmt.Errorf("inspect write target: %w", err)
+	} else if logicalMode == nil {
+		// Resource API writes have the POSIX regular-file default when the
+		// caller omits a mode. FUSE supplies its already-umask-adjusted mode.
+		mode := uint32(0o644)
+		logicalMode = &mode
 	}
-	return m.createWriteSession(normalized, expectation, observedEntry, followID)
+	return m.createWriteSession(normalized, expectation, observedEntry, followID, logicalMode)
 }
 
 func (m *sessionManager) beginWriteEntry(ctx context.Context, entryID metadata.EntryID) (controlrpc.BeginWriteResult, error) {
+	return m.beginWriteEntryMode(ctx, entryID, nil)
+}
+
+func (m *sessionManager) beginWriteEntryMode(ctx context.Context, entryID metadata.EntryID, mode *uint32) (controlrpc.BeginWriteResult, error) {
 	entry, repositoryPath, err := m.app.ResolveEntry(ctx, entryID)
 	if err != nil {
 		return controlrpc.BeginWriteResult{}, err
@@ -228,10 +242,20 @@ func (m *sessionManager) beginWriteEntry(ctx context.Context, entryID metadata.E
 	if entry.Kind != metadata.EntryKindFile {
 		return controlrpc.BeginWriteResult{}, fmt.Errorf("write target is not a file: %w", metadata.ErrEntryConflict)
 	}
-	return m.createWriteSession(repositoryPath, repository.PutExpectation{EntryID: entry.ID, Revision: entry.Revision}, entry, true)
+	return m.createWriteSession(repositoryPath, repository.PutExpectation{EntryID: entry.ID, Revision: entry.Revision}, entry, true, mode)
 }
 
-func (m *sessionManager) createWriteSession(normalized string, expectation repository.PutExpectation, observedEntry metadata.Entry, followID bool) (controlrpc.BeginWriteResult, error) {
+func (m *sessionManager) beginWriteMode(ctx context.Context, repositoryPath string, follow bool, mode *uint32) (controlrpc.BeginWriteResult, error) {
+	return m.beginWriteWithMode(ctx, repositoryPath, follow, mode)
+}
+
+func (m *sessionManager) createWriteSession(normalized string, expectation repository.PutExpectation, observedEntry metadata.Entry, followID bool, logicalMode *uint32) (controlrpc.BeginWriteResult, error) {
+	if expectation.EntryID != "" {
+		logicalMode = nil
+	}
+	if expectation.EntryID == "" && logicalMode == nil {
+		return controlrpc.BeginWriteResult{}, errors.New("resource session contract requires a resolved logical mode")
+	}
 	id := uuid.NewString()
 	resourcePath := filepath.Join(m.directory, id+".stage")
 	file, err := os.OpenFile(resourcePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
@@ -247,7 +271,7 @@ func (m *sessionManager) createWriteSession(normalized string, expectation repos
 		observedObjectID = observedEntry.ObjectID.String()
 	}
 	session := &writeSession{recoveryRecord: recoveryRecord{
-		Version: 2, SessionID: id, StagingPath: resourcePath, RepositoryPath: normalized, Expectation: expectation, FollowEntryID: followID && expectation.EntryID != "", ObservedEntry: observedEntry,
+		Version: 2, SessionID: id, StagingPath: resourcePath, RepositoryPath: normalized, Expectation: expectation, FollowEntryID: followID && expectation.EntryID != "", ObservedEntry: observedEntry, LogicalMode: logicalMode,
 		ObservedObjectID: observedObjectID,
 		CreatedAt:        now, UpdatedAt: now,
 	}, expiresAt: time.Now().Add(m.ttl)}
@@ -347,6 +371,10 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 		m.mu.Unlock()
 		return errSessionClosed
 	}
+	if session.Expectation.EntryID == "" && session.LogicalMode == nil {
+		m.mu.Unlock()
+		return errors.New("resource session violates contract: logical mode is missing")
+	}
 	if !time.Now().Before(session.expiresAt) {
 		session.expired = true
 		session.inFlight = true
@@ -359,11 +387,7 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 	commitErr := m.files.SyncFile(session.StagingPath)
 	if commitErr == nil {
 		input := app.PutInput{LocalPath: session.StagingPath, RepositoryPath: session.RepositoryPath}
-		if session.FollowEntryID {
-			commitErr = m.app.PutExpectedEntryID(ctx, input, session.ObservedEntry)
-		} else {
-			commitErr = m.app.PutExpected(ctx, input, session.Expectation)
-		}
+		commitErr = m.putSessionContent(ctx, input, session.recoveryRecord)
 	}
 	if commitErr != nil {
 		preserveErr := m.preserve(&session.recoveryRecord, commitErr.Error())
@@ -399,6 +423,34 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 		log.Printf("clean committed Resource session %s: %v", id, err)
 	}
 	return nil
+}
+
+func (m *sessionManager) setMode(id string, mode uint32) error {
+	m.mu.Lock()
+	session := m.sessions[id]
+	if session == nil || session.inFlight || session.committed || session.expired {
+		m.mu.Unlock()
+		return errSessionNotFound
+	}
+	if session.Expectation.EntryID != "" {
+		m.mu.Unlock()
+		return errors.New("existing Entry mode must be updated through ChmodEntry")
+	}
+	session.inFlight = true
+	updated := session.recoveryRecord
+	value := mode & 0o7777
+	updated.LogicalMode = &value
+	updated.UpdatedAt = time.Now().UTC()
+	m.mu.Unlock()
+	err := m.persistRecord(&updated)
+	m.mu.Lock()
+	if err == nil {
+		session.LogicalMode = &value
+		session.UpdatedAt = updated.UpdatedAt
+	}
+	session.inFlight = false
+	m.mu.Unlock()
+	return err
 }
 
 func (m *sessionManager) abort(id string) error {
@@ -631,6 +683,10 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 		m.mu.Unlock()
 		return errSessionClosed
 	}
+	if record.Expectation.EntryID == "" && record.LogicalMode == nil {
+		m.mu.Unlock()
+		return errors.New("resource recovery record violates contract: logical mode is missing")
+	}
 	record.inFlight = true
 	m.mu.Unlock()
 	if err := m.files.SyncFile(record.StagingPath); err != nil {
@@ -656,11 +712,7 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 	m.mu.Unlock()
 	input := app.PutInput{LocalPath: record.StagingPath, RepositoryPath: record.RepositoryPath}
 	var err error
-	if record.FollowEntryID {
-		err = m.app.PutExpectedEntryID(ctx, input, record.ObservedEntry)
-	} else {
-		err = m.app.PutExpected(ctx, input, record.Expectation)
-	}
+	err = m.putSessionContent(ctx, input, *record)
 	if err == nil {
 		if err := m.markCommitted(record); err == nil {
 			m.mu.Lock()
@@ -675,6 +727,19 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 		err = fmt.Errorf("recovery repository commit succeeded but completion record failed: %w", err)
 	}
 	return m.updateRecoveryFailure(record, err)
+}
+
+// putSessionContent applies the session mode only when creating an absent
+// Entry. Existing Entries take their latest mode from Repository metadata.
+func (m *sessionManager) putSessionContent(ctx context.Context, input app.PutInput, record recoveryRecord) error {
+	mode := record.LogicalMode
+	if record.Expectation.EntryID != "" {
+		mode = nil
+	}
+	if record.FollowEntryID {
+		return m.app.PutExpectedEntryIDWithMode(ctx, input, record.ObservedEntry, mode)
+	}
+	return m.app.PutExpectedWithMode(ctx, input, record.Expectation, mode)
 }
 
 func (m *sessionManager) updateRecoveryFailure(record *recoveryRecord, cause error) error {
@@ -844,6 +909,9 @@ func (m *sessionManager) preserve(record *recoveryRecord, reason string) error {
 }
 
 func (m *sessionManager) persistRecord(record *recoveryRecord) error {
+	if record.Expectation.EntryID == "" && record.LogicalMode == nil && !record.Committed && !record.Discarding {
+		return errors.New("new Resource recovery record requires logical mode")
+	}
 	if err := m.validateRuntimeStage(record.SessionID, record.StagingPath, record.Committed || record.Discarding); err != nil {
 		return err
 	}
@@ -950,6 +1018,12 @@ func (m *sessionManager) loadRecoveries() error {
 		var record recoveryRecord
 		if err := json.Unmarshal(data, &record); err != nil {
 			return fmt.Errorf("decode Resource recovery record %q: %w", path, err)
+		}
+		if record.Expectation.EntryID == "" && record.LogicalMode == nil && !record.Committed && !record.Discarding {
+			// A new Entry needs its captured mode to commit safely. Existing Entries
+			// take mode from current Repository metadata.
+			log.Printf("invalid Resource recovery record %q: new Entry logical_mode is required; leaving record and staging untouched", path)
+			continue
 		}
 		if err := validateSessionID(record.SessionID); err != nil || (record.Committed && record.Discarding) || m.recordPath(record.SessionID) != path {
 			return fmt.Errorf("invalid Resource recovery record %q", path)

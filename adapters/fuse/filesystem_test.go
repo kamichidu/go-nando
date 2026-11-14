@@ -18,12 +18,32 @@ import (
 )
 
 type stubSession struct {
-	path      string
-	file      string
-	read      bool
-	followID  bool
-	unlinked  bool
-	committed bool
+	path        string
+	file        string
+	read        bool
+	followID    bool
+	unlinked    bool
+	committed   bool
+	logicalMode uint32
+	modeSet     bool
+}
+
+func mustFileHandle(t testing.TB, handle fs.FileHandle) *fileHandle {
+	t.Helper()
+	file, ok := handle.(*fileHandle)
+	if !ok {
+		t.Fatalf("handle has unexpected type %T", handle)
+	}
+	return file
+}
+
+func mustEntryNode(t testing.TB, node fs.InodeEmbedder) *entryNode {
+	t.Helper()
+	entry, ok := node.(*entryNode)
+	if !ok {
+		t.Fatalf("node has unexpected type %T", node)
+	}
+	return entry
 }
 
 type stubDaemon struct {
@@ -39,6 +59,9 @@ type stubDaemon struct {
 	begins     int
 	commitErr  error
 	releaseErr error
+	resolveErr error
+	chmodErr   error
+	removeErr  error
 }
 
 func newStub(t *testing.T, content []byte) *stubDaemon {
@@ -67,6 +90,9 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 	}
 	switch method {
 	case controlrpc.MethodResolveEntry:
+		if d.resolveErr != nil {
+			return d.resolveErr
+		}
 		if !d.exists || p["entry_id"] != d.entry.ID {
 			return &controlrpc.RemoteError{Code: controlrpc.CodeEntryNotFound, Message: "missing"}
 		}
@@ -94,10 +120,43 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 			return err
 		}
 		sid := "write-session"
-		d.sessions[sid] = &stubSession{path: d.path, file: file, followID: p["follow_entry_id"] == true}
+		path, ok := p["path"].(string)
+		if !ok {
+			return errors.New("begin write path is not a string")
+		}
+		session := &stubSession{path: path, file: file, followID: p["follow_entry_id"] == true}
+		if mode, ok := p["logical_mode"].(float64); ok {
+			session.logicalMode, session.modeSet = uint32(mode), true
+		}
+		d.sessions[sid] = session
 		return assign(result, controlrpc.BeginWriteResult{SessionID: sid, ResourceURI: (&url.URL{Scheme: "file", Path: file}).String()})
 	case controlrpc.MethodRenew:
 		return assign(result, controlrpc.RenewResult{ExpiresAt: time.Now().Add(time.Minute)})
+	case controlrpc.MethodSetMode:
+		s := d.sessions[id]
+		if s == nil {
+			return errors.New("missing session")
+		}
+		mode, ok := p["mode"].(float64)
+		if !ok {
+			return errors.New("missing mode")
+		}
+		s.logicalMode, s.modeSet = uint32(mode), true
+		return nil
+	case controlrpc.MethodChmodEntry:
+		if d.chmodErr != nil {
+			return d.chmodErr
+		}
+		if !d.exists || p["entry_id"] != d.entry.ID {
+			return &controlrpc.RemoteError{Code: controlrpc.CodeEntryNotFound, Message: "missing"}
+		}
+		mode, ok := p["mode"].(float64)
+		if !ok {
+			return errors.New("missing mode")
+		}
+		d.entry.Mode = uint32(mode) & 0o7777
+		d.entry.Revision++
+		return nil
 	case controlrpc.MethodCommit:
 		s := d.sessions[id]
 		if s == nil || s.read || s.unlinked {
@@ -120,6 +179,10 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 		}
 		d.content = bytes
 		d.entry.Size = int64(len(bytes))
+		if s.modeSet && !d.exists {
+			d.entry.Mode = s.logicalMode
+		}
+		d.exists = true
 		d.entry.Revision++
 		d.commits++
 		s.committed = true
@@ -152,6 +215,9 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 		d.exists = false
 		return nil
 	case controlrpc.MethodRemoveEntry:
+		if d.removeErr != nil {
+			return d.removeErr
+		}
 		if p["entry_id"] != d.entry.ID {
 			return &controlrpc.RemoteError{Code: controlrpc.CodeEntryNotFound, Message: "wrong Entry"}
 		}
@@ -171,12 +237,465 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 	}
 }
 
+func TestLinkedAndDetachedChmodSharedAcrossReadWriteHandles(t *testing.T) {
+	ctx := context.Background()
+	d := newStub(t, []byte("data"))
+	f := New(d)
+	root := &entryNode{owner: f, entry: controlrpc.Entry{ID: "root", Kind: "directory"}, path: "/"}
+	_ = fs.NewNodeFS(root, &fs.Options{})
+	var ent fuse.EntryOut
+	if _, e := root.Lookup(ctx, "file", &ent); e != 0 {
+		t.Fatal(e)
+	}
+	n := f.byID[d.entry.ID]
+	rh, _, e := n.Open(ctx, uint32(os.O_RDONLY))
+	if e != 0 {
+		t.Fatal(e)
+	}
+	wh, _, e := n.Open(ctx, uint32(os.O_WRONLY))
+	if e != 0 {
+		t.Fatal(e)
+	}
+	chmod := func(mode uint32) *fuse.SetAttrIn {
+		return &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: mode}}
+	}
+	var attr fuse.AttrOut
+	if e := n.Setattr(ctx, rh, chmod(0o640), &attr); e != 0 {
+		t.Fatalf("linked read fchmod: %v", e)
+	}
+	if d.entry.Mode&0o7777 != 0o640 {
+		t.Fatalf("metadata mode=%o", d.entry.Mode&0o7777)
+	}
+	writer := mustFileHandle(t, wh)
+	if e := writer.Getattr(ctx, &attr); e != 0 {
+		t.Fatalf("writer fstat: %v", e)
+	}
+	if attr.Mode&0o7777 != 0o640 {
+		t.Fatalf("writer fstat mode=%o, want 0640", attr.Mode&0o7777)
+	}
+	if e := n.Setattr(ctx, wh, chmod(0o604), &attr); e != 0 {
+		t.Fatalf("linked write fchmod: %v", e)
+	}
+	reader := mustFileHandle(t, rh)
+	if e := reader.Getattr(ctx, &attr); e != 0 {
+		t.Fatalf("reader fstat: %v", e)
+	}
+	if attr.Mode&0o7777 != 0o604 {
+		t.Fatalf("reader did not observe write-handle chmod: mode=%o, want 0604", attr.Mode&0o7777)
+	}
+	if e := n.Setattr(ctx, nil, chmod(0o620), &attr); e != 0 {
+		t.Fatalf("linked path chmod: %v", e)
+	}
+	if d.entry.Mode&0o7777 != 0o620 {
+		t.Fatalf("path chmod metadata=%o", d.entry.Mode&0o7777)
+	}
+	if e := root.Unlink(ctx, "file"); e != 0 {
+		t.Fatal(e)
+	}
+	d.mu.Lock()
+	calls := len(d.calls)
+	d.mu.Unlock()
+	if e := n.Setattr(ctx, wh, chmod(0o600), &attr); e != 0 {
+		t.Fatalf("detached write fchmod: %v", e)
+	}
+	if e := reader.Getattr(ctx, &attr); e != 0 {
+		t.Fatalf("reader fstat: %v", e)
+	}
+	if attr.Mode&0o7777 != 0o600 {
+		t.Fatalf("reader fstat mode=%o, want 0600", attr.Mode&0o7777)
+	}
+	d.mu.Lock()
+	if len(d.calls) != calls {
+		t.Fatalf("detached chmod made daemon calls: %v", d.calls[calls:])
+	}
+	if d.entry.Mode&0o7777 != 0o620 {
+		t.Fatalf("detached chmod changed metadata: %o", d.entry.Mode&0o7777)
+	}
+	d.mu.Unlock()
+	if e := mustFileHandle(t, rh).Release(ctx); e != 0 {
+		t.Fatal(e)
+	}
+	if f.modes[d.entry.ID] == nil {
+		t.Fatal("shared mode discarded before last close")
+	}
+	if e := mustFileHandle(t, wh).Release(ctx); e != 0 {
+		t.Fatal(e)
+	}
+	if f.modes[d.entry.ID] != nil {
+		t.Fatal("shared mode retained after last close")
+	}
+}
+
+func TestLinkedChmodFailedRPCLeavesEntryAndHandleMode(t *testing.T) {
+	ctx := context.Background()
+	d := newStub(t, []byte("data"))
+	f := New(d)
+	n := f.nodeFor(ctx, d.entry, d.path)
+	h, _, e := n.Open(ctx, uint32(os.O_RDONLY))
+	if e != 0 {
+		t.Fatal(e)
+	}
+	defer func() {
+		if errno := mustFileHandle(t, h).Release(ctx); errno != 0 {
+			t.Errorf("release file handle: %v", errno)
+		}
+	}()
+	d.chmodErr = errors.New("rpc unavailable")
+	in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: 0o600}}
+	if e := n.Setattr(ctx, h, in, &fuse.AttrOut{}); e != syscall.EIO {
+		t.Fatalf("chmod errno=%v, want EIO", e)
+	}
+	if d.entry.Mode&0o7777 != 0o644 {
+		t.Fatalf("failed RPC changed mode: %o", d.entry.Mode&0o7777)
+	}
+}
+
+func TestFailedModeRPCUnlocksStateAndRetryWorks(t *testing.T) {
+	ctx := context.Background()
+	d := newStub(t, []byte("data"))
+	f := New(d)
+	n := f.nodeFor(ctx, d.entry, d.path)
+	h, _, e := n.Open(ctx, uint32(os.O_RDONLY))
+	if e != 0 {
+		t.Fatal(e)
+	}
+	defer func() {
+		if errno := mustFileHandle(t, h).Release(ctx); errno != 0 {
+			t.Errorf("release file handle: %v", errno)
+		}
+	}()
+	d.chmodErr = errors.New("rpc unavailable")
+	in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: 0o600}}
+	if e := n.Setattr(ctx, h, in, &fuse.AttrOut{}); e != syscall.EIO {
+		t.Fatalf("failed chmod=%v", e)
+	}
+	d.chmodErr = nil
+	d.resolveErr = nil
+	if e := n.Setattr(ctx, h, in, &fuse.AttrOut{}); e != 0 {
+		t.Fatalf("retry chmod=%v", e)
+	}
+	if e := mustFileHandle(t, h).Getattr(ctx, &fuse.AttrOut{}); e != 0 {
+		t.Fatalf("independent fstat after retry=%v", e)
+	}
+}
+
+func TestFailedResolveUnlocksStateAndRetryWorks(t *testing.T) {
+	ctx := context.Background()
+	d := newStub(t, []byte("data"))
+	f := New(d)
+	n := f.nodeFor(ctx, d.entry, d.path)
+	h, _, e := n.Open(ctx, uint32(os.O_RDONLY))
+	if e != 0 {
+		t.Fatal(e)
+	}
+	defer func() {
+		if errno := mustFileHandle(t, h).Release(ctx); errno != 0 {
+			t.Errorf("release file handle: %v", errno)
+		}
+	}()
+	d.resolveErr = errors.New("resolve unavailable")
+	in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: 0o600}}
+	if e := n.Setattr(ctx, h, in, &fuse.AttrOut{}); e != syscall.EIO {
+		t.Fatalf("failed resolve=%v", e)
+	}
+	d.resolveErr = nil
+	if e := n.Setattr(ctx, h, in, &fuse.AttrOut{}); e != 0 {
+		t.Fatalf("retry after resolve failure=%v", e)
+	}
+}
+
+func TestUnlinkRemovalFailureKeepsLinkedModeAndRetries(t *testing.T) {
+	ctx := context.Background()
+	d := newStub(t, []byte("old"))
+	f := New(d)
+	root := &entryNode{owner: f, entry: controlrpc.Entry{ID: "root", Kind: "directory"}, path: "/"}
+	_ = fs.NewNodeFS(root, &fs.Options{})
+	var out fuse.EntryOut
+	if _, e := root.Lookup(ctx, "file", &out); e != 0 {
+		t.Fatal(e)
+	}
+	n := f.byID[d.entry.ID]
+	state, e := f.startWrite(ctx, n, false)
+	if e != 0 {
+		t.Fatal(e)
+	}
+	state.handles = 1
+	f.writes[n.entryID()] = state
+	h := &fileHandle{node: n, write: state, writable: true}
+	rh, _, e := n.Open(ctx, uint32(os.O_RDONLY))
+	if e != 0 {
+		t.Fatal(e)
+	}
+	d.removeErr = errors.New("metadata delete unavailable")
+	if e := root.Unlink(ctx, "file"); e != syscall.EIO {
+		t.Fatalf("failed unlink=%v", e)
+	}
+	if !d.exists || state.unlinked || !state.unlinkIntent || (f.modes[n.entryID()] != nil && f.modes[n.entryID()].unlinked) {
+		t.Fatalf("failure state namespace=%v unlinked=%v intent=%v", d.exists, state.unlinked, state.unlinkIntent)
+	}
+	d.mu.Lock()
+	d.entry.Mode = 0o601
+	d.entry.Revision++
+	d.mu.Unlock()
+	var linkedAttr fuse.AttrOut
+	if e := mustFileHandle(t, rh).Getattr(ctx, &linkedAttr); e != 0 || linkedAttr.Mode&0o7777 != 0o601 {
+		t.Fatalf("pending-intent handle mode=%o errno=%v", linkedAttr.Mode&0o7777, e)
+	}
+	if e := h.Fsync(ctx, 0); e != 0 || d.commits != 0 {
+		t.Fatalf("tombstoned fsync errno=%v commits=%d", e, d.commits)
+	}
+	d.removeErr = nil
+	if e := root.Unlink(ctx, "file"); e != 0 {
+		t.Fatalf("unlink retry=%v", e)
+	}
+	if d.exists || !state.unlinked || !f.modes[n.entryID()].unlinked {
+		t.Fatalf("retry did not detach namespace/state: exists=%v", d.exists)
+	}
+	if e := h.Release(ctx); e != 0 {
+		t.Fatalf("release after retry=%v", e)
+	}
+	if e := mustFileHandle(t, rh).Getattr(ctx, &linkedAttr); e != 0 {
+		t.Fatalf("detached read getattr=%v", e)
+	}
+	if e := mustFileHandle(t, rh).Release(ctx); e != 0 {
+		t.Fatalf("read release=%v", e)
+	}
+}
+
+func TestConcurrentModeSetattrAndUnlinkCompletes(t *testing.T) {
+	ctx := context.Background()
+	d := newStub(t, []byte("data"))
+	f := New(d)
+	root := &entryNode{owner: f, entry: controlrpc.Entry{ID: "root", Kind: "directory"}, path: "/"}
+	_ = fs.NewNodeFS(root, &fs.Options{})
+	var out fuse.EntryOut
+	if _, e := root.Lookup(ctx, "file", &out); e != 0 {
+		t.Fatal(e)
+	}
+	n := f.byID[d.entry.ID]
+	h, _, e := n.Open(ctx, uint32(os.O_RDONLY))
+	if e != 0 {
+		t.Fatal(e)
+	}
+	wh, _, e := n.Open(ctx, uint32(os.O_WRONLY))
+	if e != 0 {
+		t.Fatal(e)
+	}
+	start := make(chan struct{})
+	done := make(chan syscall.Errno, 1)
+	go func() {
+		<-start
+		for i := 0; i < 50; i++ {
+			in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: uint32(0o600 + i%8)}}
+			if err := n.Setattr(ctx, wh, in, &fuse.AttrOut{}); err != 0 && err != syscall.ENOENT {
+				done <- err
+				return
+			}
+		}
+		done <- 0
+	}()
+	close(start)
+	unlink := root.Unlink(ctx, "file")
+	var setattr syscall.Errno
+	select {
+	case setattr = <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("concurrent Setattr/Unlink deadlocked")
+	}
+	if unlink != 0 {
+		t.Fatalf("unlink=%v", unlink)
+	}
+	if setattr != 0 {
+		t.Fatalf("concurrent setattr=%v", setattr)
+	}
+	if e := mustFileHandle(t, h).Release(ctx); e != 0 {
+		t.Fatal(e)
+	}
+	if e := mustFileHandle(t, wh).Release(ctx); e != 0 {
+		t.Fatal(e)
+	}
+}
+
+func TestLinkedHandleGetattrSeesExternalModeMutation(t *testing.T) {
+	ctx := context.Background()
+	d := newStub(t, []byte("data"))
+	f := New(d)
+	n := f.nodeFor(ctx, d.entry, d.path)
+	h, _, e := n.Open(ctx, uint32(os.O_RDONLY))
+	if e != 0 {
+		t.Fatal(e)
+	}
+	defer func() {
+		if errno := mustFileHandle(t, h).Release(ctx); errno != 0 {
+			t.Errorf("release file handle: %v", errno)
+		}
+	}()
+	d.mu.Lock()
+	d.entry.Mode = 0o601
+	d.entry.Revision++
+	d.mu.Unlock()
+	var out fuse.AttrOut
+	if e := mustFileHandle(t, h).Getattr(ctx, &out); e != 0 || out.Mode&0o7777 != 0o601 {
+		t.Fatalf("external chmod fstat mode=%o errno=%v", out.Mode&0o7777, e)
+	}
+}
+
 func assign(target, value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
 	return json.Unmarshal(data, target)
+}
+
+func TestFuseCreateModeZeroKeepsStagePrivateAndCommitsLogicalMode(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, nil)
+	daemon.exists = false
+	adapter := New(daemon)
+	root := mustEntryNode(t, adapter.Root())
+	// Initialize the inode bridge so Create can publish its child inode.
+	fs.NewNodeFS(root, &fs.Options{})
+	var out fuse.EntryOut
+	_, handle, _, errno := root.Create(ctx, "file", uint32(os.O_RDWR), 0, &out)
+	if errno != 0 {
+		t.Fatalf("Create: %v", errno)
+	}
+	fh := mustFileHandle(t, handle)
+	info, err := fh.write.file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("staging permissions = %o, want 600", got)
+	}
+	if n, errno := fh.Write(ctx, []byte("payload"), 0); errno != 0 || n != 7 {
+		t.Fatalf("Write = %d, %v", n, errno)
+	}
+	if errno := fh.Fsync(ctx, 0); errno != 0 {
+		t.Fatalf("Fsync: %v", errno)
+	}
+	if got := daemon.entry.Mode & 0o7777; got != 0 {
+		t.Fatalf("committed mode = %o, want 0", got)
+	}
+	if got := string(daemon.content); got != "payload" {
+		t.Fatalf("committed bytes = %q", got)
+	}
+	if errno := fh.Release(ctx); errno != 0 {
+		t.Fatalf("Release: %v", errno)
+	}
+}
+
+func TestSetattrChangesLogicalModeWithoutChangingStageMode(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("content"))
+	adapter := New(daemon)
+	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	state, errno := adapter.startWrite(ctx, node, false)
+	if errno != 0 {
+		t.Fatalf("start write: %v", errno)
+	}
+	fh := &fileHandle{node: node, write: state, writable: true}
+	in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: 0o640}}
+	if errno := node.Setattr(ctx, fh, in, &fuse.AttrOut{}); errno != 0 {
+		t.Fatalf("Setattr chmod: %v", errno)
+	}
+	info, err := state.file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("staging permissions = %o, want 600", got)
+	}
+	if errno := fh.Fsync(ctx, 0); errno != 0 {
+		t.Fatalf("Fsync: %v", errno)
+	}
+	if got := daemon.entry.Mode & 0o7777; got != 0o640 {
+		t.Fatalf("committed mode = %o, want 640", got)
+	}
+	if errno := fh.Release(ctx); errno != 0 {
+		t.Fatalf("Release: %v", errno)
+	}
+}
+
+func TestReadHandleGetattrRefreshesLinkedMetadata(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("content"))
+	adapter := New(daemon)
+	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	h, _, errno := node.Open(ctx, uint32(os.O_RDONLY))
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	defer func() {
+		if errno := mustFileHandle(t, h).Release(ctx); errno != 0 {
+			t.Errorf("release file handle: %v", errno)
+		}
+	}()
+	daemon.mu.Lock()
+	daemon.entry.Mode = 0o604
+	daemon.entry.Revision++
+	daemon.mu.Unlock()
+	var out fuse.AttrOut
+	if errno := mustFileHandle(t, h).Getattr(ctx, &out); errno != 0 {
+		t.Fatalf("Getattr: %v", errno)
+	}
+	if got := out.Mode & 0o7777; got != 0o604 {
+		t.Fatalf("linked read-handle mode=%o, want external mode 604", got)
+	}
+}
+
+func TestSetattrResponseReflectsUncommittedSession(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("content"))
+	adapter := New(daemon)
+	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	state, errno := adapter.startWrite(ctx, node, false)
+	if errno != 0 {
+		t.Fatalf("start write: %v", errno)
+	}
+	h := &fileHandle{node: node, write: state, writable: true}
+	in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE | fuse.FATTR_MODE, Size: 3, Mode: 0o640}}
+	var out fuse.AttrOut
+	if errno := node.Setattr(ctx, h, in, &out); errno != 0 {
+		t.Fatalf("Setattr: %v", errno)
+	}
+	if got := out.Mode & 0o7777; got != 0o640 {
+		t.Fatalf("Setattr response mode=%o, want 640", got)
+	}
+	if out.Size != 3 {
+		t.Fatalf("Setattr response size=%d, want 3", out.Size)
+	}
+	if daemon.commits != 0 || daemon.entry.Mode != 0o640 || daemon.entry.Size != int64(len("content")) {
+		t.Fatalf("Setattr metadata/content result: commits=%d Entry=%+v", daemon.commits, daemon.entry)
+	}
+	if errno := h.Fsync(ctx, 0); errno != 0 {
+		t.Fatalf("Fsync: %v", errno)
+	}
+	if daemon.entry.Mode != 0o640 || daemon.entry.Size != 3 {
+		t.Fatalf("committed Entry=%+v, want mode 640 size 3", daemon.entry)
+	}
+	if errno := h.Release(ctx); errno != 0 {
+		t.Fatalf("Release: %v", errno)
+	}
+}
+
+func TestEphemeralSetattrResponseAndCommitUseLogicalMode(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("content"))
+	adapter := New(daemon)
+	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: 0o604}}
+	var out fuse.AttrOut
+	if errno := node.Setattr(ctx, nil, in, &out); errno != 0 {
+		t.Fatalf("Setattr: %v", errno)
+	}
+	if got := out.Mode & 0o7777; got != 0o604 || daemon.entry.Mode != 0o604 {
+		t.Fatalf("response mode=%o committed mode=%o, want both 604", got, daemon.entry.Mode)
+	}
+	if out.Size != uint64(len("content")) {
+		t.Fatalf("mode-only Setattr changed size: %d", out.Size)
+	}
 }
 
 func TestSharedWriterHandlesFsyncAndContinueAfterCommit(t *testing.T) {
@@ -249,6 +768,23 @@ func TestUnlinkMarksIntentAndKeepsOpenHandlePrivate(t *testing.T) {
 	if root.GetChild("file") == nil {
 		t.Fatal("Unlink callback changed inode tree before go-fuse rawBridge")
 	}
+	var attr fuse.AttrOut
+	stageInfo, err := state.file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errno := handle.Getattr(ctx, &attr); errno != 0 {
+		t.Fatalf("Getattr through unlinked write handle: %v", errno)
+	}
+	if got := attr.Mode & 0o7777; got != state.logicalMode {
+		t.Fatalf("unlinked handle mode=%o, want logical mode %o", got, state.logicalMode)
+	}
+	if attr.Ino != inodeNumber(node.entryID()) || attr.Mode&syscall.S_IFMT != syscall.S_IFREG {
+		t.Fatalf("unlinked handle identity/type: ino=%d mode=%o", attr.Ino, attr.Mode)
+	}
+	if attr.Size != uint64(stageInfo.Size()) || attr.Mtime != uint64(stageInfo.ModTime().Unix()) || attr.Mtimensec != uint32(stageInfo.ModTime().Nanosecond()) {
+		t.Fatalf("unlinked handle staged attributes: size=%d mtime=%d.%09d, want size=%d mtime=%s", attr.Size, attr.Mtime, attr.Mtimensec, stageInfo.Size(), stageInfo.ModTime().Format(time.RFC3339Nano))
+	}
 	if _, errno := handle.Write(ctx, []byte("private"), 0); errno != 0 {
 		t.Fatalf("write through unlinked open handle: %v", errno)
 	}
@@ -263,6 +799,155 @@ func TestUnlinkMarksIntentAndKeepsOpenHandlePrivate(t *testing.T) {
 	}
 	if len(daemon.sessions) != 0 {
 		t.Fatalf("unlink left session state: %+v", daemon.sessions)
+	}
+}
+
+func TestUnlinkedOpenWriterOwnsAttributesAndResources(t *testing.T) {
+	for _, recovery := range []bool{false, true} {
+		name := "active session"
+		if recovery {
+			name = "recovery with cleared session ID"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			daemon := newStub(t, []byte("original"))
+			adapter := New(daemon)
+			node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+			state, errno := adapter.startWrite(ctx, node, false)
+			if errno != 0 {
+				t.Fatal(errno)
+			}
+			state.handles = 1
+			adapter.writes[node.entryID()] = state
+			handle := &fileHandle{node: node, write: state, writable: true}
+			if recovery {
+				if _, errno := handle.Write(ctx, []byte("old"), 0); errno != 0 {
+					t.Fatal(errno)
+				}
+				daemon.commitErr = &controlrpc.RemoteError{Code: controlrpc.CodeEntryConflict, Message: "conflict"}
+				if errno := handle.Fsync(ctx, 0); errno != syscall.EAGAIN {
+					t.Fatalf("failed commit errno=%v, want EAGAIN", errno)
+				}
+				if state.sessionID != "" || state.recoveryID == "" {
+					t.Fatalf("failed commit state session=%q recovery=%q", state.sessionID, state.recoveryID)
+				}
+				daemon.commitErr = nil
+			}
+			root := &entryNode{owner: adapter, entry: controlrpc.Entry{ID: "root", Kind: "directory"}, path: "/"}
+			_ = fs.NewNodeFS(root, &fs.Options{})
+			if errno := root.Unlink(ctx, "file"); errno != 0 {
+				t.Fatalf("unlink: %v", errno)
+			}
+			callsAfterUnlink := len(daemon.calls)
+
+			in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE | fuse.FATTR_MODE, Size: 4, Mode: 0o640}}
+			var attr fuse.AttrOut
+			if errno := node.Setattr(ctx, handle, in, &attr); errno != 0 {
+				t.Fatalf("handle Setattr after unlink: %v", errno)
+			}
+			if got := attr.Mode & 0o7777; got != 0o640 || attr.Size != 4 {
+				t.Fatalf("Setattr snapshot mode=%o size=%d, want 640 and 4", got, attr.Size)
+			}
+			if _, errno := handle.Write(ctx, []byte("data"), 0); errno != 0 {
+				t.Fatalf("Write after unlink: %v", errno)
+			}
+			result, errno := handle.Read(ctx, make([]byte, 4), 0)
+			if errno != 0 {
+				t.Fatalf("Read after unlink: %v", errno)
+			}
+			buf, status := result.Bytes(make([]byte, 4))
+			if status != fuse.OK || string(buf) != "data" {
+				t.Fatalf("Read result=%q status=%v", buf, status)
+			}
+			if errno := handle.Getattr(ctx, &attr); errno != 0 {
+				t.Fatalf("Getattr after unlink: %v", errno)
+			}
+			if attr.Size != 4 || attr.Mode&0o7777 != 0o640 {
+				t.Fatalf("handle Getattr mode=%o size=%d", attr.Mode&0o7777, attr.Size)
+			}
+			if errno := handle.Fsync(ctx, 0); errno != 0 {
+				t.Fatalf("Fsync after unlink: %v", errno)
+			}
+			info, err := state.file.Stat()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.Mode().Perm(); got != 0o600 {
+				t.Fatalf("staging permission mode=%o, want 600", got)
+			}
+			if len(daemon.calls) != callsAfterUnlink {
+				t.Fatalf("handle operations made daemon calls after unlink: %v", daemon.calls[callsAfterUnlink:])
+			}
+			if daemon.exists || daemon.commits != 0 || daemon.begins != 1 {
+				t.Fatalf("unlink handle operations changed repository/session state: exists=%v commits=%d begins=%d", daemon.exists, daemon.commits, daemon.begins)
+			}
+			if errno := handle.Release(ctx); errno != 0 {
+				t.Fatalf("Release: %v", errno)
+			}
+			if len(daemon.sessions) != 0 {
+				t.Fatalf("cleanup left session state: %+v", daemon.sessions)
+			}
+		})
+	}
+}
+
+func TestReadHandleSetattrAfterUnlinkKeepsImmutableResource(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("readable"))
+	adapter := New(daemon)
+	root := &entryNode{owner: adapter, entry: controlrpc.Entry{ID: "root", Kind: "directory"}, path: "/"}
+	_ = fs.NewNodeFS(root, &fs.Options{})
+	var out fuse.EntryOut
+	if _, errno := root.Lookup(ctx, "file", &out); errno != 0 {
+		t.Fatal(errno)
+	}
+	node := adapter.byID[daemon.entry.ID]
+	read, file, lease, errno := adapter.beginRead(ctx, daemon.path, daemon.entry.ID)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	handle := &fileHandle{node: node, readFile: file, readID: read.SessionID, lease: lease, logicalMode: daemon.entry.Mode & 0o7777, modeState: adapter.retainMode(node.entryID(), daemon.entry.Mode)}
+	if errno := root.Unlink(ctx, "file"); errno != 0 {
+		t.Fatalf("unlink: %v", errno)
+	}
+	callsAfterUnlink := len(daemon.calls)
+	var attr fuse.AttrOut
+	mode := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: 0o600}}
+	if errno := node.Setattr(ctx, handle, mode, &attr); errno != 0 {
+		t.Fatalf("read handle fchmod after unlink: %v", errno)
+	}
+	if attr.Mode&0o7777 != 0o600 {
+		t.Fatalf("private read-handle mode=%o, want 600", attr.Mode&0o7777)
+	}
+	size := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE, Size: 1}}
+	if errno := node.Setattr(ctx, handle, size, &attr); errno != syscall.EBADF {
+		t.Fatalf("read handle ftruncate errno=%v, want EBADF", errno)
+	}
+	result, errno := handle.Read(ctx, make([]byte, 8), 0)
+	if errno != 0 {
+		t.Fatalf("Read after unlink: %v", errno)
+	}
+	data, status := result.Bytes(make([]byte, 8))
+	if status != fuse.OK || string(data) != "readable" {
+		t.Fatalf("read bytes=%q status=%v", data, status)
+	}
+	if errno := handle.Getattr(ctx, &attr); errno != 0 {
+		t.Fatalf("Getattr after unlink: %v", errno)
+	}
+	if errno := handle.Fsync(ctx, 0); errno != 0 {
+		t.Fatalf("Fsync after unlink: %v", errno)
+	}
+	if len(daemon.calls) != callsAfterUnlink {
+		t.Fatalf("read handle operations made daemon calls after unlink: %v", daemon.calls[callsAfterUnlink:])
+	}
+	if daemon.exists || daemon.commits != 0 {
+		t.Fatalf("read handle operations resurrected Entry: exists=%v commits=%d", daemon.exists, daemon.commits)
+	}
+	if errno := handle.Release(ctx); errno != 0 {
+		t.Fatalf("Release: %v", errno)
+	}
+	if len(daemon.sessions) != 0 {
+		t.Fatalf("read session cleanup left state: %+v", daemon.sessions)
 	}
 }
 
@@ -370,6 +1055,41 @@ func TestCASFailureMakesSharedWriterTerminal(t *testing.T) {
 	}
 }
 
+func TestFinalCloseCommitFailureRetainsRecoveryAndPrimaryError(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("old"))
+	adapter := New(daemon)
+	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	state, errno := adapter.startWrite(ctx, node, false)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	state.handles = 1
+	adapter.writes[node.entryID()] = state
+	handle := &fileHandle{node: node, write: state, writable: true}
+	if _, errno := handle.Write(ctx, []byte("new"), 0); errno != 0 {
+		t.Fatal(errno)
+	}
+	daemon.commitErr = &controlrpc.RemoteError{Code: controlrpc.CodeEntryConflict, Message: "revision changed"}
+	daemon.releaseErr = errors.New("cleanup transport failed")
+	if errno := handle.Release(ctx); errno != syscall.EAGAIN {
+		t.Fatalf("final close errno=%v, want Commit EAGAIN despite cleanup failure", errno)
+	}
+	if state.sessionID == "" || state.recoveryID != state.sessionID || state.lastErr != syscall.EAGAIN {
+		t.Fatalf("final-close failure state session=%q recovery=%q lastErr=%v", state.sessionID, state.recoveryID, state.lastErr)
+	}
+	session := daemon.sessions[state.recoveryID]
+	if session == nil {
+		t.Fatal("failed final-close Commit session was not retained for recovery")
+	}
+	if data, err := os.ReadFile(session.file); err != nil || string(data) != "new" {
+		t.Fatalf("recovery staging=%q err=%v, want exact failed bytes", data, err)
+	}
+	if daemon.commits != 0 || string(daemon.content) != "old" {
+		t.Fatalf("failed Commit changed visible content: content=%q commits=%d", daemon.content, daemon.commits)
+	}
+}
+
 func TestWritableOpenUsesDirectIOAndCleanCloseAborts(t *testing.T) {
 	ctx := context.Background()
 	daemon := newStub(t, []byte("unchanged"))
@@ -383,10 +1103,7 @@ func TestWritableOpenUsesDirectIOAndCleanCloseAborts(t *testing.T) {
 	if flags&fuse.FOPEN_DIRECT_IO == 0 {
 		t.Fatalf("open flags=%#x, want direct I/O", flags)
 	}
-	file, ok := handle.(*fileHandle)
-	if !ok {
-		t.Fatal("open returned an unexpected handle type")
-	}
+	file := mustFileHandle(t, handle)
 	releaseErrno := file.Release(ctx)
 	if releaseErrno != 0 {
 		t.Fatal(releaseErrno)

@@ -23,10 +23,13 @@ const (
 type repositoryUseCases interface {
 	Stat(context.Context, string) (metadata.Entry, error)
 	ResolveEntry(context.Context, metadata.EntryID) (metadata.Entry, string, error)
+	ChmodEntry(context.Context, metadata.EntryID, uint32) error
 	List(context.Context, string) ([]metadata.Entry, error)
 	Mkdir(context.Context, string, uint32) error
 	PutExpected(context.Context, app.PutInput, repository.PutExpectation) error
 	PutExpectedEntryID(context.Context, app.PutInput, metadata.Entry) error
+	PutExpectedWithMode(context.Context, app.PutInput, repository.PutExpectation, *uint32) error
+	PutExpectedEntryIDWithMode(context.Context, app.PutInput, metadata.Entry, *uint32) error
 	Move(context.Context, app.MoveInput) error
 	MoveEntry(context.Context, metadata.EntryID, string) error
 	Remove(context.Context, string) error
@@ -92,6 +95,15 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, mapMethodError(err)
 		}
 		return controlrpc.ResolveEntryResult{Entry: protocolEntry(entry), Path: currentPath}, nil
+	case controlrpc.MethodChmodEntry:
+		var params controlrpc.ChmodEntryParams
+		if err := decodeParams(raw, &params); err != nil || params.EntryID == "" {
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: errors.New("entry_id and mode are required")}
+		}
+		if err := s.app.ChmodEntry(ctx, metadata.EntryID(params.EntryID), params.Mode); err != nil {
+			return nil, mapMethodError(err)
+		}
+		return struct{}{}, nil
 	case controlrpc.MethodList:
 		var params pathParams
 		if err := decodeParams(raw, &params); err != nil {
@@ -243,14 +255,23 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 		var result controlrpc.BeginWriteResult
 		var err error
 		if params.EntryID != "" {
-			result, err = s.sessions.beginWriteEntry(ctx, metadata.EntryID(params.EntryID))
+			result, err = s.sessions.beginWriteEntryMode(ctx, metadata.EntryID(params.EntryID), params.LogicalMode)
 		} else {
-			result, err = s.sessions.beginWrite(ctx, params.Path, params.FollowEntryID)
+			result, err = s.sessions.beginWriteMode(ctx, params.Path, params.FollowEntryID, params.LogicalMode)
 		}
 		if err != nil {
 			return nil, mapMethodError(err)
 		}
 		return result, nil
+	case controlrpc.MethodSetMode:
+		var params controlrpc.SetModeParams
+		if err := decodeParams(raw, &params); err != nil || params.SessionID == "" {
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: errors.New("session_id and mode are required")}
+		}
+		if err := s.sessions.setMode(params.SessionID, params.Mode); err != nil {
+			return nil, mapMethodError(err)
+		}
+		return struct{}{}, nil
 	case controlrpc.MethodCommit:
 		params, err := decodeSession(raw)
 		if err != nil {
