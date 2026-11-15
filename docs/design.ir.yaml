@@ -304,15 +304,28 @@ nodes:
       SQLite PRAGMA user_version MUST be the sole authority for SQLite schema
       version, with initial schema version 1. Each schema change MUST increment
       user_version by exactly one; schema version MUST be independent of
-      application semantic version. The application release sequence starts at
-      v1.0.0 and proceeds through sequential minor releases, with patch releases
-      for fixes; this sequence MUST NOT be inferred from or encoded by
-      user_version. Each released executable MUST support migration from exactly
-      the immediately preceding schema N-1 to its own schema N, and MUST NOT
-      skip versions, support N-2 or older schemas, or carry a historical
-      migration chain. Migration code in a release MUST cover only its immediate
-      predecessor. `nando admin migrate` MUST be the sole explicit migration
-      entry point. Normal startup and initialization MUST validate the schema
+      application semantic version. v1.0.0 starts compatibility guarantees.
+      Patch releases MUST contain compatible fixes; minor releases MAY add
+      backward-compatible functionality; major releases MAY introduce breaking
+      changes. Publishing or installing a binary is an explicit operator action;
+      this policy MUST NOT imply automatic binary update. This application
+      release sequence MUST NOT be inferred from or encoded by user_version.
+      The application SemVer Minor sequence and SQLite user_version schema
+      sequence are independent. A Minor release that changes Repository Format
+      or metadata schema MUST provide an explicit migration whose source is the
+      persisted Repository Format and schema state emitted by the immediately
+      preceding SemVer Minor release, whether or not that predecessor changed
+      the schema. A schema-free Minor leaves user_version unchanged; a later
+      schema-changing Minor migrates from that unchanged revision and increments
+      user_version by exactly one. Migration MUST reject persisted Repository
+      Format or schema state that differs from its declared predecessor state;
+      it MUST NOT cross multiple persisted format/schema transitions or downgrade.
+      Because application release is not persisted, if an older release and the
+      immediately preceding Minor emitted identical Repository Format and schema
+      state, the implementation cannot distinguish them without adding a release
+      marker. No such marker is required, and no rejection based only on release
+      number is promised. `nando admin migrate` MUST be the sole explicit
+      migration entry point. Normal startup and initialization MUST validate the schema
       version and refuse mismatches without migration; initialization MAY
       complete a recognized interrupted repository provisioning state, but MUST
       never migrate an existing database or modify an unsupported schema. A
@@ -320,8 +333,9 @@ nodes:
       older, newer, and legacy schema/data states MUST be
       refused without mutation. A migration MUST apply schema changes and the
       new user_version in one transaction and roll back both on failure.
-      Downgrade is unsupported. Operators upgrading across a schema change MUST
-      use each intermediate release in sequence. Adjacent-only support bounds
+      Downgrade is unsupported. Operators MUST apply each required persisted
+      Repository Format or schema transition in order; a schema-free Minor adds
+      no user_version transition. Adjacent-only support bounds
       migration state space and test combinatorics to one predecessor
       transition per release.
     attributes:
@@ -329,9 +343,15 @@ nodes:
       initial_schema_version: 1
       schema_increment: exactly-one-per-schema-change
       application_release_sequence: v1.0.0-then-sequential-minors;patches-for-fixes
+      semantic_compatibility: patch-compatible-fixes;minor-backward-compatible-additions;major-breaking-changes
+      binary_auto_update: false
       release_and_schema_versions_independent: true
-      supported_source_schema: immediate-predecessor-only
-      skipped_upgrade: unsupported
+      supported_source_schema: predecessor-minor-persisted-state
+      repository_format_and_metadata_migration_scope: immediate-preceding-minor-persisted-state
+      schema_free_minor_user_version_change: none
+      mismatched_persisted_source_state: rejected
+      older_release_with_identical_source_state: indistinguishable; no release-marker check
+      skipped_persisted_transition: rejected
       historical_migration_chain: unsupported
       migration_entry_point: nando-admin-migrate
       normal_startup_migration: prohibited
@@ -340,7 +360,7 @@ nodes:
       unsupported_state_mutation: prohibited
       migration_atomicity: schema-and-user_version-same-transaction
       downgrade: unsupported
-      operator_upgrade_path: every-intermediate-release
+      operator_upgrade_path: migrate_each_required_persisted_format_or_schema_transition
       rationale: bound-migration-state-space-and-test-combinatorics
     provenance:
       origin: human-authored
@@ -516,15 +536,15 @@ nodes:
   - id: DES-DAEMON-RUNTIME
     level: system_design
     kind: process-model
-    statement: Normal operation has one nando daemon as the execution owner of a Repository for the Phase A single-user, local-host deployment. The daemon constructs Metadata Store, Object Store, coordination, and Repository once, and serves peer CLI, FUSE, and WebDAV client processes. JSON-RPC 2.0 control messages use HTTP POST /rpc over configurable UDS or TCP; Phase A standard operation uses the per-user Unix-domain socket protected by a private parent directory (0700) and socket mode 0600. TCP support is retained and is rejected unless TLS and bearer authentication are configured, but TCP bind and credential lifecycle operations are outside standard Phase A acceptance. Phase A makes no guarantee of external exposure or multiple-OS-user authorization. The daemon owns Resource sessions, finite expiry, explicit renewal/revocation, and durable staging recovery. Expiry stops read-session repository-lease heartbeat; daemon shutdown releases read leases and promotes unfinished writes to recovery without deleting them. On the WSL Linux host, a systemd user service is the supported Phase A lifecycle manager and uses per-instance XDG configuration/data and the per-user runtime socket. A separately installed systemd system template is experimental and outside the Phase A runtime acceptance gate; it uses a dedicated non-login account and per-instance state/runtime paths, and its 0600 socket requires all clients to run as that account. Both scopes use separate nando@.service templates. GCS credentials use standard Application Default Credentials and are not persisted in repository configuration.
+    statement: Normal operation has one nando daemon as the execution owner of a Repository for a single-user, local-host deployment. The daemon constructs Metadata Store, Object Store, coordination, and Repository once, and serves peer CLI, FUSE, and WebDAV client processes. JSON-RPC 2.0 control messages use HTTP POST /rpc over configurable UDS or TCP; the supported systemd user service uses a per-user Unix-domain socket protected by a private parent directory (0700) and socket mode 0600. A supported systemd system service uses a dedicated non-login account and per-instance state/runtime paths; its 0600 socket requires all clients to run as that account. The two service scopes use separate nando@.service templates and must not share a Repository. TCP support is retained and is rejected unless TLS and bearer authentication are configured, but TCP bind and credential lifecycle operations are outside standard acceptance. There is no multiple-OS-user authorization guarantee. The daemon owns Resource sessions, finite expiry, explicit renewal/revocation, and durable staging recovery. Expiry stops read-session repository-lease heartbeat; daemon shutdown releases read leases and promotes unfinished writes to recovery without deleting them. GCS credentials use standard Application Default Credentials and are not persisted in repository configuration.
     attributes:
       default_host: WSL-Linux
       default_service_scope: systemd-user
-      supported_service_scope: [systemd-user]
-      experimental_service_scope: [system]
+      supported_service_scope: [systemd-user, system]
+      system_service_client_identity: dedicated-non-login-account
       service_templates: [systemd-user:nando@.service, system:nando@.service]
       service_package: nfpm-deb
-      system_service_phase_a_runtime_gate: excluded
+      system_service_phase_a_runtime_gate: required
       control_protocol: JSON-RPC-2.0
       control_framing: HTTP-POST-/rpc
       control_transports: [Unix-domain-socket, TCP]
@@ -643,7 +663,7 @@ nodes:
   - id: DES-CONSTRUCTION
     level: system_design
     kind: composition-root
-    statement: The executable composition root reads persisted Repository Format metadata and canonical v1 Repository settings, validates their meaning before use, then composes the metadata backend, object backend, digest algorithm, and Repository. Repository settings own Local/Remote delivery mode, the one selected remote backend and its bucket/prefix URI, and capacity policy; they are distinct from per-user runtime TOML configuration, which owns repository selection, an optional matching remote URI, and client/daemon runtime options. Unsupported pre-v1 settings or Repository Format state MUST fail before mutation. The SQLite v1 baseline lifecycle is implemented using REQ-SQLITE-SCHEMA-VERSIONING; future schema-changing releases still require exactly one explicit N-1-to-N migration and MUST NOT invent a v0-to-v1 migration.
+    statement: The executable composition root reads persisted Repository Format metadata and canonical v1 Repository settings, validates their meaning before use, then composes the metadata backend, object backend, digest algorithm, and Repository. Repository settings own Local/Remote delivery mode, the one selected remote backend and its bucket/prefix URI, and capacity policy; they are distinct from per-user runtime TOML configuration, which owns repository selection, an optional matching remote URI, and client/daemon runtime options. Unsupported pre-v1 settings or Repository Format state MUST fail before mutation. The SQLite v1 baseline lifecycle is implemented using REQ-SQLITE-SCHEMA-VERSIONING; future schema-changing Minor releases still require one explicit SQLite user_version N-1-to-N transition from the persisted Repository Format and schema state emitted by the immediately preceding SemVer Minor. SemVer Minor numbering is not encoded in user_version, and MUST NOT invent a v0-to-v1 migration.
     attributes:
       current_backends: [SQLite Metadata Store, Local Object Store, GCS remote object storage, S3-compatible object storage]
       remote_backend_selection: exactly-one-per-repository;GCS-or-S3-compatible

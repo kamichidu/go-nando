@@ -1,3 +1,7 @@
 /.local/
 /.build/
 .envrc
+/node_modules/
+/manual/.vitepress/cache/
+/manual/.vitepress/dist/
+__pycache__/
