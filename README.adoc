@@ -1,9 +1,9 @@
 = nando
 
-nando は、ローカルを基準にファイルを保管する content-addressed repository です。GCS または S3-compatible storage への配送を有効にすると、ローカル commit の後に非同期で remote へ配送します。
+nando is a content-addressed repository for durable files. It commits content locally and can deliver it asynchronously to one selected GCS or S3-compatible backend.
 
-利用者向けの手順は link:https://kamichidu.github.io/go-nando/[nando マニュアル]を参照してください。概要、インストール、初期設定、CLI・FUSE・WebDAV、運用と参照情報をまとめています。
+For installation, setup, CLI, FUSE, WebDAV, and operations, see the link:https://kamichidu.github.io/go-nando/[nando manual].
 
-設計上の正本は `docs/design.ir.yaml`、実際の動作の正本は実装です。マニュアルは両者から確認可能な利用者向け情報を射影します。
+The design authority is `docs/design.ir.yaml`; the implementation defines actual behavior. The manual projects user-facing information that can be verified against both.
 
-開発者向けのビルド、テスト、パッケージ検証は `Taskfile.yml` の Task を参照してください。
+For development, build, test, and package checks, see the tasks in `Taskfile.yml`.

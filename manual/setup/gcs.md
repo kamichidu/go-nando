@@ -1,9 +1,9 @@
 # Google Cloud Storage
 
-GCS は `remote_backend = gcs` に対応します。認証には Google Application Default Credentials (ADC) を使います。credential は repository に保存されません。
+GCS uses `remote_backend = gcs` and Google Application Default Credentials (ADC). Credentials are not stored in the repository.
 
-1. 実行する daemon account で ADC を準備します。ローカル開発では `gcloud auth application-default login`、本番環境では workload identity または適切に provision した credential を使います。
-2. repository を初期化します。
+1. Configure ADC for the account that runs the daemon. For local development, use `gcloud auth application-default login`. In production, use workload identity or provision credentials through your environment's approved mechanism.
+2. Initialize the repository.
 
    ```sh
    nando --repository "$HOME/nando-data" init \
@@ -12,7 +12,7 @@ GCS は `remote_backend = gcs` に対応します。認証には Google Applicat
      --remote-uri gs://my-bucket/nando/
    ```
 
-3. daemon の TOML に4つの scheduler 設定を追加して daemon を起動します。
+3. Add all four scheduler settings to the daemon TOML file and start the daemon.
 
    ```toml
    [remote]
@@ -22,4 +22,4 @@ GCS は `remote_backend = gcs` に対応します。認証には Google Applicat
    sync_parallelism = 2
    ```
 
-bucket 作成や IAM 権限の構成は cloud 環境側で行います。GCS credential が使える account で daemon を起動してください。
+Create the bucket and configure IAM permissions in Google Cloud. Run the daemon under an account with usable ADC credentials.

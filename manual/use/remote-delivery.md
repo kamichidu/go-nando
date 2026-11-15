@@ -1,7 +1,7 @@
-# Remote 非同期配送
+# Asynchronous remote delivery
 
-Remote mode では完全な content をまず Local に commit し、その Entry と配送 obligation を metadata transaction で確定します。daemon scheduler が idle interval、periodic interval、最大配送遅延と parallelism に従って、repository ごとに選択された一つの GCS または S3-compatible backend へ配送します。
+In Remote mode, complete content is committed locally first. The metadata transaction commits the Entry and its delivery obligation together. The daemon scheduler then delivers the content to the repository's single selected GCS or S3-compatible backend according to the idle interval, periodic interval, maximum delivery delay, and parallelism settings.
 
-CLI の書き込み成功は remote durability の完了を意味しません。remote が利用できない間も配送 obligation は保持され、daemon が後で retry します。daemon を停止・移動する場合は local repository と未配送データを保持してください。
+A successful CLI write does not mean the remote copy is durable. Delivery obligations remain queued while the remote service is unavailable, and the daemon retries them later. Preserve the local repository and undelivered content when stopping or moving the daemon.
 
-scheduler の4項目は daemon TOML の `[remote]` に置きます。認証は daemon account が使う GCS ADC または AWS SDK credential chain から供給します。配送状況を表示する queue-drain CLI は実装されていません。
+Set all four scheduler values in the daemon TOML file under `[remote]`. Credentials come from the daemon account's GCS ADC or AWS SDK credential chain. There is no CLI command to report when the delivery queue has drained.

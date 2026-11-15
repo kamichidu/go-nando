@@ -1,20 +1,20 @@
 # systemd system service
 
-Debian package は `nando@.service` の system template と専用の非 login `nando` account をインストールします。system service は専用 account で動く supported deployment です。socket は owner-only のため、CLI、FUSE、WebDAV も同じ `nando` account と同じ endpoint を使います。通常の login account と socket を共有する機能はありません。user manager で運用する場合は package 同梱の `nando@.service` user template を使えます。
+The Debian package installs the `nando@.service` system template and creates a dedicated non-login `nando` account. The system service runs as this account. Its socket is owner-only, so CLI, FUSE, and WebDAV clients for the instance must run as `nando` and use the same endpoint. The socket is not shared with a regular login account. The package also includes a `nando@.service` template for the user manager.
 
-## 1つの instance を設定する
+## Configure an instance
 
-次の例では instance 名 `archive` と repository `/var/lib/nando/archive` を使います。
+This example uses the instance name `archive` and repository path `/var/lib/nando/archive`.
 
-1. package をインストールします。
+1. Install the package.
 
    ```sh
    sudo dpkg -i ./go-nando_*_linux_amd64.deb
    ```
 
-   package の maintainer script は systemd unit を reload しますが、service の enable/start や repository の初期化はしません。
+   The package maintainer script reloads systemd unit definitions. It does not enable or start services or initialize repositories.
 
-2. 設定 directory を作成し、同梱 sample をコピーします。
+2. Create the config directory and copy the packaged sample.
 
    ```sh
    sudo install -d -o root -g nando -m 0750 /etc/nando
@@ -23,14 +23,20 @@ Debian package は `nando@.service` の system template と専用の非 login `n
      /etc/nando/archive.toml
    ```
 
-3. `/etc/nando/archive.toml` で repository path を `/var/lib/nando/archive`、daemon listen を `unix:///run/nando-archive/control.sock` にします。Remote を使うときは scheduler 値をすべて設定します。GCS ADC や AWS credentials は package 外で `nando` account に安全に provision します。
-4. service account として repository を初期化します。
+3. In `/etc/nando/archive.toml`, set the repository path to `/var/lib/nando/archive` and the daemon listener to `unix:///run/nando-archive/control.sock`. For Remote mode, configure all scheduler values. Provision GCS ADC or AWS credentials for the `nando` account outside the package.
+4. Create the repository parent directory and assign it to the service account. Repository initialization runs as `nando` and creates the repository directory beneath this parent.
+
+   ```sh
+   sudo install -d -o nando -g nando -m 0700 /var/lib/nando
+   ```
+
+5. Initialize the repository as the service account.
 
    ```sh
    sudo -u nando /usr/bin/nando --config /etc/nando/archive.toml init
    ```
 
-5. unit を有効化し起動します。
+6. Enable and start the instance.
 
    ```sh
    sudo systemctl daemon-reload
@@ -38,18 +44,18 @@ Debian package は `nando@.service` の system template と専用の非 login `n
    sudo systemctl status nando@archive.service
    ```
 
-6. 同じ identity で daemon に接続できることを確認します。
+7. Verify that the daemon accepts a request from the same account.
 
    ```sh
    sudo -u nando /usr/bin/nando --config /etc/nando/archive.toml doctor
    ```
 
-必要な repository operation も `sudo -u nando /usr/bin/nando --config /etc/nando/archive.toml ...` で実行します。別の OS account から接続するには対応する認可設計が必要で、socket mode を緩める方法はサポートしません。
+Run other repository commands as `nando` with the same config. Access from another operating-system account requires an authorization design; relaxing socket permissions is unsupported.
 
-## FUSE / WebDAV
+## FUSE and WebDAV
 
-adapter は別 process です。daemon を先に起動し、adapter にも同じ config を渡して同じ OS account で起動します。FUSE mountpoint の所有権と OS の FUSE policy は host 側で設定してください。system service は mount adapter を自動起動しません。
+Adapters run as separate processes. Start the daemon first, then start each adapter with the same config and operating-system account. Configure FUSE mountpoint ownership and host FUSE policy separately. The system service does not start adapters automatically.
 
-## 更新と削除
+## Upgrade and removal
 
-package upgrade は稼働 daemon を自動 restart しません。release note を確認し、保守時間に instance を再起動します。削除時は enabled service を手動で disable し、package を削除します。repository、設定、credential は保持されます。
+A package upgrade does not restart a running daemon. Review release notes and restart the instance during a maintenance window. Before removing the package, manually disable enabled services. Repository data, configuration, and credentials are retained.

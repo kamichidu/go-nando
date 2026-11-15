@@ -1,6 +1,6 @@
 # Configuration reference
 
-`nando`、`nando-fuse`、`nando-webdav` は共通の per-user TOML を読みます。system service は `/etc/nando/<instance>.toml` のように `--config` で明示します。
+`nando`, `nando-fuse`, and `nando-webdav` read the same per-user TOML file. A system service selects its instance file explicitly, for example with `--config /etc/nando/<instance>.toml`.
 
 | TOML table | Supported keys |
 | --- | --- |
@@ -13,6 +13,6 @@
 | `[webdav]` | `listen` |
 | `[recovery]` | `directory` |
 
-`[daemon]` の token source は一つだけ指定します。TCP listener は TLS と bearer token を要求します。`[remote.s3]` は S3 repository にのみ使い、credential field はありません。remote URI/backend は user TOML に書かず、`init` の引数で repository に保存します。
+Choose at most one token source in `[daemon]`. TCP listeners require TLS and a bearer token. `[remote.s3]` applies only to an S3 repository and accepts no credential fields. Set the remote URI and backend through `init`; do not put them in user TOML.
 
-完全なコメント付き例は [`samples/config.toml`](https://github.com/kamichidu/go-nando/blob/main/samples/config.toml) を参照してください。CLI option が TOML より優先されます。
+See [`samples/config.toml`](https://github.com/kamichidu/go-nando/blob/main/samples/config.toml) for the complete commented sample. Command-line options override TOML values.

@@ -1,12 +1,12 @@
-# 基本概念
+# Core concepts
 
-| 概念 | 意味 |
+| Concept | Meaning |
 | --- | --- |
-| Repository | 設定、metadata database、local objects、staging を含む一つの保管単位 |
-| Entry | repository 内のファイルまたはディレクトリ名と metadata |
-| Object | content ID で識別する不変のファイル本体 |
-| daemon | repository を開き、CLI、FUSE、WebDAV からの操作を処理するプロセス |
-| Local mode | Local object storage を耐久性のある保存先として使うモード |
-| Remote mode | Local に commit してから、一つの選択済み remote backend へ非同期配送するモード |
+| Repository | A storage unit containing settings, a metadata database, local objects, and staging data |
+| Entry | A file or directory name and its metadata within a repository |
+| Object | Immutable file content identified by a content ID |
+| Daemon | The process that opens a repository and handles CLI, FUSE, and WebDAV requests |
+| Local mode | Local object storage is the durable authority |
+| Remote mode | Content commits locally, then is delivered asynchronously to one selected remote backend |
 
-remote 配送を有効にしても、Entries の可視性は metadata が決めます。Local と Remote は一 repository で選ぶモードであり、複数 provider への複製ではありません。
+Metadata determines which Entries are visible, regardless of whether remote delivery has completed. Each repository uses either Local mode or Remote mode with one backend. Multiple remote providers are not supported for one repository.

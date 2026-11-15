@@ -1,22 +1,22 @@
-# インストール
+# Install nando
 
-## Debian / Ubuntu
+## Debian and Ubuntu
 
-[GitHub Releases](https://github.com/kamichidu/go-nando/releases) から Linux amd64 用 `.deb` を取得し、dpkg でインストールします。
+Download the Linux amd64 `.deb` package from [GitHub Releases](https://github.com/kamichidu/go-nando/releases), then install it with dpkg:
 
 ```sh
 sudo dpkg -i ./go-nando_*_linux_amd64.deb
 ```
 
-パッケージは `nando` 本体を `/opt/nando/bin`、adapter を `/opt/nando/libexec` に配置し、`/usr/bin/nando` を提供します。daemon の起動・有効化や repository の初期化は自動では行いません。次の [ローカル quickstart](./quickstart) または [systemd system service](../setup/systemd) に従ってください。
+The package installs `nando` under `/opt/nando/bin`, adapters under `/opt/nando/libexec`, and the `/usr/bin/nando` symlink. It does not initialize a repository or enable or start a daemon. Continue with the [local quickstart](./quickstart) or [systemd system service setup](../setup/systemd).
 
-## アーカイブ
+## Archives
 
-Linux、macOS、Windows の対応アーキテクチャ用アーカイブは Releases に掲載します。展開後、実行ファイルがあるディレクトリを `PATH` に追加してください。FUSE と WebDAV adapter は対象 platform の archive に含まれる場合のみ利用できます。
+Releases provide archives for supported Linux, macOS, and Windows architectures. Extract an archive and add its executable directory to `PATH`. FUSE and WebDAV adapters are available only in archives that include them for that platform.
 
-## ソースからのビルド
+## Build from source
 
-開発 checkout の `go.work` を使い、Go 1.25.1 以降で次を実行します。
+Use the committed `go.work` from a development checkout and Go 1.25.1 or later:
 
 ```sh
 go install ./cmd/nando
@@ -24,4 +24,4 @@ go install ./adapters/fuse/cmd/nando-fuse
 go install ./adapters/webdav/cmd/nando-webdav
 ```
 
-一般利用では GitHub Releases または Debian package を使ってください。nested Go module は checkout の workspace に依存します。
+For general use, install a GitHub Release or Debian package. The nested Go modules rely on the checkout workspace.

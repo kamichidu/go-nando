@@ -1,6 +1,6 @@
 # Recovery
 
-daemon の中断後に保留された write session は Recovery として確認できます。
+After daemon interruption, inspect any unfinished write sessions:
 
 ```sh
 nando recovery list
@@ -8,6 +8,6 @@ nando recovery retry SESSION_ID
 nando recovery discard SESSION_ID
 ```
 
-`retry` は session の内容を commit し直し、`discard` はその Recovery staging を破棄します。実行前に session ID、repository path、対象 Entry と失敗理由を確認してください。両コマンドは daemon 接続を必要とします。
+`retry` attempts to commit the session content again; `discard` removes its Recovery staging data. Review the session ID, repository path, target Entry, and failure reason first. Both commands require a running daemon.
 
-Remote storage の object に metadata Entry がない場合、`nando admin recover` は metadata を `/recyclebin` 以下へ復元します。remote object 自体は変更しません。移行確認には `nando admin migrate` を使えますが、現行実装は schema version 1 の検証のみです。
+If a remote object has no corresponding metadata Entry, `nando admin recover` restores metadata under `/recyclebin` without changing the remote object. `nando admin migrate` currently validates schema revision 1 only.

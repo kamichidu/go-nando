@@ -1,6 +1,6 @@
 # CLI
 
-全コマンドは共通して `--config`、`--repository`、`--daemon-listen`、`--daemon-token-file`、`--daemon-ca-cert` を受け取ります。global flag は subcommand より前に置きます。
+All CLI commands accept the common `--config`, `--repository`, `--daemon-listen`, `--daemon-token-file`, and `--daemon-ca-cert` options. Put global options before the subcommand.
 
 ```sh
 nando --repository "$HOME/nando-data" ls /
@@ -12,4 +12,4 @@ nando --repository "$HOME/nando-data" mv /photo.jpg /original.jpg
 nando --repository "$HOME/nando-data" rm /original.jpg
 ```
 
-`nando daemon` は daemon を起動します。`nando doctor` は repository health check、`nando gc` は GC、`nando recovery list|retry|discard` は未完了 write session を扱います。`nando admin migrate` は現在の schema を検証します。全コマンド一覧は [CLI reference](../reference/cli) を参照してください。
+`nando daemon` starts the daemon. `nando doctor` checks repository health, `nando gc` runs garbage collection, and `nando recovery list|retry|discard` manages unfinished write sessions. `nando admin migrate` currently validates the schema. See the [CLI reference](../reference/cli) for the command list.

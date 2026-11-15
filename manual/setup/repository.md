@@ -1,12 +1,12 @@
-# Repository の初期化
+# Initialize a repository
 
-Repository の置き場所を決め、新しい directory を `init` に渡します。
+Choose a repository directory and pass it to `init`:
 
 ```sh
 nando --repository "$HOME/nando-data" init
 ```
 
-Remote 配送を使う場合は、初期化時に backend と URI を repository 設定へ保存します。既存 repository の backend や URI を通常起動時に切り替える機能はありません。
+To use remote delivery, select a backend and URI during initialization. The values are saved in the repository settings. There is no command to change the backend or URI of an existing repository during normal startup.
 
 ```sh
 nando --repository "$HOME/nando-data" init \
@@ -15,6 +15,6 @@ nando --repository "$HOME/nando-data" init \
   --remote-uri gs://my-bucket/nando/
 ```
 
-S3-compatible storage では `--remote-backend s3` と `s3://bucket[/prefix]` を使います。`remote_backend` は repository ごとに一つ選択します。URI prefix の末尾 `/` はそのまま object key に反映され、自動補完されません。詳しくは [GCS](./gcs) または [S3 / Wasabi](./s3) を参照してください。
+For S3-compatible storage, use `--remote-backend s3` and an `s3://bucket[/prefix]` URI. Each repository selects one `remote_backend`. The URI prefix is used literally in object keys; a trailing `/` is not added automatically. See [GCS](./gcs) or [S3 / Wasabi](./s3) for provider setup.
 
-日常運用では daemon を起動します。systemd 管理を使う場合は [system service の手順](./systemd)を参照してください。
+Run the daemon for normal use. For systemd, follow the [system service procedure](./systemd).

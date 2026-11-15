@@ -310,14 +310,22 @@ nodes:
       changes. Publishing or installing a binary is an explicit operator action;
       this policy MUST NOT imply automatic binary update. This application
       release sequence MUST NOT be inferred from or encoded by user_version.
-      A Minor release that changes Repository Format or metadata schema MUST
-      migrate only the state produced by the immediately preceding Minor release.
-      It MUST NOT skip Minor releases, migrate older states, or carry a historical
-      migration chain; downgrade migration is unsupported. For SQLite, each
-      schema change increments user_version exactly once, and migration code MUST
-      cover only that immediate schema predecessor. `nando admin migrate` MUST be
-      the sole explicit migration
-      entry point. Normal startup and initialization MUST validate the schema
+      The application SemVer Minor sequence and SQLite user_version schema
+      sequence are independent. A Minor release that changes Repository Format
+      or metadata schema MUST provide an explicit migration whose source is the
+      persisted Repository Format and schema state emitted by the immediately
+      preceding SemVer Minor release, whether or not that predecessor changed
+      the schema. A schema-free Minor leaves user_version unchanged; a later
+      schema-changing Minor migrates from that unchanged revision and increments
+      user_version by exactly one. Migration MUST reject persisted Repository
+      Format or schema state that differs from its declared predecessor state;
+      it MUST NOT cross multiple persisted format/schema transitions or downgrade.
+      Because application release is not persisted, if an older release and the
+      immediately preceding Minor emitted identical Repository Format and schema
+      state, the implementation cannot distinguish them without adding a release
+      marker. No such marker is required, and no rejection based only on release
+      number is promised. `nando admin migrate` MUST be the sole explicit
+      migration entry point. Normal startup and initialization MUST validate the schema
       version and refuse mismatches without migration; initialization MAY
       complete a recognized interrupted repository provisioning state, but MUST
       never migrate an existing database or modify an unsupported schema. A
@@ -325,8 +333,9 @@ nodes:
       older, newer, and legacy schema/data states MUST be
       refused without mutation. A migration MUST apply schema changes and the
       new user_version in one transaction and roll back both on failure.
-      Downgrade is unsupported. Operators upgrading across a schema change MUST
-      use each intermediate release in sequence. Adjacent-only support bounds
+      Downgrade is unsupported. Operators MUST apply each required persisted
+      Repository Format or schema transition in order; a schema-free Minor adds
+      no user_version transition. Adjacent-only support bounds
       migration state space and test combinatorics to one predecessor
       transition per release.
     attributes:
@@ -337,10 +346,12 @@ nodes:
       semantic_compatibility: patch-compatible-fixes;minor-backward-compatible-additions;major-breaking-changes
       binary_auto_update: false
       release_and_schema_versions_independent: true
-      supported_source_schema: immediate-predecessor-only
-      repository_format_and_metadata_migration_scope: immediate-preceding-minor-only
-      migration_skip_minor: unsupported
-      skipped_upgrade: unsupported
+      supported_source_schema: predecessor-minor-persisted-state
+      repository_format_and_metadata_migration_scope: immediate-preceding-minor-persisted-state
+      schema_free_minor_user_version_change: none
+      mismatched_persisted_source_state: rejected
+      older_release_with_identical_source_state: indistinguishable; no release-marker check
+      skipped_persisted_transition: rejected
       historical_migration_chain: unsupported
       migration_entry_point: nando-admin-migrate
       normal_startup_migration: prohibited
@@ -349,7 +360,7 @@ nodes:
       unsupported_state_mutation: prohibited
       migration_atomicity: schema-and-user_version-same-transaction
       downgrade: unsupported
-      operator_upgrade_path: every-intermediate-release
+      operator_upgrade_path: migrate_each_required_persisted_format_or_schema_transition
       rationale: bound-migration-state-space-and-test-combinatorics
     provenance:
       origin: human-authored
@@ -652,7 +663,7 @@ nodes:
   - id: DES-CONSTRUCTION
     level: system_design
     kind: composition-root
-    statement: The executable composition root reads persisted Repository Format metadata and canonical v1 Repository settings, validates their meaning before use, then composes the metadata backend, object backend, digest algorithm, and Repository. Repository settings own Local/Remote delivery mode, the one selected remote backend and its bucket/prefix URI, and capacity policy; they are distinct from per-user runtime TOML configuration, which owns repository selection, an optional matching remote URI, and client/daemon runtime options. Unsupported pre-v1 settings or Repository Format state MUST fail before mutation. The SQLite v1 baseline lifecycle is implemented using REQ-SQLITE-SCHEMA-VERSIONING; future schema-changing releases still require exactly one explicit N-1-to-N migration and MUST NOT invent a v0-to-v1 migration.
+    statement: The executable composition root reads persisted Repository Format metadata and canonical v1 Repository settings, validates their meaning before use, then composes the metadata backend, object backend, digest algorithm, and Repository. Repository settings own Local/Remote delivery mode, the one selected remote backend and its bucket/prefix URI, and capacity policy; they are distinct from per-user runtime TOML configuration, which owns repository selection, an optional matching remote URI, and client/daemon runtime options. Unsupported pre-v1 settings or Repository Format state MUST fail before mutation. The SQLite v1 baseline lifecycle is implemented using REQ-SQLITE-SCHEMA-VERSIONING; future schema-changing Minor releases still require one explicit SQLite user_version N-1-to-N transition from the persisted Repository Format and schema state emitted by the immediately preceding SemVer Minor. SemVer Minor numbering is not encoded in user_version, and MUST NOT invent a v0-to-v1 migration.
     attributes:
       current_backends: [SQLite Metadata Store, Local Object Store, GCS remote object storage, S3-compatible object storage]
       remote_backend_selection: exactly-one-per-repository;GCS-or-S3-compatible

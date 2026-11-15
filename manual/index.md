@@ -1,15 +1,15 @@
 # nando
 
-nando はローカルを基準にファイルを保管する content-addressed repository です。名前やディレクトリ構造は metadata、ファイル本体は content-addressed object として管理します。
+nando is a content-addressed repository for durable files. It stores names and directory structure as metadata and file contents as content-addressed objects.
 
-GCS または S3-compatible object storage を一つ選ぶと、書き込みはローカルに commit された後、daemon が remote へ非同期配送します。remote 配送は書き込み完了を待たせないため、remote の耐久化を確認する操作ではありません。
+Select one GCS or S3-compatible object storage backend to enable remote delivery. Writes commit locally first; the daemon then delivers them asynchronously. A successful write does not confirm remote durability.
 
-## まず読むページ
+## Start here
 
-- [インストール](./getting-started/install)
-- [ローカル quickstart](./getting-started/quickstart)
-- [Remote backend の設定](./setup/gcs)
-- [systemd system service](./setup/systemd)
-- [バックアップと復元](./operations/backup-restore)
+- [Install nando](./getting-started/install)
+- [Local quickstart](./getting-started/quickstart)
+- [Configure a remote backend](./setup/gcs)
+- [Run a systemd system service](./setup/systemd)
+- [Back up and restore a repository](./operations/backup-restore)
 
-利用可能なコマンドと設定は [CLI reference](./reference/cli) と [configuration reference](./reference/configuration) を参照してください。
+See the [CLI reference](./reference/cli) and [configuration reference](./reference/configuration) for implemented commands and settings.

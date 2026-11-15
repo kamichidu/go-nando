@@ -1,8 +1,8 @@
-# 設定ファイル
+# Configuration file
 
-3つの実行ファイル `nando`、`nando-fuse`、`nando-webdav` は同じ user TOML を読みます。既定位置は `${XDG_CONFIG_HOME:-~/.config}/nando/config.toml`、data directory は `${XDG_DATA_HOME:-~/.local/share}/nando` です。`--config` は設定ファイル、`--repository` は repository を明示します。CLI flag は TOML より優先します。
+`nando`, `nando-fuse`, and `nando-webdav` read the same user TOML file. The default config path is `${XDG_CONFIG_HOME:-~/.config}/nando/config.toml`; the default data directory is `${XDG_DATA_HOME:-~/.local/share}/nando`. Use `--config` to select a config file and `--repository` to select a repository. Command-line options take precedence over TOML values.
 
-完全な設定例は [`samples/config.toml`](https://github.com/kamichidu/go-nando/blob/main/samples/config.toml) にあります。未設定項目は通常省略します。
+The complete sample is [`samples/config.toml`](https://github.com/kamichidu/go-nando/blob/main/samples/config.toml). Settings that do not apply to your deployment can be omitted.
 
 ```toml
 [repository]
@@ -18,4 +18,4 @@ max_delivery_delay = "30m"
 sync_parallelism = 2
 ```
 
-remote repository は `[remote]` の scheduler 設定をすべて必要とします。S3 のみ `[remote.s3]` に endpoint と region を設定できます。remote URI と backend の選択は user TOML ではなく `init` 時に repository の `repository.json` へ保存します。全項目は [configuration reference](../reference/configuration) を参照してください。
+Remote repositories require all four `[remote]` scheduler settings. S3 can also use `[remote.s3]` for `endpoint` and `region`. The remote URI and backend are saved in repository-owned `repository.json` by `init`, not in the user TOML file. See the [configuration reference](../reference/configuration) for all supported keys.

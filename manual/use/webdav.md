@@ -1,9 +1,9 @@
 # WebDAV
 
-`nando-webdav` は daemon に接続する HTTP adapter です。既定 listen address は `127.0.0.1:8080` です。
+`nando-webdav` is an HTTP adapter that connects to the daemon. Its default listen address is `127.0.0.1:8080`.
 
 ```sh
 nando --repository "$HOME/nando-data" webdav --webdav-listen 127.0.0.1:8080
 ```
 
-WebDAV HTTP address は daemon control address と独立しています。Phase A の WebDAV は loopback-only、unauthenticated HTTP です。loopback の外へ公開しないでください。daemon と WebDAV client は同じ user config または repository を選択する同等の設定を使います。
+The WebDAV HTTP address is independent of the daemon control address. Under the Phase A boundary, WebDAV is unauthenticated HTTP bound to loopback. Do not expose it beyond loopback. Configure WebDAV and the daemon to select the same repository.

@@ -1,9 +1,9 @@
 # Garbage collection
 
-`nando gc` は Local object の不要データを回収します。`init --max-local-bytes` で capacity 上限を設定した場合、Capacity GC がこの上限を管理します。0 は capacity eviction を無効にします。
+`nando gc` removes eligible Local objects. If you set a capacity limit with `init --max-local-bytes`, Capacity GC manages that limit. A value of `0` disables capacity eviction.
 
 ```sh
 nando --repository "$HOME/nando-data" gc
 ```
 
-通常の GC は remote object を削除しません。GC を backup の準備操作として実行しないでください。health check には `nando doctor` を使います。
+Regular garbage collection does not delete remote objects. Do not run GC to prepare a backup. Use `nando doctor` for a health check.
