@@ -304,14 +304,19 @@ nodes:
       SQLite PRAGMA user_version MUST be the sole authority for SQLite schema
       version, with initial schema version 1. Each schema change MUST increment
       user_version by exactly one; schema version MUST be independent of
-      application semantic version. The application release sequence starts at
-      v1.0.0 and proceeds through sequential minor releases, with patch releases
-      for fixes; this sequence MUST NOT be inferred from or encoded by
-      user_version. Each released executable MUST support migration from exactly
-      the immediately preceding schema N-1 to its own schema N, and MUST NOT
-      skip versions, support N-2 or older schemas, or carry a historical
-      migration chain. Migration code in a release MUST cover only its immediate
-      predecessor. `nando admin migrate` MUST be the sole explicit migration
+      application semantic version. v1.0.0 starts compatibility guarantees.
+      Patch releases MUST contain compatible fixes; minor releases MAY add
+      backward-compatible functionality; major releases MAY introduce breaking
+      changes. Publishing or installing a binary is an explicit operator action;
+      this policy MUST NOT imply automatic binary update. This application
+      release sequence MUST NOT be inferred from or encoded by user_version.
+      A Minor release that changes Repository Format or metadata schema MUST
+      migrate only the state produced by the immediately preceding Minor release.
+      It MUST NOT skip Minor releases, migrate older states, or carry a historical
+      migration chain; downgrade migration is unsupported. For SQLite, each
+      schema change increments user_version exactly once, and migration code MUST
+      cover only that immediate schema predecessor. `nando admin migrate` MUST be
+      the sole explicit migration
       entry point. Normal startup and initialization MUST validate the schema
       version and refuse mismatches without migration; initialization MAY
       complete a recognized interrupted repository provisioning state, but MUST
@@ -329,8 +334,12 @@ nodes:
       initial_schema_version: 1
       schema_increment: exactly-one-per-schema-change
       application_release_sequence: v1.0.0-then-sequential-minors;patches-for-fixes
+      semantic_compatibility: patch-compatible-fixes;minor-backward-compatible-additions;major-breaking-changes
+      binary_auto_update: false
       release_and_schema_versions_independent: true
       supported_source_schema: immediate-predecessor-only
+      repository_format_and_metadata_migration_scope: immediate-preceding-minor-only
+      migration_skip_minor: unsupported
       skipped_upgrade: unsupported
       historical_migration_chain: unsupported
       migration_entry_point: nando-admin-migrate
@@ -516,15 +525,15 @@ nodes:
   - id: DES-DAEMON-RUNTIME
     level: system_design
     kind: process-model
-    statement: Normal operation has one nando daemon as the execution owner of a Repository for the Phase A single-user, local-host deployment. The daemon constructs Metadata Store, Object Store, coordination, and Repository once, and serves peer CLI, FUSE, and WebDAV client processes. JSON-RPC 2.0 control messages use HTTP POST /rpc over configurable UDS or TCP; Phase A standard operation uses the per-user Unix-domain socket protected by a private parent directory (0700) and socket mode 0600. TCP support is retained and is rejected unless TLS and bearer authentication are configured, but TCP bind and credential lifecycle operations are outside standard Phase A acceptance. Phase A makes no guarantee of external exposure or multiple-OS-user authorization. The daemon owns Resource sessions, finite expiry, explicit renewal/revocation, and durable staging recovery. Expiry stops read-session repository-lease heartbeat; daemon shutdown releases read leases and promotes unfinished writes to recovery without deleting them. On the WSL Linux host, a systemd user service is the supported Phase A lifecycle manager and uses per-instance XDG configuration/data and the per-user runtime socket. A separately installed systemd system template is experimental and outside the Phase A runtime acceptance gate; it uses a dedicated non-login account and per-instance state/runtime paths, and its 0600 socket requires all clients to run as that account. Both scopes use separate nando@.service templates. GCS credentials use standard Application Default Credentials and are not persisted in repository configuration.
+    statement: Normal operation has one nando daemon as the execution owner of a Repository for a single-user, local-host deployment. The daemon constructs Metadata Store, Object Store, coordination, and Repository once, and serves peer CLI, FUSE, and WebDAV client processes. JSON-RPC 2.0 control messages use HTTP POST /rpc over configurable UDS or TCP; the supported systemd user service uses a per-user Unix-domain socket protected by a private parent directory (0700) and socket mode 0600. A supported systemd system service uses a dedicated non-login account and per-instance state/runtime paths; its 0600 socket requires all clients to run as that account. The two service scopes use separate nando@.service templates and must not share a Repository. TCP support is retained and is rejected unless TLS and bearer authentication are configured, but TCP bind and credential lifecycle operations are outside standard acceptance. There is no multiple-OS-user authorization guarantee. The daemon owns Resource sessions, finite expiry, explicit renewal/revocation, and durable staging recovery. Expiry stops read-session repository-lease heartbeat; daemon shutdown releases read leases and promotes unfinished writes to recovery without deleting them. GCS credentials use standard Application Default Credentials and are not persisted in repository configuration.
     attributes:
       default_host: WSL-Linux
       default_service_scope: systemd-user
-      supported_service_scope: [systemd-user]
-      experimental_service_scope: [system]
+      supported_service_scope: [systemd-user, system]
+      system_service_client_identity: dedicated-non-login-account
       service_templates: [systemd-user:nando@.service, system:nando@.service]
       service_package: nfpm-deb
-      system_service_phase_a_runtime_gate: excluded
+      system_service_phase_a_runtime_gate: required
       control_protocol: JSON-RPC-2.0
       control_framing: HTTP-POST-/rpc
       control_transports: [Unix-domain-socket, TCP]

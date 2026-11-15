@@ -1,5 +1,5 @@
 [Unit]
-Description=Nando repository daemon (experimental system instance %i)
+Description=Nando repository daemon (system instance %i)
 Documentation=https://github.com/kamichidu/go-nando
 After=local-fs.target
 

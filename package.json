@@ -1,0 +1,13 @@
+{
+  "name": "go-nando-manual",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "docs:dev": "vitepress dev manual",
+    "docs:build": "vitepress build manual",
+    "docs:preview": "vitepress preview manual"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4"
+  }
+}
