@@ -61,6 +61,15 @@ install -d -o nando -g nando -m 0700 /var/lib/nando
 runuser -u nando -- /usr/bin/nando --config /etc/nando/smoke.toml init
 systemctl enable --now nando@smoke.service
 systemctl is-active --quiet nando@smoke.service
+for _ in $(seq 1 30); do
+    [ -S /run/nando-smoke/control.sock ] && break
+    sleep 1
+done
+if [ ! -S /run/nando-smoke/control.sock ]; then
+    systemctl status nando@smoke.service --no-pager
+    journalctl -u nando@smoke.service --no-pager
+    exit 1
+fi
 runuser -u nando -- /usr/bin/nando --config /etc/nando/smoke.toml doctor
 systemctl stop nando@smoke.service
 """)
