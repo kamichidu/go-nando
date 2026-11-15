@@ -15,11 +15,13 @@ export default defineConfig({
       { text: 'Reference', link: '/reference/cli' },
     ],
     sidebar: [
-      { text: 'Overview', items: [{ text: 'About nando', link: '/' }] },
+      { text: 'Overview', items: [
+        { text: 'About nando', link: '/' },
+        { text: 'Architecture', link: '/getting-started/concepts' },
+      ] },
       { text: 'Getting started', items: [
         { text: 'Install', link: '/getting-started/install' },
-        { text: 'Local quickstart', link: '/getting-started/quickstart' },
-        { text: 'Core concepts', link: '/getting-started/concepts' },
+        { text: 'Quick start', link: '/getting-started/quickstart' },
         { text: 'Versions and updates', link: '/getting-started/versioning' },
       ] },
       { text: 'Setup', items: [

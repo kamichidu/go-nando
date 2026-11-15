@@ -1,18 +1,7 @@
 # Configuration reference
 
-`nando`, `nando-fuse`, and `nando-webdav` read the same per-user TOML file. A system service selects its instance file explicitly, for example with `--config /etc/nando/<instance>.toml`.
+`nando`, `nando-fuse`, and `nando-webdav` share one TOML configuration format. The default file is `${XDG_CONFIG_HOME:-~/.config}/nando/config.toml`; a missing implicit default is allowed. An explicit `--config` path must exist. Command-line options take precedence over TOML values.
 
-| TOML table | Supported keys |
-| --- | --- |
-| `[repository]` | `path` |
-| `[logging]` | `verbose` |
-| `[remote]` | `sync_idle_interval`, `sync_periodic_interval`, `max_delivery_delay`, `sync_parallelism` |
-| `[remote.s3]` | `endpoint`, `region` |
-| `[daemon]` | `listen`, `token`, `token_from_file`, `token_from_env`, `ca_cert`, `tls_cert`, `tls_key` |
-| `[fuse]` | `mountpoint`, `mount_options` |
-| `[webdav]` | `listen` |
-| `[recovery]` | `directory` |
+Configuration file selection and repository selection are separate. The repository comes from `--repository`, then `[repository].path`, then `${XDG_DATA_HOME:-~/.local/share}/nando`. The daemon endpoint comes from `--daemon-listen`, then `[daemon].listen`, then a Unix socket derived from the repository path.
 
-Choose at most one token source in `[daemon]`. TCP listeners require TLS and a bearer token. `[remote.s3]` applies only to an S3 repository and accepts no credential fields. Set the remote URI and backend through `init`; do not put them in user TOML.
-
-See [`samples/config.toml`](https://github.com/kamichidu/go-nando/blob/main/samples/config.toml) for the complete commented sample. Command-line options override TOML values.
+For configuration by task, see [Configure nando for a task](../setup/configuration). The complete commented sample at [`samples/config.toml`](https://github.com/kamichidu/go-nando/blob/main/samples/config.toml) documents optional settings. Repository backend and URI are selected by `init` and stored with the repository, rather than selected in this shared user config.

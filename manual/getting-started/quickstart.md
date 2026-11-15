@@ -1,25 +1,25 @@
-# Local quickstart
+# Quick start
 
-This example uses the daemon and CLI under the same operating system account.
+This local example uses the current account and the XDG-style repository default. With the defaults, the repository is `${XDG_DATA_HOME:-~/.local/share}/nando`; an explicit `--repository` is only needed when you want a different location.
 
-1. Create a repository.
-
-   ```sh
-   nando --repository "$HOME/nando-data" init
-   ```
-
-2. Start the daemon and open another terminal.
+1. Initialize the repository.
 
    ```sh
-   nando --repository "$HOME/nando-data" daemon
+   nando init
    ```
 
-3. Import, list, and retrieve a file.
+2. Start the daemon in a terminal and leave it running. Open another terminal for the client commands.
 
    ```sh
-   nando --repository "$HOME/nando-data" put ./photo.jpg /photo.jpg
-   nando --repository "$HOME/nando-data" ls /
-   nando --repository "$HOME/nando-data" get /photo.jpg ./photo-copy.jpg
+   nando daemon
    ```
 
-Keep the daemon running while using the repository. To avoid passing `--repository` each time, set `[repository].path` in the user TOML file.
+3. Import a file, list the repository, and retrieve a copy.
+
+   ```sh
+   nando put ./photo.jpg /photo.jpg
+   nando ls /
+   nando get /photo.jpg ./photo-copy.jpg
+   ```
+
+The commands share the same default repository and repository-derived local daemon socket. If you set `[repository].path` or use `--repository`, use that same selection for `init`, the daemon, and client commands. The daemon must remain running for normal repository operations. For ordinary Linux service operation, use the [systemd setup](../setup/systemd); manual foreground startup is useful for this quick check and non-systemd environments.

@@ -1,8 +1,17 @@
-# systemd system service
+# Run nando with systemd
 
-The Debian package installs the `nando@.service` system template and creates a dedicated non-login `nando` account. The system service runs as this account. Its socket is owner-only, so CLI, FUSE, and WebDAV clients for the instance must run as `nando` and use the same endpoint. The socket is not shared with a regular login account. The package also includes a `nando@.service` template for the user manager.
+systemd is the usual way to keep a daemon running on Debian or Ubuntu Linux. It starts, supervises, and stops the repository-owning `nando daemon` process. It does not replace the daemon and does not start FUSE or WebDAV adapters.
 
-## Configure an instance
+The Debian package installs a system template and a user-manager template. They run with different identities and paths:
+
+| Unit | Process identity | Config selected by the unit | Repository and writable state |
+| --- | --- | --- | --- |
+| `nando@<instance>.service` | Dedicated non-login `nando` account | `/etc/nando/<instance>.toml` | Set the repository path in that file; package state is under `/var/lib/nando/<instance>` and runtime socket directory is `/run/nando-<instance>` |
+| `nando@<instance>.service` in the user manager | The logged-in user | `%E/nando/<instance>.toml`; `%E` is the manager config root (`$XDG_CONFIG_HOME` for the user manager) | Configured repository path, or the user's XDG data default; the unit permits writes under `~/.local/share/nando` and its runtime directory |
+
+The two units share a template name but belong to different systemd managers. The rest of this page documents the system service, which is the package's usual multi-user service setup. A system service's socket is owner-only: run its CLI and adapters as the `nando` account with the same instance config. It is not shared with the logged-in account by default.
+
+## Configure and start a system instance
 
 This example uses the instance name `archive` and repository path `/var/lib/nando/archive`.
 
@@ -14,7 +23,7 @@ This example uses the instance name `archive` and repository path `/var/lib/nand
 
    The package maintainer script reloads systemd unit definitions. It does not enable or start services or initialize repositories.
 
-2. Create the config directory and copy the packaged sample.
+2. Create the config directory and copy the packaged system sample.
 
    ```sh
    sudo install -d -o root -g nando -m 0750 /etc/nando
@@ -24,7 +33,7 @@ This example uses the instance name `archive` and repository path `/var/lib/nand
    ```
 
 3. In `/etc/nando/archive.toml`, set the repository path to `/var/lib/nando/archive` and the daemon listener to `unix:///run/nando-archive/control.sock`. For Remote mode, configure all scheduler values. Provision GCS ADC or AWS credentials for the `nando` account outside the package.
-4. Create the repository parent directory and assign it to the service account. Repository initialization runs as `nando` and creates the repository directory beneath this parent.
+4. Create the repository parent directory and assign it to the service account. Initialization runs as `nando` and creates the repository directory beneath this parent.
 
    ```sh
    sudo install -d -o nando -g nando -m 0700 /var/lib/nando
@@ -50,11 +59,18 @@ This example uses the instance name `archive` and repository path `/var/lib/nand
    sudo -u nando /usr/bin/nando --config /etc/nando/archive.toml doctor
    ```
 
-Run other repository commands as `nando` with the same config. Access from another operating-system account requires an authorization design; relaxing socket permissions is unsupported.
+Run other repository commands as `nando` with the same config. The daemon reads `/etc/nando/archive.toml`, stores repository data under `/var/lib/nando/archive`, and creates its control socket under `/run/nando-archive`. The config file itself is owned by root and readable by group `nando`. Do not run an ordinary login-user client against this owner-only socket; cross-account authorization is not implemented.
 
-## FUSE and WebDAV
+## Use FUSE or WebDAV with the instance
 
-Adapters run as separate processes. Start the daemon first, then start each adapter with the same config and operating-system account. Configure FUSE mountpoint ownership and host FUSE policy separately. The system service does not start adapters automatically.
+Adapters run as separate processes. Start the daemon service first, then start an adapter with the same instance config and operating-system account, for example:
+
+```sh
+sudo -u nando /usr/bin/nando --config /etc/nando/archive.toml fuse --fuse-mountpoint /path/to/mount
+sudo -u nando /usr/bin/nando --config /etc/nando/archive.toml webdav
+```
+
+The mountpoint and host FUSE policy need their own setup. WebDAV remains unauthenticated loopback HTTP. systemd does not start either adapter automatically.
 
 ## Upgrade and removal
 
