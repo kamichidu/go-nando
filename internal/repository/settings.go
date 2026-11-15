@@ -50,14 +50,13 @@ func (s Settings) Validate() error {
 			return fmt.Errorf("local delivery mode must not configure remote object storage")
 		}
 	case DeliveryModeRemote:
+		if s.RemoteBackend == "" {
+			return fmt.Errorf("remote delivery mode requires a remote backend")
+		}
 		if s.RemoteURI == "" {
 			return fmt.Errorf("remote delivery mode requires a remote URI")
 		}
-		backend := s.RemoteBackend
-		if backend == "" { // The original repository format omitted this field for GCS.
-			backend = "gcs"
-		}
-		switch backend {
+		switch s.RemoteBackend {
 		case "gcs":
 			if _, _, err := gcs.ParseRemoteURI(s.RemoteURI); err != nil {
 				return fmt.Errorf("invalid remote URI: %w", err)

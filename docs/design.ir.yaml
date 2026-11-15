@@ -254,7 +254,7 @@ nodes:
   - id: REQ-V1-BASELINE
     level: system_requirement
     kind: compatibility-boundary
-    statement: The first formal release is v1. Compatibility guarantees begin at v1; pre-v1 repository and on-disk state, repository settings, runtime configuration spellings, APIs, CLI spellings, SQLite schema histories, and Recovery manifest versions are unsupported. Detection of unsupported state MUST fail clearly before mutation and MUST preserve the original data for operator recovery. The current GCS backend and canonical remote_backend=gcs selection remain supported v1 behavior.
+    statement: The first formal release is v1. Compatibility guarantees begin at v1; pre-v1 repository and on-disk state, repository settings, runtime configuration spellings, APIs, CLI spellings, SQLite schema histories, and Recovery manifest versions are unsupported. Detection of unsupported state MUST fail clearly before mutation and MUST preserve the original data for operator recovery. The current GCS backend and canonical remote_backend=gcs selection remain supported v1 behavior. Remote repository settings MUST explicitly select a nonempty remote_backend; omitted or empty remote_backend MUST fail validation.
     attributes:
       formal_release: v1
       pre_v1_compatibility: none

@@ -14,7 +14,7 @@ import (
 
 func TestInitRepositoryPersistsDeliverySettingsAndDoesNotReconfigure(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "repo")
-	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://bucket-a"}
+	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://bucket-a"}
 	if err := InitRepositoryWithSettings(context.Background(), root, want); err != nil {
 		t.Fatalf("init remote repository: %v", err)
 	}
@@ -22,7 +22,7 @@ func TestInitRepositoryPersistsDeliverySettingsAndDoesNotReconfigure(t *testing.
 	if err != nil || got.DeliveryMode != want.DeliveryMode || got.RemoteURI != want.RemoteURI {
 		t.Fatalf("load settings: got=%+v err=%v", got, err)
 	}
-	changed := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://bucket-b"}
+	changed := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://bucket-b"}
 	if err := InitRepositoryWithSettings(context.Background(), root, changed); err == nil {
 		t.Fatal("init unexpectedly reconfigured an existing repository")
 	}
@@ -37,7 +37,7 @@ func TestInitRepositoryPersistsDeliverySettingsAndDoesNotReconfigure(t *testing.
 
 func TestInitRepositoryResumesValidatedPartialRepository(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "repo")
-	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://keep-me"}
+	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://keep-me"}
 	if err := InitRepositoryWithSettings(context.Background(), root, want); err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestInitRepositoryResumesValidatedPartialRepository(t *testing.T) {
 
 func TestInitRepositoryKeepsExistingSettingsFile(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "repo")
-	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://keep-existing"}
+	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://keep-existing"}
 	if err := InitRepositoryWithSettings(context.Background(), root, want); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestInitRepositoryResumesInterruptedSettingsPublication(t *testing.T) {
 	if err := os.WriteFile(tmp, []byte(`{"partial":`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://resumed"}
+	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://resumed"}
 	if err := InitRepositoryWithSettings(context.Background(), root, want); err != nil {
 		t.Fatalf("resume interrupted settings publication: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestInitRepositoryCompletesEmptyMetadataDatabaseFromPartialState(t *testing
 
 func TestInitRepositoryResumesAfterSettingsPublicationBeforeSchemaInitialization(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "repo")
-	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://resume-after-settings"}
+	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://resume-after-settings"}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestInitRepositoryResumesAfterSettingsPublicationBeforeSchemaInitialization
 
 func TestInitRepositoryResumesAfterSettingsPublicationBeforeMetadataCreation(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "repo")
-	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://settings-only-recovery"}
+	want := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://settings-only-recovery"}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestInitRepositoryResumesAfterSettingsPublicationBeforeMetadataCreation(t *
 	if err != nil || string(after) != string(before) {
 		t.Fatalf("repository settings were overwritten: before=%q after=%q err=%v", before, after, err)
 	}
-	if err := InitRepositoryWithSettings(context.Background(), root, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://different"}); err == nil {
+	if err := InitRepositoryWithSettings(context.Background(), root, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://different"}); err == nil {
 		t.Fatal("restart silently accepted a settings mismatch")
 	}
 }
@@ -397,7 +397,7 @@ func TestInitRepositoryRejectsObjectsWithoutMetadataWithoutMutation(t *testing.T
 
 func TestInitRepositoryRejectsMetadataWithoutSettingsWithoutMutation(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "repo")
-	if err := InitRepositoryWithSettings(context.Background(), root, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://original"}); err != nil {
+	if err := InitRepositoryWithSettings(context.Background(), root, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://original"}); err != nil {
 		t.Fatal(err)
 	}
 	metadata := filepath.Join(root, "metadata.sqlite")

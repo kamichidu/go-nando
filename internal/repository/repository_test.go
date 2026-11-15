@@ -234,7 +234,7 @@ func TestGCLeavesUnreferencedGCSReplicaUntouched(t *testing.T) {
 			t.Errorf("close coordinator: %v", err)
 		}
 	})
-	settings := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://unit-test"}
+	settings := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://unit-test"}
 	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, remoteObjectStore, hasher, coordinator, settings)
 	deleted, err := repo.GC(ctx)
 	if err != nil || deleted != 0 {
@@ -284,7 +284,7 @@ func TestGCSOrphanRecoveryRestoresRecyclebinEntryIdempotently(t *testing.T) {
 	}
 	sum := md5.Sum([]byte("abc"))
 	remote := &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: 3, MD5: sum[:]}}, stored: map[content.ID][]byte{id: []byte("abc")}}
-	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://test"})
+	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://test"})
 	if recovered, err := repo.RestoreRemoteOrphans(ctx); err != nil || recovered != 1 {
 		t.Fatalf("recovered=%d err=%v", recovered, err)
 	}
@@ -326,7 +326,7 @@ func TestGCSOrphanRecoveryPreservesConflictingRecyclebinPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: 3}}}, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://test"})
+	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: 3}}}, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://test"})
 	if err := repo.Mkdir(ctx, "/recyclebin", 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +384,7 @@ func TestGCSOrphanRecoveryRequiresMD5AndContinuesValidObjects(t *testing.T) {
 		{ID: missingID, Size: 5},
 		{ID: validID, Size: 3, MD5: validMD5[:]},
 	}}
-	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://test"})
+	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://test"})
 	if recovered, err := repo.RestoreRemoteOrphans(ctx); err == nil || recovered != 1 || !strings.Contains(err.Error(), "valid 16-byte MD5") {
 		t.Fatalf("recovery count=%d err=%v, want one recovery and actionable MD5 error", recovered, err)
 	}
@@ -418,8 +418,8 @@ func TestGCSOrphanRecoverySerializesWithPutAndRechecksReferences(t *testing.T) {
 	id := hasherID(t, hasher, []byte("racing content"))
 	md5sum := md5.Sum([]byte("racing content"))
 	remote := &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: int64(len("racing content")), MD5: md5sum[:]}}}
-	recoveryRepo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://test"})
-	putRepo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://test"})
+	recoveryRepo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://test"})
+	putRepo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(openInitializedMetadataStore(t, filepath.Join(root, "metadata.sqlite"), ctx)), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://test"})
 	file := filepath.Join(root, "input")
 	if err := os.WriteFile(file, []byte("racing content"), 0o600); err != nil {
 		t.Fatal(err)
@@ -475,7 +475,7 @@ func TestGCSOrphanRecoveryFailureCanBeRetried(t *testing.T) {
 	remote := &fakeRemoteObjectStore{listed: []objectstore.RemoteObjectInfo{{ID: id, Size: 3, MD5: validMD5[:]}}}
 	base := metadata.NewValidatingStore(metaStore)
 	failing := &failOnceCreateStore{MetadataStore: base}
-	repo := repository.NewRepositoryWithRemoteObjectStore(failing, objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://test"})
+	repo := repository.NewRepositoryWithRemoteObjectStore(failing, objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://test"})
 	if recovered, err := repo.RestoreRemoteOrphans(ctx); err == nil || recovered != 0 {
 		t.Fatalf("first recovery count=%d err=%v", recovered, err)
 	}
@@ -531,7 +531,7 @@ func TestGCSModePutAtomicallyEnqueuesContentID(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	settings := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://test-bucket"}
+	settings := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://test-bucket"}
 	remote := &fakeRemoteObjectStore{fail: true}
 	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(store), objects, remote, hasher, coordinator, settings)
 	source := filepath.Join(root, "input")
@@ -626,7 +626,7 @@ func TestGCSModePutUsesConfiguredLiteralPrefixExactlyOnce(t *testing.T) {
 			}
 		})
 		remote := &fakeRemoteObjectStore{}
-		repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: test.uri})
+		repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: test.uri})
 		source := filepath.Join(root, "input")
 		if err := os.WriteFile(source, []byte("prefix integration"), 0o600); err != nil {
 			t.Fatal(err)
@@ -693,7 +693,7 @@ func TestGCSReadThroughPublishesOnlyHashVerifiedLocalObject(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	settings := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://bucket"}
+	settings := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://bucket"}
 	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(metaStore), objects, remote, hasher, coordinator, settings)
 	var out strings.Builder
 	if err := repo.Cat(ctx, "/file", &out); err != nil || out.String() != "read-through bytes" {
@@ -755,7 +755,7 @@ func TestCapacityGCOnlyEvictsConfirmedReferencedLocalCache(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	settings := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://bucket", MaxLocalBytes: 1}
+	settings := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://bucket", MaxLocalBytes: 1}
 	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(store), objects, remote, hasher, coordinator, settings)
 	deleted, err := repo.CapacityGC(ctx)
 	if err != nil || deleted != 1 {
@@ -809,7 +809,7 @@ func TestCapacityGCPreservesCacheWhenGCSMD5IsMissingOrDifferent(t *testing.T) {
 				}
 			})
 			remote := &fakeRemoteObjectStore{stored: map[content.ID][]byte{id: data}, attrsMD5: tc.remoteMD5}
-			settings := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://bucket", MaxLocalBytes: 1}
+			settings := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://bucket", MaxLocalBytes: 1}
 			repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(store), objects, remote, hasher, coordinator, settings)
 			deleted, err := repo.CapacityGC(ctx)
 			if err != nil {
@@ -844,7 +844,7 @@ func TestCapacityGCPreservesUntransferredContent(t *testing.T) {
 		}
 	})
 	remote := &fakeRemoteObjectStore{}
-	settings := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteURI: "gs://bucket", MaxLocalBytes: 1}
+	settings := repository.Settings{DeliveryMode: repository.DeliveryModeRemote, RemoteBackend: "gcs", RemoteURI: "gs://bucket", MaxLocalBytes: 1}
 	repo := repository.NewRepositoryWithRemoteObjectStore(metadata.NewValidatingStore(store), objects, remote, hasher, coordinator, settings)
 	source := filepath.Join(root, "source")
 	if err := os.WriteFile(source, []byte("not transferred"), 0o600); err != nil {

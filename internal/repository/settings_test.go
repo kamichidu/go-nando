@@ -33,6 +33,8 @@ func TestSettingsReadCanonicalRepositoryJSON(t *testing.T) {
 		`{"delivery_mode":"gcs","gcs_bucket":"archive"}`,
 		`{"delivery_mode":"remote","gcs_bucket":"archive"}`,
 		`{"delivery_mode":"unsupported"}`,
+		`{"delivery_mode":"remote","remote_uri":"gs://archive"}`,
+		`{"delivery_mode":"remote","remote_backend":"","remote_uri":"gs://archive"}`,
 		`{"delivery_mode":"remote","remote_backend":"other","remote_uri":"gs://archive"}`,
 		`{"delivery_mode":"remote","remote_backend":"s3","remote_uri":"gs://archive"}`,
 		`{"delivery_mode":"remote","remote_uri":"gs://archive","max_local_bytes":-1}`,

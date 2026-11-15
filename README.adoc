@@ -219,7 +219,9 @@ asynchronously to exactly one selected backend. GCS and the S3-compatible
 adapter are supported. Multiple backends, fanout, failover, and tiering are
 unsupported.
 
-GCS uses `delivery_mode: "remote"`, `remote_backend: "gcs"`, and a
+Remote mode requires an explicit `remote_backend`; omitting it or setting it
+to an empty string is a configuration error. GCS uses
+`delivery_mode: "remote"`, `remote_backend: "gcs"`, and a
 `gs://bucket[/prefix]` URI. S3-compatible storage uses
 `remote_backend: "s3"` and an `s3://bucket[/prefix]` URI. For AWS S3, the
 AWS credential chain supplies credentials and the SDK selects the regional

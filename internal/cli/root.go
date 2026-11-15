@@ -385,9 +385,6 @@ func NewAppAtRepository(ctx context.Context, repoDir string) (*app.App, string, 
 			return nil, "", nil, errors.Join(err, metaStore.Close())
 		}
 		backend := repoSettings.RemoteBackend
-		if backend == "" {
-			backend = "gcs"
-		}
 		switch backend {
 		case "gcs":
 			if err := cfg.ValidateRemoteBackend(backend); err != nil {
