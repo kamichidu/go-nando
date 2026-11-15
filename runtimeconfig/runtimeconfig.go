@@ -42,11 +42,15 @@ type DaemonConfig struct {
 	TLSKey        string `toml:"tls_key"`
 }
 type RemoteConfig struct {
-	URI                  string `toml:"remote_uri"`
-	SyncIdleInterval     string `toml:"sync_idle_interval"`
-	SyncPeriodicInterval string `toml:"sync_periodic_interval"`
-	MaxDeliveryDelay     string `toml:"max_delivery_delay"`
-	SyncParallelism      int    `toml:"sync_parallelism"`
+	S3                   S3Config `toml:"s3"`
+	SyncIdleInterval     string   `toml:"sync_idle_interval"`
+	SyncPeriodicInterval string   `toml:"sync_periodic_interval"`
+	MaxDeliveryDelay     string   `toml:"max_delivery_delay"`
+	SyncParallelism      int      `toml:"sync_parallelism"`
+}
+type S3Config struct {
+	Endpoint string `toml:"endpoint"`
+	Region   string `toml:"region"`
 }
 type RecoveryConfig struct {
 	Directory string `toml:"directory"`
@@ -71,6 +75,15 @@ type ResolvedPaths struct {
 
 func (c Config) HasRemoteSchedulerSettings() bool {
 	return c.Remote.SyncIdleInterval != "" || c.Remote.SyncPeriodicInterval != "" || c.Remote.MaxDeliveryDelay != "" || c.Remote.SyncParallelism != 0
+}
+func (c Config) HasS3Settings() bool {
+	return c.Remote.S3.Endpoint != "" || c.Remote.S3.Region != ""
+}
+func (c Config) ValidateRemoteBackend(backend string) error {
+	if backend == "gcs" && c.HasS3Settings() {
+		return errors.New("remote.s3 settings cannot be used with GCS backend")
+	}
+	return nil
 }
 func (c Config) RemoteRecoveryDirectory() string {
 	if c.Recovery.Directory == "" {

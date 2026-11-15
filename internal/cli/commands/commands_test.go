@@ -257,6 +257,21 @@ func TestInitAcceptsCurrentRemoteFlags(t *testing.T) {
 	}
 }
 
+func TestInitRejectsRemoteBackendInLocalMode(t *testing.T) {
+	repoDir := filepath.Join(t.TempDir(), "repository")
+	var stdout, stderr bytes.Buffer
+	args := []string{"--repository", repoDir, "init", "--delivery-mode", "local", "--remote-backend", "s3"}
+	if code := executeCLI(context.Background(), &stdout, &stderr, args); code == 0 {
+		t.Fatalf("contradictory init flags accepted: args=%v", args)
+	}
+	if !strings.Contains(stderr.String(), "local delivery mode must not configure remote object storage") {
+		t.Fatalf("unexpected validation error: %q", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "metadata.sqlite")); !os.IsNotExist(err) {
+		t.Fatalf("rejected CLI input initialized repository: %v", err)
+	}
+}
+
 func TestInitRejectsDeprecatedGCSCLIValues(t *testing.T) {
 	for _, args := range [][]string{{"--delivery-mode", "gcs"}, {"--remote-bucket", "bucket"}, {"--gcs-bucket", "bucket"}} {
 		repoDir := filepath.Join(t.TempDir(), "repository")

@@ -26,8 +26,8 @@ func (c *InitCommand) Name() string {
 // RegisterFlags binds repository-owned delivery settings for a new repository.
 func (c *InitCommand) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) context.Context {
 	fs.StringVar(&c.deliveryMode, "delivery-mode", "local", "repository delivery mode (local or remote)")
-	fs.StringVar(&c.remoteBackend, "remote-backend", "gcs", "selected remote object storage backend (currently: gcs)")
-	fs.StringVar(&c.remoteURI, "remote-uri", "", "GCS URI (gs://bucket[/prefix]) for the selected remote object storage backend")
+	fs.StringVar(&c.remoteBackend, "remote-backend", "", "selected remote object storage backend (gcs or s3)")
+	fs.StringVar(&c.remoteURI, "remote-uri", "", "remote URI (gs://bucket[/prefix] or s3://bucket[/prefix])")
 	fs.Int64Var(&c.maxLocalBytes, "max-local-bytes", 0, "maximum Local object bytes before Capacity GC (0 disables capacity eviction)")
 	return ctx
 }
@@ -46,9 +46,6 @@ func (c *InitCommand) Run(ctx context.Context, args []string) error {
 	settings.DeliveryMode = repository.DeliveryMode(c.deliveryMode)
 	settings.RemoteBackend = c.remoteBackend
 	settings.RemoteURI = c.remoteURI
-	if settings.DeliveryMode == repository.DeliveryModeLocal {
-		settings.RemoteBackend = ""
-	}
 	settings.MaxLocalBytes = c.maxLocalBytes
 	if err := app.InitRepositoryWithSettings(ctx, repoDir, settings); err != nil {
 		return err

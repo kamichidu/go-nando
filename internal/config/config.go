@@ -8,6 +8,7 @@ type Config = runtimeconfig.Config
 type RepositoryConfig = runtimeconfig.RepositoryConfig
 type LoggingConfig = runtimeconfig.LoggingConfig
 type RemoteConfig = runtimeconfig.RemoteConfig
+type S3Config = runtimeconfig.S3Config
 type DaemonConfig = runtimeconfig.DaemonConfig
 type RecoveryConfig = runtimeconfig.RecoveryConfig
 type FuseConfig = runtimeconfig.FuseConfig

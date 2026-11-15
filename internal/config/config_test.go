@@ -79,7 +79,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 			t.Errorf("sample is missing active config key %q", key)
 		}
 	}
-	for _, key := range []string{"path", "verbose", "listen", "token", "token_from_file", "token_from_env", "ca_cert", "tls_cert", "tls_key", "remote_uri", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory", "mountpoint"} {
+	for _, key := range []string{"path", "verbose", "listen", "token", "token_from_file", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "endpoint", "region", "directory", "mountpoint"} {
 		if !strings.Contains(string(sampleBytes), "# "+key+" =") {
 			t.Errorf("sample is missing commented supported config key %q", key)
 		}
@@ -91,7 +91,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	// mutually exclusive, so choose token_from_env and leave the other examples
 	// commented. This checks the documented options decode in their shown tables.
 	enabledSample := string(sampleBytes)
-	for _, key := range []string{"path", "verbose", "listen", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "directory", "mountpoint"} {
+	for _, key := range []string{"path", "verbose", "listen", "token_from_env", "ca_cert", "tls_cert", "tls_key", "sync_idle_interval", "sync_periodic_interval", "max_delivery_delay", "sync_parallelism", "endpoint", "region", "directory", "mountpoint"} {
 		enabledSample = strings.ReplaceAll(enabledSample, "# "+key+" =", key+" =")
 	}
 	enabledPath := filepath.Join(t.TempDir(), "enabled-config.toml")
@@ -102,7 +102,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sample options enabled in their documented sections: %v", err)
 	}
-	if enabled.Repository.Path != "/home/alex/nando-data" || enabled.Logging.Verbose || enabled.Daemon.Listen != "tcp://127.0.0.1:7443" || enabled.Daemon.TokenFromEnv != "NANDO_DAEMON_TOKEN" || enabled.Daemon.CACert != "/etc/nando/ca.pem" || enabled.Daemon.TLSCert != "/etc/nando/server.pem" || enabled.Daemon.TLSKey != "/etc/nando/server-key.pem" || enabled.Remote.SyncIdleInterval != "30s" || enabled.Remote.SyncPeriodicInterval != "5m" || enabled.Remote.MaxDeliveryDelay != "30m" || enabled.Remote.SyncParallelism != 2 || enabled.Recovery.Directory != "/recyclebin" {
+	if enabled.Repository.Path != "/home/alex/nando-data" || enabled.Logging.Verbose || enabled.Daemon.Listen != "tcp://127.0.0.1:7443" || enabled.Daemon.TokenFromEnv != "NANDO_DAEMON_TOKEN" || enabled.Daemon.CACert != "/etc/nando/ca.pem" || enabled.Daemon.TLSCert != "/etc/nando/server.pem" || enabled.Daemon.TLSKey != "/etc/nando/server-key.pem" || enabled.Remote.SyncIdleInterval != "30s" || enabled.Remote.SyncPeriodicInterval != "5m" || enabled.Remote.MaxDeliveryDelay != "30m" || enabled.Remote.SyncParallelism != 2 || enabled.Remote.S3.Endpoint != "https://s3.us-west-1.wasabisys.com" || enabled.Remote.S3.Region != "us-west-1" || enabled.Recovery.Directory != "/recyclebin" {
 		t.Fatalf("enabled sample options decoded into unexpected fields: %+v", enabled)
 	}
 	if _, err := enabled.RemoteSchedulerPolicy(); err != nil {
@@ -113,7 +113,7 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 			t.Errorf("remote key %q must appear inside [remote] before [daemon]", key)
 		}
 	}
-	for key, section := range map[string]string{"path": "[repository]", "verbose": "[logging]", "listen": "[daemon]", "directory": "[recovery]"} {
+	for key, section := range map[string]string{"path": "[repository]", "verbose": "[logging]", "listen": "[daemon]", "directory": "[recovery]", "endpoint": "[remote.s3]", "region": "[remote.s3]"} {
 		if strings.Index(string(sampleBytes), "# "+key+" =") < strings.Index(string(sampleBytes), section) {
 			t.Errorf("config key %q must appear inside %s", key, section)
 		}
@@ -129,20 +129,6 @@ func TestLoadConfigSampleHasEffectiveSupportedDefaults(t *testing.T) {
 	}
 	if cfg.Repository.Path != "" || cfg.Daemon.Listen != "" || resolved.DataDir == filepath.Dir(resolved.ConfigFile) {
 		t.Fatalf("sample does not select active default data/transport paths: cfg=%+v paths=%+v", cfg, resolved)
-	}
-}
-
-func TestLoadConfigRemoteURIPreservesLiteralValue(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte("[remote]\nremote_uri = \"gs://bucket/hoge/\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := LoadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Remote.URI != "gs://bucket/hoge/" {
-		t.Fatalf("remote URI=%q", cfg.Remote.URI)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/kamichidu/go-nando/internal/objectstore/gcs"
+	s3store "github.com/kamichidu/go-nando/internal/objectstore/s3"
 )
 
 // DeliveryMode selects the repository's durable delivery contract.
@@ -49,13 +50,22 @@ func (s Settings) Validate() error {
 			return fmt.Errorf("local delivery mode must not configure remote object storage")
 		}
 	case DeliveryModeRemote:
+		if s.RemoteBackend == "" {
+			return fmt.Errorf("remote delivery mode requires a remote backend")
+		}
 		if s.RemoteURI == "" {
 			return fmt.Errorf("remote delivery mode requires a remote URI")
 		}
-		if _, _, err := gcs.ParseRemoteURI(s.RemoteURI); err != nil {
-			return fmt.Errorf("invalid remote URI: %w", err)
-		}
-		if s.RemoteBackend != "" && s.RemoteBackend != "gcs" {
+		switch s.RemoteBackend {
+		case "gcs":
+			if _, _, err := gcs.ParseRemoteURI(s.RemoteURI); err != nil {
+				return fmt.Errorf("invalid remote URI: %w", err)
+			}
+		case "s3":
+			if _, _, err := s3store.ParseRemoteURI(s.RemoteURI); err != nil {
+				return fmt.Errorf("invalid remote URI: %w", err)
+			}
+		default:
 			return fmt.Errorf("unsupported remote object storage backend %q", s.RemoteBackend)
 		}
 	default:
