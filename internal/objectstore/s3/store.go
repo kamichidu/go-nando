@@ -53,11 +53,11 @@ func NewClientStore(ctx context.Context, remoteURI string, settings ClientConfig
 	if err != nil {
 		return nil, nil, err
 	}
-	region := settings.Region
-	if region == "" {
-		region = "us-east-1"
+	loadOptions := []func(*config.LoadOptions) error{}
+	if settings.Region != "" {
+		loadOptions = append(loadOptions, config.WithRegion(settings.Region))
 	}
-	awsConfig, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	awsConfig, err := config.LoadDefaultConfig(ctx, loadOptions...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load S3 credentials: %w", err)
 	}

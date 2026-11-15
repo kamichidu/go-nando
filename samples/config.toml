@@ -28,8 +28,9 @@
 # sync_parallelism = 2
 
 # Optional S3-compatible connection settings. Used only by repositories whose
-# persisted remote_backend is "s3". AWS S3 can omit endpoint; region defaults
-# to us-east-1. AWS SDK v2 Default Credential Chain supplies credentials.
+# persisted remote_backend is "s3". AWS S3 can omit endpoint and region; when
+# region is omitted, AWS SDK v2 resolves it from its standard configuration.
+# AWS SDK v2 Default Credential Chain supplies credentials.
 # Optional S3-specific values follow in [remote.s3].
 [remote.s3]
 # endpoint = "https://s3.us-west-1.wasabisys.com"

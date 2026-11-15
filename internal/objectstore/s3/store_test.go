@@ -18,6 +18,40 @@ import (
 	"github.com/kamichidu/go-nando/internal/content"
 )
 
+func TestNewClientStoreRegionResolution(t *testing.T) {
+	t.Setenv("AWS_REGION", "eu-central-1")
+	t.Setenv("AWS_CONFIG_FILE", "/dev/null")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
+
+	t.Run("uses SDK region when unset", func(t *testing.T) {
+		store, _, err := NewClientStore(context.Background(), "s3://bucket/", ClientConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, ok := store.client.(*awsS3.Client)
+		if !ok {
+			t.Fatalf("client type=%T, want *s3.Client", store.client)
+		}
+		if got := client.Options().Region; got != "eu-central-1" {
+			t.Fatalf("region=%q, want AWS_REGION value", got)
+		}
+	})
+
+	t.Run("explicit region takes precedence", func(t *testing.T) {
+		store, _, err := NewClientStore(context.Background(), "s3://bucket/", ClientConfig{Region: "ap-southeast-2"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, ok := store.client.(*awsS3.Client)
+		if !ok {
+			t.Fatalf("client type=%T, want *s3.Client", store.client)
+		}
+		if got := client.Options().Region; got != "ap-southeast-2" {
+			t.Fatalf("region=%q, want explicit region", got)
+		}
+	})
+}
+
 func TestUploadConvergesAfterPersistedObjectLosesAcknowledgement(t *testing.T) {
 	ctx := context.Background()
 	payload := []byte("persisted before the response was lost")
