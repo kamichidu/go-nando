@@ -128,19 +128,18 @@ jobs:
             build windows "$arch" nando-webdav ./cmd/nando-webdav adapters/webdav
             archive windows "$arch" nando.exe nando-webdav.exe
           done
-          mkdir -p .build/deb
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o .build/deb/nando ./cmd/nando
-          (cd adapters/fuse && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/.build/deb/nando-fuse" ./cmd/nando-fuse)
-          (cd adapters/webdav && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/.build/deb/nando-webdav" ./cmd/nando-webdav)
-          sed \
-            -e "s|\${VERSION}|$VERSION|g" \
-            -e "s|\${BUILD_DIR}|$GITHUB_WORKSPACE/.build/deb|g" \
-            -e 's|\${NFPM_ARCH}|amd64|g' \
-            packaging/nfpm.yaml > .build/deb/nfpm.yaml
-          nfpm package --config .build/deb/nfpm.yaml --packager deb --target "$GITHUB_WORKSPACE/dist"
-          PACKAGE=$(find dist -maxdepth 1 -type f -name '*.deb' -print -quit)
-          test -n "$PACKAGE"
-          dpkg-deb --contents "$PACKAGE"
+          DEB_BUILD_DIR="$GITHUB_WORKSPACE/.build/deb-release"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 NFPM_ARCH=amd64 \
+            VERSION="$VERSION" BUILD_DIR="$DEB_BUILD_DIR" packaging/build-deb.sh
+          mapfile -t PACKAGES < <(find "$DEB_BUILD_DIR" -maxdepth 1 -type f -name 'go-nando_*.deb' -print)
+          if [[ "${#PACKAGES[@]}" -ne 1 ]]; then
+            echo "Expected exactly one Debian package in $DEB_BUILD_DIR, found ${#PACKAGES[@]}." >&2
+            exit 1
+          fi
+          PACKAGE="${PACKAGES[0]}"
+          VERSION="$VERSION" NFPM_ARCH=amd64 packaging/check-deb.sh "$PACKAGE"
+          python3 packaging/system_service_smoke.py "$PACKAGE"
+          mv "$PACKAGE" dist/
           (cd dist && sha256sum -- * > SHA256SUMS)
           cat dist/SHA256SUMS
       - uses: actions/upload-artifact@v4
