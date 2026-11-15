@@ -57,7 +57,7 @@ flowchart LR
     REMOTE -.->|read-through on Local cache miss| REPO
 
     classDef config fill:#fff,stroke:#777,stroke-dasharray:4 3,color:#333
-    URI["remote_uri: gs://bucket[/prefix] or s3://bucket[/prefix]\nliteral prefix + objects/{content_id}"]:::config
+    URI["repository.json remote_uri: gs://bucket[/prefix] or s3://bucket[/prefix]\nliteral prefix + objects/{content_id}"]:::config
     URI -. config .-> REMOTE
 ....
 
@@ -227,9 +227,8 @@ endpoint by default. For Wasabi or another compatible endpoint, set
 `[remote.s3].endpoint` and `[remote.s3].region`. Credentials come from the AWS
 SDK v2 Default Credential Chain, including environment variables, shared
 profiles, web identity, or IAM roles; credentials cannot be set in TOML. S3
-connection settings are rejected when the repository selects GCS. The optional
-TOML `[remote].remote_uri`
-must match the repository URI when set. Prefix bytes are
+connection settings are rejected when the repository selects GCS. The
+repository-owned `remote_uri` is the sole source of the remote URI. Prefix bytes are
 literal object-key prefixes: a prefix ending in `/` is distinct from one that
 does not, and no separator is inserted automatically. The current content key suffix is
 `objects/{content_id}`; thus `gs://bucket/hoge` yields

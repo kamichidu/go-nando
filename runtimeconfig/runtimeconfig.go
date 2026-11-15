@@ -42,7 +42,6 @@ type DaemonConfig struct {
 	TLSKey        string `toml:"tls_key"`
 }
 type RemoteConfig struct {
-	URI                  string   `toml:"remote_uri"`
 	S3                   S3Config `toml:"s3"`
 	SyncIdleInterval     string   `toml:"sync_idle_interval"`
 	SyncPeriodicInterval string   `toml:"sync_periodic_interval"`

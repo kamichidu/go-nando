@@ -8,7 +8,7 @@ use them without a home directory.
 
 Copy the complete, commented `samples/config.toml` to the default config path to
 begin. It documents all supported per-user settings, including optional TCP/TLS
-transport, optional `[remote].remote_uri`, and remote scheduler policy. Its empty `[repository].path` setting
+transport, remote scheduler policy. Its empty `[repository].path` setting
 selects the default local repository data directory. Set `[repository].path` to
 select another local repository. `[recovery].directory` selects a logical
 directory inside nando and defaults to `/recyclebin`; it is independent of the
@@ -82,8 +82,7 @@ GCS selection is persisted with `nando init --delivery-mode remote
 --remote-backend gcs --remote-uri gs://bucket[/prefix]`. S3-compatible
 selection uses `--remote-backend s3 --remote-uri s3://bucket[/prefix]`. These
 values are persisted in repository-owned `repository.json`.
-The optional `[remote].remote_uri` TOML value must match that persisted URI
-when present. S3-compatible connection configuration uses `[remote.s3].endpoint`
+S3-compatible connection configuration uses `[remote.s3].endpoint`
 and `[remote.s3].region`; omit the endpoint for AWS S3. S3 credentials always
 come from AWS SDK v2 Default Credential Chain (environment, shared profile,
 web identity, or IAM role). TOML credential fields are unsupported. GCS uses
@@ -114,8 +113,9 @@ endpoint = "https://s3.us-west-1.wasabisys.com"
 region = "us-west-1"
 ----
 
-Only `endpoint` and `region` are accepted in `[remote.s3]`. The common scheduler
-and optional compatibility `remote_uri` remain in `[remote]`.
+Only `endpoint` and `region` are accepted in `[remote.s3]`. The `[remote]`
+table contains only common scheduler settings. The repository-owned
+`repository.json` value is the sole source for the remote URI.
 
 These values are examples, not operational defaults. Select them for the
 deployment. Intervals must be positive Go durations and parallelism must be

@@ -384,9 +384,6 @@ func NewAppAtRepository(ctx context.Context, repoDir string) (*app.App, string, 
 		if err != nil {
 			return nil, "", nil, errors.Join(err, metaStore.Close())
 		}
-		if cfg.Remote.URI != "" && cfg.Remote.URI != repoSettings.RemoteURI {
-			return nil, "", nil, errors.Join(fmt.Errorf("configured remote_uri %q does not match repository remote_uri", cfg.Remote.URI), metaStore.Close())
-		}
 		backend := repoSettings.RemoteBackend
 		if backend == "" {
 			backend = "gcs"

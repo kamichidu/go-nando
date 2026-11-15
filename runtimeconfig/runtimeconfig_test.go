@@ -87,7 +87,7 @@ func TestLoadConfigReadsFUSEMountOptions(t *testing.T) {
 
 func TestLoadConfigReadsS3RemoteSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	contents := "[remote]\nremote_uri = \"s3://archive/prefix/\"\n[remote.s3]\nendpoint = \"http://127.0.0.1:9000\"\nregion = \"us-east-1\"\n"
+	contents := "[remote]\n[remote.s3]\nendpoint = \"http://127.0.0.1:9000\"\nregion = \"us-east-1\"\n"
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -95,8 +95,18 @@ func TestLoadConfigReadsS3RemoteSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Remote.URI != "s3://archive/prefix/" || cfg.Remote.S3.Endpoint != "http://127.0.0.1:9000" || cfg.Remote.S3.Region != "us-east-1" {
+	if cfg.Remote.S3.Endpoint != "http://127.0.0.1:9000" || cfg.Remote.S3.Region != "us-east-1" {
 		t.Fatalf("S3 remote settings=%+v", cfg.Remote)
+	}
+}
+
+func TestLoadConfigRejectsRemoteURI(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[remote]\nremote_uri = \"gs://bucket/prefix\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("unsupported [remote].remote_uri was accepted")
 	}
 }
 
