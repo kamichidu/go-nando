@@ -46,9 +46,6 @@ func (c *InitCommand) Run(ctx context.Context, args []string) error {
 	settings.DeliveryMode = repository.DeliveryMode(c.deliveryMode)
 	settings.RemoteBackend = c.remoteBackend
 	settings.RemoteURI = c.remoteURI
-	if settings.DeliveryMode == repository.DeliveryModeLocal {
-		settings.RemoteBackend = ""
-	}
 	settings.MaxLocalBytes = c.maxLocalBytes
 	if err := app.InitRepositoryWithSettings(ctx, repoDir, settings); err != nil {
 		return err
