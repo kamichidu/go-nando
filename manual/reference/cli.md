@@ -17,4 +17,4 @@ Put global options before a subcommand. Run `nando --help` or a command's `--hel
 | `maintenance --interval DURATION` | Run a periodic maintenance client |
 | `fuse`, `webdav` | Start the separate adapter executable |
 
-Select remote storage with `init --delivery-mode remote --remote-backend gcs|s3 --remote-uri URI`. Set the Local capacity limit with `--max-local-bytes`. Use command help for the complete implemented option set.
+Select remote storage with `init --delivery-mode remote --remote-backend gcs|s3 --remote-uri URI`. For Remote-mode repositories, set the Local cache limit at initialization with `--max-local-bytes`; it does not evict Local-mode repository content. Use command help for the complete implemented option set.

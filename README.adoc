@@ -87,7 +87,7 @@ Each release lists supported operating systems and architectures. Linux amd64
 releases include a Debian package; archives are available for Linux amd64/arm64,
 macOS amd64/arm64, and Windows amd64/arm64. See
 link:packaging/README.md[the package and service guide] for Debian package and
-systemd user service details.
+system and user systemd service details.
 
 To build from source, clone the repository. The committed `go.work` includes
 the root, FUSE, and WebDAV modules. From the repository root, install all three
@@ -124,32 +124,36 @@ tests.
 
 == Quick Start
 
-Initialize a local repository:
+Initialize the repository using the current account's XDG-style data default
+(`${XDG_DATA_HOME:-~/.local/share}/nando`):
 
 [source,bash]
 ----
-nando --repository "$HOME/nando-data" init
+nando init
 ----
 
-In one terminal, start its daemon:
-
-[source,bash]
-----
-nando --repository "$HOME/nando-data" daemon
-----
-
-In another terminal, import a file and browse or export it:
+In one terminal, start the daemon for that repository:
 
 [source,bash]
 ----
-nando --repository "$HOME/nando-data" put ./photo.jpg /photos/photo.jpg
-nando --repository "$HOME/nando-data" ls /photos
-nando --repository "$HOME/nando-data" get /photos/photo.jpg ./photo-copy.jpg
+nando daemon
 ----
 
-The daemon must remain running while clients use the repository. The examples
-choose a repository path explicitly so every command addresses the same
-repository.
+In another terminal, use the CLI to import, browse, or export a file:
+
+[source,bash]
+----
+nando put ./photo.jpg /photos/photo.jpg
+nando ls /photos
+nando get /photos/photo.jpg ./photo-copy.jpg
+----
+
+With no `--repository` or configured `[repository].path`, `init`, `daemon`, and
+the CLI resolve the same per-user XDG repository and repository-derived local
+Unix socket. The CLI commands connect to the running daemon; `init` creates
+the repository directly. Keep the daemon running while clients use it. For a
+different repository, select the same path for initialization, daemon, and
+client commands.
 
 == Configuration
 
@@ -242,8 +246,10 @@ data. TOML scheduler settings are supported only under `[remote]` with the four
 keys shown above; other spellings are rejected. Reinitializing an existing
 repository does not change its selected backend or remote URI.
 
-The daemon runs remote delivery processing, Capacity GC, and Orphan/Invalid GC
-as independent tasks. Remote delivery queue rows retain durable enqueue
+When the daemon has a complete scheduler policy, it runs remote delivery,
+Capacity GC, and Orphan/Invalid GC as independent tasks. Remote mode requires
+all four scheduler values; Local-mode scheduled GC runs only when those values
+are explicitly configured. Remote delivery queue rows retain durable enqueue
 timestamps so maximum-delay eligibility survives daemon restart. See the
 link:samples/config.toml[configuration example] and
 link:packaging/README.md[Debian service guide] for setup details.

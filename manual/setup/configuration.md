@@ -38,26 +38,30 @@ max_delivery_delay = "30m"
 sync_parallelism = 2
 ```
 
-Configure credentials for the account that runs the daemon, then initialize with the backend and URI as shown in the provider-specific [GCS](./gcs) or [S3 / Wasabi](./s3) procedure. Start the daemon with that config and use `nando doctor` with the same account and config to confirm it responds. There is no command to report when delivery has drained; a successful write is not confirmation of remote durability.
+Configure credentials for the account that runs the daemon, then initialize with the backend and URI as shown in the provider-specific [GCS](./gcs) or [S3 / Wasabi](./s3) procedure. Start the daemon with that config. `nando doctor` can confirm that the selected daemon responds and its repository integrity check passes; it does not report delivery progress. There is no command to report when the remote delivery queue has drained, and a successful write does not confirm remote durability.
 
-## Set a Local capacity limit
+## Set a Remote repository's Local capacity limit
 
-Set the limit at repository initialization with `--max-local-bytes`; `0` disables capacity eviction. This is a repository setting, not a TOML setting. For example:
+`--max-local-bytes` limits Local object storage for a Remote-mode repository; capacity GC can evict content after remote delivery. It does not limit a Local-mode repository, where local objects are the durable authority. Set it when initializing the repository; `0` disables capacity eviction. For example:
 
 ```sh
-nando init --max-local-bytes 10737418240
+nando init \
+  --delivery-mode remote \
+  --remote-backend gcs \
+  --remote-uri gs://my-bucket/nando/ \
+  --max-local-bytes 10737418240
 ```
 
-Initialize the repository with that option; it is not changed by a TOML setting. Use `nando doctor` to confirm access to the initialized repository. It does not report the configured limit. Review [garbage collection](../operations/gc) before relying on capacity management.
+Configure the remote scheduler and credentials as described above before starting the daemon. There is no CLI command to display or verify the stored capacity limit. `nando doctor` checks repository integrity but does not report this setting. Review [garbage collection](../operations/gc) before relying on capacity management.
 
 ## Access files through FUSE or WebDAV
 
-Install the relevant adapter, initialize the repository, and start its daemon. Then launch the adapter as a separate process using the same repository selection and daemon endpoint. FUSE requires a mountpoint and host FUSE support; WebDAV currently listens on loopback HTTP and has no authentication. Use the [FUSE](../use/fuse) or [WebDAV](../use/webdav) procedure to start and stop each entry point. See [FUSE](../use/fuse), [WebDAV](../use/webdav), and [systemd service operation](./systemd).
+Install the relevant adapter, initialize the repository, and start its daemon. Then launch the adapter as a separate process using the same repository selection and daemon endpoint. FUSE requires a mountpoint and host FUSE support; WebDAV currently listens on loopback HTTP and has no authentication. Follow the [FUSE](../use/fuse) or [WebDAV](../use/webdav) procedure to start and stop each entry point; [systemd service operation](./systemd) explains the service account boundary.
 
 ## Run more than one instance
 
 The current way to select another instance is to give it a distinct config file and repository path, then pass `--config` to every process that uses it. For system services, the instance name selects `/etc/nando/<instance>.toml`; see [systemd setup](./systemd). This selects a particular instance explicitly; nando does not discover a system-wide “standard” repository automatically.
 
-## Confirm the selected repository
+## Check daemon connectivity and repository health
 
-Run `nando doctor` with the same options and operating-system account used by the daemon. For service instances, use the service's config and account, as shown in the [systemd procedure](./systemd). The complete commented example is available at [`samples/config.toml`](https://github.com/kamichidu/go-nando/blob/main/samples/config.toml); the [configuration reference](../reference/configuration) summarizes supported tables.
+Run `nando doctor` with the same options and operating-system account used by the daemon. A successful result means the selected daemon responded and its repository integrity check passed. It does not print the resolved repository path, report the configured Local capacity limit, or show whether remote delivery has drained. For a system service, use the service's config and account as shown in the [systemd procedure](./systemd). The complete commented example is available at [`samples/config.toml`](https://github.com/kamichidu/go-nando/blob/main/samples/config.toml); the [configuration reference](../reference/configuration) summarizes the shared configuration format.
