@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,24 @@ import (
 
 type fixedIDMetadataStore struct {
 	metadata.MetadataStore
+}
+
+type failDeleteMetadataStore struct {
+	metadata.MetadataStore
+	failID metadata.EntryID
+}
+
+func (s *failDeleteMetadataStore) ListChildren(ctx context.Context, id metadata.EntryID) ([]metadata.Entry, error) {
+	entries, err := s.MetadataStore.ListChildren(ctx, id)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	return entries, err
+}
+
+func (s *failDeleteMetadataStore) Delete(ctx context.Context, id metadata.EntryID) error {
+	if id == s.failID {
+		return errors.New("injected metadata delete failure")
+	}
+	return s.MetadataStore.Delete(ctx, id)
 }
 
 type fakeRemoteObjectStore struct {
@@ -1683,4 +1702,91 @@ func TestRepository(t *testing.T) {
 			t.Errorf("Repository operation scenario trace mismatch!\nActual:\n%s\nExpected:\n%s", actual, expected)
 		}
 	})
+}
+
+func TestRemoveDeletesCollectionsRecursively(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	hasher := content.NewHasher()
+	meta := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(tempDir, "objects"), filepath.Join(tempDir, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := openRepositoryInstance(t, tempDir, meta, objects, hasher)
+	put := func(path, value string) {
+		t.Helper()
+		localFile := filepath.Join(tempDir, strings.ReplaceAll(path, "/", "_"))
+		if err := os.WriteFile(localFile, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.Put(ctx, localFile, path); err != nil {
+			t.Fatalf("Put(%s): %v", path, err)
+		}
+	}
+
+	if err := repo.Mkdir(ctx, "/empty", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Remove(ctx, "/empty"); err != nil {
+		t.Fatalf("remove empty collection: %v", err)
+	}
+	if _, err := repo.Stat(ctx, "/empty"); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("empty collection remains: %v", err)
+	}
+
+	put("/tree/root.txt", "root")
+	put("/tree/branch/leaf.txt", "leaf")
+	if err := repo.Remove(ctx, "/tree"); err != nil {
+		t.Fatalf("remove non-empty collection: %v", err)
+	}
+	for _, path := range []string{"/tree", "/tree/root.txt", "/tree/branch", "/tree/branch/leaf.txt"} {
+		if _, err := repo.Stat(ctx, path); !errors.Is(err, metadata.ErrEntryNotFound) {
+			t.Errorf("%s still resolves after DELETE: %v", path, err)
+		}
+	}
+	if _, err := repo.List(ctx, "/"); err != nil {
+		t.Fatalf("list root after DELETE: %v", err)
+	}
+	if err := repo.Remove(ctx, "/missing"); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("missing target error=%v", err)
+	}
+}
+
+func TestRemoveCollectionReportsPartialFailure(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	hasher := content.NewHasher()
+	meta := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	failingMeta := &failDeleteMetadataStore{MetadataStore: meta}
+	objects, err := local.NewStore(filepath.Join(tempDir, "objects"), filepath.Join(tempDir, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := openRepositoryInstance(t, tempDir, failingMeta, objects, hasher)
+	for _, path := range []string{"/tree/a.txt", "/tree/z.txt"} {
+		localFile := filepath.Join(tempDir, strings.ReplaceAll(path, "/", "_"))
+		if err := os.WriteFile(localFile, []byte(path), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.Put(ctx, localFile, path); err != nil {
+			t.Fatalf("Put(%s): %v", path, err)
+		}
+	}
+	blocked, err := repo.Stat(ctx, "/tree/z.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failingMeta.failID = blocked.ID
+	if err := repo.Remove(ctx, "/tree"); err == nil || !strings.Contains(err.Error(), "injected metadata delete failure") {
+		t.Fatalf("Remove error=%v, want injected partial failure", err)
+	}
+	if _, err := repo.Stat(ctx, "/tree/a.txt"); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Errorf("earlier descendant should have been removed: %v", err)
+	}
+	for _, path := range []string{"/tree", "/tree/z.txt"} {
+		if _, err := repo.Stat(ctx, path); err != nil {
+			t.Errorf("unprocessed namespace %s should remain: %v", path, err)
+		}
+	}
 }

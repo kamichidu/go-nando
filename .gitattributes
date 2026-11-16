@@ -2,3 +2,4 @@
 results/compatibility-2026-11-16/pjdfstest-fuse/*.log whitespace=-blank-at-eol,cr-at-eol
 results/compatibility-2026-11-16/litmus-webdav/debug.log whitespace=-blank-at-eol,cr-at-eol
 results/compatibility-2026-11-16/litmus-isolated-repro/debug.log whitespace=-blank-at-eol,cr-at-eol
+results/pr14-litmus-g7-2026-11-17/evidence/debug.log whitespace=-blank-at-eol,cr-at-eol

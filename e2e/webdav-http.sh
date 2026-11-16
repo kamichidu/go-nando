@@ -83,12 +83,23 @@ request 501 -X UNLOCK -H 'Lock-Token: <opaquelocktoken:unsupported>' "$E2E_WEBDA
 request 501 -X PROPPATCH "$E2E_WEBDAV_URL/moved"
 request 204 -X DELETE "$E2E_WEBDAV_URL/copied"
 request 404 "$E2E_WEBDAV_URL/copied"
+request 201 -X MKCOL "$E2E_WEBDAV_URL/delete-tree"
+request 201 -X MKCOL "$E2E_WEBDAV_URL/delete-tree/nested"
+request 201 -X PUT --data-binary @"$TMP/payload" "$E2E_WEBDAV_URL/delete-tree/root.txt"
+request 201 -X PUT --data-binary @"$TMP/payload" "$E2E_WEBDAV_URL/delete-tree/nested/leaf.txt"
+request 204 -X DELETE "$E2E_WEBDAV_URL/delete-tree"
+request 404 "$E2E_WEBDAV_URL/delete-tree"
+request 404 "$E2E_WEBDAV_URL/delete-tree/root.txt"
+request 404 "$E2E_WEBDAV_URL/delete-tree/nested/leaf.txt"
+request 404 -X PROPFIND -H 'Depth: 1' -H 'Content-Type: application/xml' --data-binary @"$TMP/propfind" "$E2E_WEBDAV_URL/delete-tree/nested"
+request 404 -X DELETE "$E2E_WEBDAV_URL/delete-tree"
+request 201 -X MKCOL "$E2E_WEBDAV_URL/delete-tree"
 echo 'PASS WebDAV curl CRUD, metadata, move/copy, ETag preconditions, unsupported contract boundaries'
 
 RESULTS=${E2E_ARTIFACTS_DIR:-$TMP}/webdav-results.tsv
 record() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" | tee -a "$RESULTS"; }
 : >"$RESULTS"
-record curl-basic PASS 'GET/HEAD/PUT/DELETE/MKCOL and repository bytes verified'
+record curl-basic PASS 'GET/HEAD/PUT/DELETE/MKCOL and repository bytes verified; empty and nested non-empty collection DELETE removes every descendant and clears namespace'
 record curl-http PASS 'OPTIONS, ETag and supported ETag conditions verified; unsupported DAV/HTTP PUT conditions explicitly rejected'
 record curl-propfind PASS 'allprop/propname omit supportedlock; explicit supportedlock is 404 at Depth 0/1; Depth 1 retains collections'
 record curl-file-copymove PASS 'file COPY to absent destination and MOVE verified; overwrite remains unsupported'

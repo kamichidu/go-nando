@@ -67,17 +67,24 @@ preflight. G7 parses every group summary; process exit zero does not override
 failed cases or missing default groups. Captures and derived analysis are
 retained under `results/pr14-litmus-g7-2026-11-17/`.
 
-The default suite shares `/litmus/` across groups. A non-empty collection
-`DELETE` returning 409 leaves the URL mapped, so the following `MKCOL` 405 is
-recorded as a dependent failure. The saved fresh-parent COPY/MOVE reproduction
-under `results/compatibility-2026-11-16/litmus-isolated-repro/` shows the
-independent outcomes: overwrite COPY returns 412, COPY into a missing
-destination collection succeeds unexpectedly, and collection or replacement
-COPY/MOVE cases return 501 under the Phase A unsupported boundary. `LOCK` and
-`PROPPATCH` are intentional unsupported contract areas, but are not counted as
-`UNSUPPORTED` when setup prevents those requests from running. `PASS`, `FAIL`, `UNSUPPORTED`, and
-`SKIP` remain separate states. A complete baseline collection can therefore
-finish while G7 correctly reports `FAIL`.
+The default suite shares `/litmus/` across groups. G7 records each group and
+each executed case as `PASS`, `FAIL`, `UNSUPPORTED`, or `SKIP`. Non-empty
+collection `DELETE` must remove descendants so later groups can recreate
+`/litmus/`; the HTTP regression also verifies descendants return 404 from
+`GET` and `PROPFIND` and that the deleted namespace can be reused. The
+repository metadata contract deletes one entry atomically and rejects deleting
+a non-empty collection, but does not offer a transaction spanning a tree. A
+failure during recursive deletion can leave already processed descendants
+deleted while the parent and unprocessed entries remain; G5 and repository
+tests capture this behavior.
+
+The saved fresh-parent COPY/MOVE reproduction under
+`results/compatibility-2026-11-16/litmus-isolated-repro/` documents independent
+outcomes: overwrite COPY returns 412, COPY into a missing destination
+collection succeeds unexpectedly, and collection or replacement COPY/MOVE
+cases return 501 under the Phase A unsupported boundary. `LOCK` and
+`PROPPATCH` remain unsupported contract areas. These results are kept separate
+from the collection `DELETE` fix.
 
 == Scenario catalog
 

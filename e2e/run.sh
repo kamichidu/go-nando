@@ -292,11 +292,32 @@ import hashlib, json, pathlib, re, sys
 raw=open(sys.argv[1],errors="replace").read()
 groups=[]
 for name,run,passed,failed in re.findall(r"summary for .([a-z]+).: of ([0-9]+) tests run: ([0-9]+) passed, ([0-9]+) failed[.]",raw):
- groups.append({"name":name,"tests_run":int(run),"passed":int(passed),"failed":int(failed),"status":"passed" if int(failed)==0 else "failed"})
+ groups.append({"name":name,"tests_run":int(run),"passed":int(passed),"failed":int(failed),"status":"PASS" if int(failed)==0 else "FAIL"})
+expected=("basic","copymove","props","locks","http")
+seen={g["name"] for g in groups}
+groups.extend({"name":name,"tests_run":0,"passed":0,"failed":0,"status":"SKIP"} for name in expected if name not in seen)
+case_results=[]
+for line in raw.replace("\r","\n").splitlines():
+ line=re.sub(r"\x1b\[[0-9;]*[A-Za-z]","",line).strip()
+ match=re.match(r"\d+\.\s+([a-z0-9_]+)\.+\s+(pass|FAIL|SKIPPED)(?:\s+\((.*))?$",line,re.I)
+ if not match: continue
+ name,outcome,detail=match.groups(); outcome=outcome.upper(); detail=detail or ""
+ status={"PASS":"PASS","SKIPPED":"SKIP","FAIL":"FAIL"}[outcome]
+ if status=="FAIL" and ("501 Not Implemented" in detail or "method not supported by Phase A repository contract" in detail): status="UNSUPPORTED"
+ case={"case":name,"status":status,"detail":detail}
+ if name=="copy_shallow" or (name=="propget" and "No value given" in detail): case["relation"]="DEPENDENT"
+ case_results.append(case)
 result=json.load(open(sys.argv[2]))
-analysis={"groups":groups,"groups_seen":len(groups),"failed_groups":sum(g["failed"]>0 for g in groups),"all_default_groups_observed":{n:any(g["name"]==n for g in groups) for n in ("basic","copymove","props","locks","http")},"causes":[{"classification":"FAIL","cause":"non-empty collection DELETE returns 409; Litmus basic leaves children under /litmus/"},{"classification":"DEPENDENT","cause":"the following MKCOL returns 405 because the failed DELETE leaves the collection mapped"},{"classification":"INDEPENDENT_REPRO","cause":"fresh-parent COPY/MOVE reproduction is retained at results/compatibility-2026-11-16/litmus-isolated-repro/: overwrite COPY returns 412 (existing-destination rejection boundary), COPY into missing destination collection succeeds unexpectedly, and collection/replacement COPY or MOVE return 501 (unsupported Phase A operations)"},{"classification":"UNSUPPORTED_NOT_REACHED","cause":"LOCK and PROPPATCH are contractually unsupported, but the default groups stop at setup; no case in this run is counted UNSUPPORTED"}]}
+analysis={"groups":groups,"groups_seen":len([g for g in groups if g["status"]!="SKIP"]),"failed_groups":sum(g["status"]=="FAIL" for g in groups),"missing_groups":[g["name"] for g in groups if g["status"]=="SKIP"],"causes":[]}
+analysis["cases"]=case_results
+if any(g["name"]=="basic" and g["status"]=="PASS" for g in groups):
+ analysis["causes"].append({"classification":"PASS","scope":"collection DELETE","detail":"basic completed, including Litmus collection cleanup; G5 separately verifies descendant GET/PROPFIND returns 404 and the namespace can be reused."})
+if any(g["status"]=="FAIL" for g in groups):
+ analysis["causes"].append({"classification":"FAIL","scope":"Litmus group failures","detail":"Inspect raw Litmus and WebDAV logs for the observed failed cases."})
+analysis["causes"].append({"classification":"UNSUPPORTED","scope":"COPY/MOVE and properties","detail":"Cases explicitly rejected with HTTP 501 are recorded UNSUPPORTED; they remain outside this DELETE change."})
+analysis["causes"].append({"classification":"INDEPENDENT_REPRO","scope":"COPY/MOVE","detail":"Non-501 COPY/MOVE failures are independent of collection DELETE; the baseline isolated reproduction remains at results/compatibility-2026-11-16/litmus-isolated-repro/. This task does not change COPY/MOVE semantics."})
 result["suite_analysis"]=analysis
-result["derived_suite_status"]="passed" if len(groups)==5 and all(g["failed"]==0 for g in groups) else "completed_with_failed_or_missing_groups"
+result["derived_suite_status"]="PASS" if len(groups)==5 and all(g["status"]=="PASS" for g in groups) else "FAIL"
 open(sys.argv[2].replace("result.json","analysis.json"),"w").write(json.dumps(analysis,indent=2)+"\n")
 aux={}
 for name in ("debug.log","child.log"):
@@ -306,6 +327,6 @@ for name in ("debug.log","child.log"):
   aux[name]={"path":name,"sha256":hashlib.sha256(content).hexdigest(),"bytes":len(content)}
 result["auxiliary_logs"]=aux
 open(sys.argv[2],"w").write(json.dumps(result,indent=2)+"\n")
-if result["derived_suite_status"]!="passed": sys.exit(1)
+if result["derived_suite_status"]!="PASS": sys.exit(1)
 PY
 ' _ "$E2E_NANDO_BIN" "$E2E_WEBDAV_BIN" "$E2E_SOCKET" "$ARTIFACTS" "$ROOT"; then exit 1; fi
