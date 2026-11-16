@@ -44,6 +44,7 @@ For a system-service repository, start the adapter with the instance config and 
 The CLI is primarily for initialization, administration, diagnostics, and debugging. To verify a personal daemon and repository before mounting or connecting a WebDAV client, open another terminal and run:
 
 ```sh
+printf 'nando quick start sample\n' > ./photo.jpg
 nando put ./photo.jpg /photo.jpg
 nando ls /
 nando get /photo.jpg ./photo-copy.jpg
