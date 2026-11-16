@@ -1,5 +1,7 @@
 # nando
 
+<img src="/nando.svg" alt="nando logo" width="128" />
+
 *nando* is written as 「納戸」, the Japanese word for a household storeroom or closet. The name reflects the idea of keeping familiar files in a familiar place while the storage behind that place can grow far beyond the space in a home.
 
 ## Why nando?
