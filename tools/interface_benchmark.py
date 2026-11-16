@@ -4,14 +4,17 @@
 import argparse
 import datetime as dt
 import http.client
+import math
 import json
 import os
 import platform
 import socket
 import statistics
+import subprocess
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
 import uuid
 from pathlib import Path
 
@@ -28,15 +31,28 @@ class RPC:
         self.serial += 1
         body = json.dumps({"jsonrpc": "2.0", "id": self.serial, "method": method, "params": params}).encode()
         conn = http.client.HTTPConnection("localhost")
-        conn.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        conn.sock.connect(self.socket)
-        conn.request("POST", "/rpc", body, {"Content-Type": "application/json"})
-        response = conn.getresponse()
-        payload = json.loads(response.read())
-        conn.close()
+        try:
+            conn.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            conn.sock.connect(self.socket)
+            conn.request("POST", "/rpc", body, {"Content-Type": "application/json"})
+            response = conn.getresponse()
+            payload = json.loads(response.read())
+        finally:
+            conn.close()
         if response.status != 200 or "error" in payload:
-            raise RuntimeError(f"RPC {method}: {payload.get('error', response.status)}")
+            error = payload.get("error", {})
+            raise RPCError(error.get("code"), f"RPC {method}: {error or response.status}")
         return payload.get("result")
+
+    def remove_if_present(self, path):
+        try:
+            self.call("repository.stat", {"path": path})
+        except RPCError as exc:
+            if exc.code == -32004:
+                return "already_absent"
+            raise
+        self.call("repository.remove", {"path": path})
+        return "removed"
 
     def write(self, path, data):
         session = self.call("resource.beginWrite", {"path": path, "resource_schemes": ["file"]})
@@ -68,6 +84,12 @@ def http_call(base, method, path, data=None, headers=None):
         return response.status
 
 
+class RPCError(RuntimeError):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
 def write_fsynced(path, data):
     with path.open("wb") as stream:
         stream.write(data)
@@ -77,7 +99,37 @@ def write_fsynced(path, data):
 
 def percentile(values, fraction):
     ordered = sorted(values)
-    return ordered[min(len(ordered) - 1, int((len(ordered) - 1) * fraction))]
+    return ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
+
+
+def cleanup_iteration(interface, rpc, root, base, old, new):
+    results = []
+    for path in (old, new):
+        try:
+            if interface == "rpc":
+                status = rpc.remove_if_present(path)
+            elif interface == "fuse":
+                local_path = root / path.lstrip("/")
+                if not local_path.exists() and not local_path.is_symlink():
+                    status = "already_absent"
+                else:
+                    local_path.unlink()
+                    status = "removed"
+            else:
+                try:
+                    http_call(base, "DELETE", path)
+                    status = "removed"
+                except urllib.error.HTTPError as exc:
+                    if exc.code == 404:
+                        status = "already_absent"
+                    else:
+                        raise
+            results.append({"path": path, "status": status})
+        except Exception as exc:
+            results.append({"path": path, "status": "failed",
+                            "error": f"{type(exc).__name__}: {exc}"})
+    return {"attempted": True, "status": "completed" if all(x["status"] != "failed" for x in results) else "failed",
+            "results": results}
 
 
 def main():
@@ -89,6 +141,8 @@ def main():
     parser.add_argument("--rpc-endpoint")
     parser.add_argument("--mountpoint", type=Path)
     parser.add_argument("--webdav-url")
+    parser.add_argument("--run-conditions", type=Path, required=True,
+                        help="JSON object with host-specific load, storage, and configuration details")
     args = parser.parse_args()
     if args.iterations < 1 or args.payload_bytes < 0:
         parser.error("iterations must be positive and payload-bytes non-negative")
@@ -103,6 +157,13 @@ def main():
     root = args.mountpoint.resolve() if args.mountpoint else None
     base = args.webdav_url
     payload = bytes((i % 251 for i in range(args.payload_bytes)))
+    additional_conditions = json.loads(args.run_conditions.read_text(encoding="utf-8")) if args.run_conditions else {}
+    if not isinstance(additional_conditions, dict):
+        parser.error("run-conditions must contain a JSON object")
+    required_conditions = {"cache_state", "storage", "other_workload"}
+    missing_conditions = sorted(required_conditions - additional_conditions.keys())
+    if missing_conditions:
+        parser.error("run-conditions must include: " + ", ".join(missing_conditions))
     records, errors = [], []
     started = dt.datetime.now(dt.timezone.utc).isoformat()
     for i in range(args.iterations):
@@ -160,27 +221,58 @@ def main():
             t = time.perf_counter_ns(); action(); timings["delete_ns"] = time.perf_counter_ns() - t
             records.append({"iteration": i, "payload_bytes": len(payload), "operations": timings, "status": "ok"})
         except Exception as exc:  # Preserve compatibility and environment failures as observations.
-            errors.append({"iteration": i, "error": f"{type(exc).__name__}: {exc}"})
-            records.append({"iteration": i, "payload_bytes": len(payload), "operations": timings, "status": "failed"})
+            failure = {"iteration": i, "error": f"{type(exc).__name__}: {exc}"}
+            record = {"iteration": i, "payload_bytes": len(payload), "operations": timings, "status": "failed"}
+            record["cleanup"] = cleanup_iteration(args.interface, rpc, root, base, old, new)
+            if record["cleanup"]["status"] != "completed":
+                failure["cleanup_error"] = record["cleanup"]
+            errors.append(failure)
+            records.append(record)
 
     operation_summary = {}
     for key in ("create_write_ns", "read_ns", "stat_ns", "list_ns", "rename_ns", "delete_ns"):
         values = [r["operations"][key] for r in records if key in r["operations"]]
         if values:
             operation_summary[key] = {"samples": len(values), "median_ns": statistics.median(values),
-                                      "p95_ns": percentile(values, .95), "min_ns": min(values), "max_ns": max(values)}
+                                      "p95_ns": percentile(values, .95), "p99_ns": percentile(values, .99),
+                                      "min_ns": min(values), "max_ns": max(values)}
     try:
-        import subprocess
         sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     except (OSError, subprocess.CalledProcessError):
         sha = None
+    try:
+        go_version = subprocess.check_output(["go", "version"], text=True, stderr=subprocess.STDOUT).strip()
+    except (OSError, subprocess.CalledProcessError):
+        go_version = None
     result = {"schema_version": 1, "kind": "interface_benchmark", "interface": args.interface,
               "started_at": started, "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-              "repository_sha": sha, "configuration": {"iterations": args.iterations, "payload_bytes": len(payload),
+              "repository_sha": sha, "tool": {"name": "go-nando", "version": sha[:12] if sha else None},
+              "measurement_scope": "end_to_end",
+              "adapter_cost_isolation": "not_measured; cross-interface latency differences are not attributable to adapter-only cost",
+              "comparison_policy": "Do not interpret simple RPC/FUSE/WebDAV latency deltas as adapter thinness or overhead.",
+              "interface_conditions": {
+                  "rpc": {"connection": "new Unix HTTP connection for each JSON-RPC request; no connection reuse",
+                          "cache": "daemon/resource behavior included; harness adds no cache",
+                          "write_commit_boundary": "beginWrite + local Resource write/fsync + commit + release",
+                          "read_boundary": "beginRead + local Resource read + release"},
+                  "fuse": {"connection": "kernel FUSE requests; adapter RPC behavior included",
+                           "cache": "adapter sets zero entry/attribute/negative lookup TTL and uses FOPEN_DIRECT_IO",
+                           "write_commit_boundary": "write + fsync; adapter commit performed by fsync",
+                           "read_boundary": "open/read/close through FUSE adapter"},
+                  "webdav": {"connection": "one urllib HTTP request per operation; no explicit persistent session reuse",
+                             "cache": "HTTP client and adapter behavior included; harness adds no cache",
+                             "write_commit_boundary": "PUT response completion",
+                             "read_boundary": "GET response body consumed"}},
+              "configuration": {"iterations": args.iterations, "payload_bytes": len(payload),
               "rpc_endpoint": args.rpc_endpoint, "mountpoint": str(root) if root else None, "webdav_url": base},
               "environment": {"platform": platform.platform(), "kernel": platform.release(),
-              "machine": platform.machine(), "python": platform.python_version(), "cwd": os.getcwd()},
-              "completed": len(records) - len(errors), "failed": len(errors), "status": "completed" if not errors else "failed",
+              "machine": platform.machine(), "python": platform.python_version(), "go_toolchain": go_version,
+              "cwd": os.getcwd()},
+              "completed": sum(r["status"] == "ok" for r in records),
+              "failed": sum(r["status"] == "failed" for r in records),
+              "cleanup_failed": sum(r.get("cleanup", {}).get("status") == "failed" for r in records),
+              "status": "completed" if not errors else "failed",
+              "run_conditions": additional_conditions, "percentile_method": "nearest-rank: sorted sample at ceil(p*n)-1 (1-indexed)",
               "classification": "unclassified", "summary": operation_summary, "iterations": records, "errors": errors}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

@@ -1,10 +1,13 @@
 = Filesystem Compatibility and Interface Benchmark Evidence
 
 This workflow records observations from independent filesystem suites and
-compares a small set of operations through daemon control RPC, a mounted FUSE
-filesystem, and WebDAV. It does not change the implementation to accommodate a
-suite. Compatibility failures are evidence, not a CI gate. Do not set fixed
-performance thresholds in CI from these measurements.
+end-to-end (E2E) operations through daemon control RPC, mounted FUSE, and
+WebDAV. The E2E numbers include their full protocol, client, kernel/HTTP, daemon,
+and storage path. This harness does not measure adapter-only cost. A simple
+latency difference between RPC, FUSE, and WebDAV cannot establish adapter
+thinness or overhead because connection lifetime, caching, and commit
+boundaries differ. Compatibility failures are evidence, not a CI gate. Do not
+set fixed performance thresholds in CI from these measurements.
 
 == Starting conditions
 
@@ -51,12 +54,12 @@ nando-webdav --repository "$PWD/.bench/repository" --daemon-listen "unix://$PWD/
   --webdav-listen 127.0.0.1:18080
 ----
 
-Each iteration creates and fsyncs a file, reads it, stats it, lists the root,
-renames it, and deletes it. The JSON contains per-operation samples and
-median/p95/min/max summaries. RPC operates directly on the public control
-protocol and its file Resources; FUSE uses `fsync`; WebDAV uses HTTP/WebDAV
-methods. These are comparable logical operations, though their protocol and
-durability boundaries differ:
+Each iteration creates a file, reads it, stats it, lists the root, renames it,
+and deletes it. The JSON contains per-operation samples and
+median/p95/p99/min/max summaries. Percentiles use the nearest-rank method:
+sort the `n` samples and choose rank `ceil(p*n)` (1-indexed). For small samples,
+p95 and p99 may select the same observation. The result records these
+measurement boundaries explicitly:
 
 [cols="1,1,1,1",options="header"]
 |===
@@ -72,51 +75,140 @@ durability boundaries differ:
 Keep each interface's JSON result; combine runs only after checking matching
 conditions.
 
+Provide host-specific run conditions in JSON so cache state, storage,
+repository setup, and concurrent load are attached to every measurement. The
+benchmark requires `cache_state`, `storage`, and `other_workload` fields:
+
+[source,json]
+----
+{
+  "delivery_mode": "local",
+  "cache_state": "unique paths; read immediately after write; host page cache not cleared",
+  "storage": "local SSD",
+  "repository_filesystem": "ext4",
+  "other_workload": "idle host",
+  "mount_options": []
+}
+----
+
+Save that object as `results/run-conditions.json` and pass it to each
+benchmark invocation with `--run-conditions`.
+
+The reported times are E2E observations, including adapter/protocol work and
+the boundary listed in the table. The RPC tool creates a new Unix HTTP
+connection per JSON-RPC call. The WebDAV tool makes a separate HTTP request for
+each operation and does not explicitly reuse a session. FUSE requests traverse
+the kernel mount; this adapter sets zero entry, attribute, and negative lookup
+TTLs and uses `FOPEN_DIRECT_IO` for file handles. These cache policies are
+different parts of the measured systems. RPC write includes Resource setup,
+local Resource write and `fsync`, commit, and release; FUSE write commits at
+`fsync`; WebDAV write is measured through `PUT` response completion. Read
+operations also have different open/session and response boundaries. Use the
+recorded `interface_conditions` when interpreting results. No subtraction or
+ratio among these totals isolates adapter-specific cost. An adapter-only
+measurement would require a separate controlled design and is not produced by
+this harness.
+
 [source,bash]
 ----
 mkdir -p results
 python3 tools/interface_benchmark.py --interface rpc --rpc-endpoint "unix://$PWD/.bench/nando.sock" \
-  --iterations 100 --payload-bytes 4096 --output results/rpc.json
+  --iterations 100 --payload-bytes 4096 --run-conditions results/run-conditions.json --output results/rpc.json
 python3 tools/interface_benchmark.py --interface fuse --mountpoint "$PWD/.bench/mount" \
-  --iterations 100 --payload-bytes 4096 --output results/fuse.json
+  --iterations 100 --payload-bytes 4096 --run-conditions results/run-conditions.json --output results/fuse.json
 python3 tools/interface_benchmark.py --interface webdav --webdav-url http://127.0.0.1:18080 \
-  --iterations 100 --payload-bytes 4096 --output results/webdav.json
+  --iterations 100 --payload-bytes 4096 --run-conditions results/run-conditions.json --output results/webdav.json
+----
+
+== Preparing external compatibility tools
+
+Tool installation is an explicit preparation phase, separate from test runs.
+Install a chosen pinned pjdfstest, fsx, or litmus release/source revision using
+its upstream instructions and record its prerequisites and installation
+method. Do not install or update tools in the run phase. `validation_tooling.py`
+only snapshots already installed executables, their resolved paths and SHA-256
+digests, the declared tool version/source revision, prerequisites, and
+preparation host. It does not install, download, build, or update anything.
+The declared version is the version verified by the operator during
+preparation; the manifest also locks executable content and location.
+
+. Install/build the chosen version in a dedicated environment using that
+  project's upstream instructions. Pin a package release or source commit and
+  satisfy the documented OS, privilege, compiler, and mount prerequisites.
+. Verify the installed suite version and prerequisites yourself. Record the
+  exact version/source revision and installation method in the next command.
+. Create a preparation manifest for the installed executable(s). This records
+  them and does not perform installation.
+
+[source,bash]
+----
+mkdir -p results
+python3 tools/validation_tooling.py --output results/tooling-pjdfstest.json \
+  --tool-name pjdfstest --version '<verified version>' --source-revision '<tag-or-commit>' \
+  --installation-notes '<pinned source checkout and upstream build steps>' \
+  --executable prove --precondition 'mount=fuse' --precondition 'privileges=<required level>'
+python3 tools/validation_tooling.py --output results/tooling-fsx.json \
+  --tool-name fsx --version '<verified version>' --installation-notes '<pinned package or source steps>' \
+  --executable fsx --precondition 'target=<mounted test directory>'
+python3 tools/validation_tooling.py --output results/tooling-litmus.json \
+  --tool-name litmus --version '<verified version>' --installation-notes '<pinned package or source steps>' \
+  --executable litmus --precondition 'target=webdav loopback endpoint'
 ----
 
 == Running external compatibility suites
 
-Install and configure pjdfstest, fsx, or litmus using that suite's own
-instructions. Point it at the interface under examination. The capture
-wrapper runs the supplied command unchanged, saves stdout and stderr as
-separate byte-for-byte logs, records their SHA-256 digests, timestamps,
-duration, exit code, repository SHA, and host environment in `result.json`,
-and returns the suite's exit status. Its output directory must not already
-exist. A non-zero suite exit remains a recorded failure; it does not discard
-the logs or assign a cause.
+Prepare a JSON conditions file for each run. Include target/mount options,
+workload parameters, relevant privilege requirements, and load/storage details.
+The run command below only verifies the prepared manifest and invokes the
+specified existing executable. It never runs an installer or updater. It
+records the tool name/version, command, conditions, manifest digest, repository
+SHA, environment, stdout/stderr digests, duration, and result. Its output
+directory must not already exist.
 
 [source,bash]
 ----
+cat > results/pjdfstest-conditions.json <<'EOF'
+{"target":"fuse","mount_options":[],"workload":"upstream test tree","privileges":"record actual user/privilege level"}
+EOF
+cat > results/fsx-conditions.json <<'EOF'
+{"target":"fuse","mount_options":[],"iterations":10000,"file":"fsx.data"}
+EOF
+cat > results/litmus-conditions.json <<'EOF'
+{"target":"webdav","url":"http://127.0.0.1:18080/","auth":"none"}
+EOF
+
 python3 tools/validation_capture.py --output results/pjdfstest-fuse \
-  --suite pjdfstest --target fuse --cwd "$PWD/.bench/mount" -- \
+  --suite pjdfstest --target fuse --cwd "$PWD/.bench/mount" \
+  --tooling-manifest results/tooling-pjdfstest.json \
+  --conditions-json results/pjdfstest-conditions.json -- \
   prove -rv "$PJDFSTEST/tests"
 python3 tools/validation_capture.py --output results/fsx-fuse \
-  --suite fsx --target fuse -- fsx -N 10000 "$PWD/.bench/mount/fsx.data"
+  --suite fsx --target fuse --tooling-manifest results/tooling-fsx.json \
+  --conditions-json results/fsx-conditions.json -- fsx -N 10000 "$PWD/.bench/mount/fsx.data"
 python3 tools/validation_capture.py --output results/litmus-webdav \
-  --suite litmus --target webdav -- litmus http://127.0.0.1:18080/
+  --suite litmus --target webdav --tooling-manifest results/tooling-litmus.json \
+  --conditions-json results/litmus-conditions.json -- litmus http://127.0.0.1:18080/
 ----
 
-Replace example suite arguments with the invocation supported by the installed
-version. The wrapper deliberately does not rewrite test inputs, filter cases,
-or convert failures to success. Repeat per target interface. Save each
-run-directory and benchmark JSON as CI artifacts or attach them to the change.
+The capture wrapper preserves non-zero exit codes as `command_failed` with
+`failure_kind: exit_code`. If the executable is absent, changed since
+preparation, or cannot be launched, it writes `result.json` and empty logs with
+`status: launch_failed`, `failure_kind: environment_launch_error`, and
+`failure_classification: environment_issue`; its own process exits with 127.
+Other suite failures remain `unclassified`. The wrapper does not rewrite test
+inputs, filter cases, or convert failures to success. Repeat preparation and
+runs per suite/version and interface as needed, without updating the pinned
+tool during measurement.
+Retain each `tooling-*.json` manifest together with the result directory; the
+result records the manifest digest and path for verification.
 
 == Interpreting evidence
 
-The machine-readable result has `failure_classification: unclassified` (or
-`classification: unclassified` for benchmarks) by design. Review raw logs and
-assign any later analysis to one of: specification not implemented,
-compatibility issue, implementation defect, environment issue, or unresolved.
-Keep that interpretation separate from the observed exit code and output.
-Performance is descriptive only; compare matching hosts, repository/storage
-configuration, build SHA, mount options, workload, and load. No fixed CI
-threshold is defined.
+The machine-readable result retains the raw observation separately from later
+interpretation. Review logs and conditions, then classify analysis as:
+specification not implemented, compatibility issue, implementation defect,
+environment issue, or unresolved. Performance is descriptive only; compare
+matching hosts, repository/storage configuration, build SHA, mount options,
+workload, load, tool version, and preparation manifest. Never interpret total
+E2E latency differences as adapter-only costs. No fixed CI threshold is
+defined.
