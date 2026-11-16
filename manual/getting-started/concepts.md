@@ -20,8 +20,23 @@ flowchart LR
   init --> local
 ```
 
-`nando init` creates the repository directly; it does not need a running daemon. For everyday file access, use FUSE or WebDAV; each runs in its own process and connects to the daemon. CLI commands such as `doctor`, `gc`, and Recovery operations are available for administration and diagnostics; commands that operate on repository data connect to the daemon. The daemon owns the repository and coordinates metadata, local objects, and background remote delivery. Do not start two daemons against the same repository.
+`nando init` creates a repository directly, without a running daemon. The daemon then owns that repository and coordinates metadata, local objects, and background remote delivery. Do not start two daemons against the same repository.
 
-The CLI, daemon, FUSE adapter, and WebDAV adapter resolve the repository from an explicit `--repository` option, then `[repository].path` in the shared TOML configuration, then the XDG-style data default (`${XDG_DATA_HOME:-~/.local/share}/nando`). Their daemon endpoint comes from `--daemon-listen`, then `[daemon].listen`, then a repository-derived local Unix socket. A system service usually selects its own config and repository explicitly. Config-file lookup chooses settings; it does not discover a system-wide repository or switch between repositories automatically. See [configuration](../setup/configuration) and [systemd](../setup/systemd).
+For everyday file access, run FUSE or WebDAV as a separate process connected to the daemon. The CLI provides administration and diagnostics, including `doctor`, `gc`, and Recovery operations. Repository commands connect to the daemon.
 
-Each repository uses Local mode or Remote mode with one selected backend. In Local mode, local object storage is the durable authority. In Remote mode, complete content is committed locally first and queued for asynchronous delivery. The metadata transaction records the Entry and its delivery obligation together. A successful write does not confirm remote durability, and the manual does not promise that the system discovers or automatically selects a shared system repository.
+Repository selection uses the first available value in this order:
+
+1. An explicit `--repository` option.
+2. `[repository].path` in the shared TOML configuration.
+3. The XDG-style data default, `${XDG_DATA_HOME:-~/.local/share}/nando`.
+
+The daemon endpoint follows the same precedence pattern: `--daemon-listen`, `[daemon].listen`, then a local Unix socket derived from the repository path. A system service usually selects its config and repository explicitly. Choosing a config file does not discover a system-wide repository or switch repositories automatically. See [configuration](../setup/configuration) and [systemd](../setup/systemd).
+
+Each repository uses one of these delivery modes:
+
+| Mode | Durable authority and behavior |
+| --- | --- |
+| Local | Local object storage is the durable authority. |
+| Remote | Complete content is committed locally first, then queued for asynchronous delivery to one selected backend. The metadata transaction records the Entry and its delivery obligation together. |
+
+A successful write in Remote mode does not confirm remote durability. The system does not automatically discover or select a shared system repository.

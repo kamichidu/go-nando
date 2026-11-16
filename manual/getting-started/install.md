@@ -8,7 +8,12 @@ Download the Linux amd64 `.deb` package from [GitHub Releases](https://github.co
 sudo dpkg -i ./go-nando_*_linux_amd64.deb
 ```
 
-The package installs `nando` under `/opt/nando/bin`, adapters under `/opt/nando/libexec`, and the `/usr/bin/nando` symlink. It does not initialize a repository or enable or start a daemon. Continue with the [Quick Start for FUSE or WebDAV use](./quickstart). For a packaged system repository, follow the [systemd system-service setup](../setup/systemd), which initializes the repository under the dedicated service account.
+The package installs:
+
+- `nando` under `/opt/nando/bin` and the `/usr/bin/nando` symlink.
+- Adapters under `/opt/nando/libexec`.
+
+Installation does not initialize a repository or enable or start a daemon. Continue with the [Quick Start for FUSE or WebDAV use](./quickstart). For a packaged system repository, follow the [systemd system-service setup](../setup/systemd), which initializes the repository under the dedicated service account.
 
 ## Archives
 

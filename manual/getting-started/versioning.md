@@ -20,6 +20,8 @@ A migration is available only through the explicit `nando admin migrate` command
 
 For example, if `1.3.x` makes no schema change after `1.2.x` created schema revision 4, then `1.4.0` migrates from revision 4 to revision 5. The release number is not stored in `user_version`. If instead `1.3.0` changed revision 4 to 5, then `1.4.0` expects revision 5 as its source; it rejects revision 4. Run the `1.3.x` migration before advancing to `1.4.0`.
 
-The migration command rejects persisted Repository Format or schema state that does not match the declared source state. It cannot cross multiple persisted transitions or downgrade a repository. If a schema-free Minor line and an older line emitted identical Repository Format and schema state, the metadata cannot distinguish their origins. Because no application-release marker is stored, a direct upgrade from that older line cannot be rejected solely by its release number. The policy adds no release marker and does not treat `user_version` as a SemVer version.
+The migration command rejects persisted Repository Format or schema state that does not match the declared source state. It cannot cross multiple persisted transitions or downgrade a repository.
+
+When a schema-free Minor line and an older line emitted identical Repository Format and schema state, the metadata cannot distinguish their origins. No application-release marker is stored, so a direct upgrade from that older line cannot be rejected solely by its release number. The policy adds no release marker and does not treat `user_version` as a SemVer version.
 
 The current v1 baseline uses schema revision 1. General Repository Format and metadata schema migrations are not implemented yet; `nando admin migrate` currently validates schema revision 1 only. Unsupported persisted state is rejected without being rewritten.
