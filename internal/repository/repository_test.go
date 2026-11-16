@@ -1789,4 +1789,29 @@ func TestRemoveCollectionReportsPartialFailure(t *testing.T) {
 			t.Errorf("unprocessed namespace %s should remain: %v", path, err)
 		}
 	}
+	// Reopen Metadata to model a process restart after the partial failure.
+	if err := meta.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := sqlite.NewStore(filepath.Join(tempDir, "metadata.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened Metadata Store: %v", err)
+		}
+	})
+	restarted := openRepositoryInstance(t, tempDir, reopened, objects, hasher)
+	for _, path := range []string{"/tree", "/tree/z.txt"} {
+		if _, err := restarted.Stat(ctx, path); err != nil {
+			t.Errorf("namespace %s is not reachable after restart: %v", path, err)
+		}
+	}
+	if entries, err := restarted.List(ctx, "/tree"); err != nil || len(entries) != 1 || entries[0].Name != "z.txt" {
+		t.Errorf("remaining subtree after restart: entries=%+v err=%v", entries, err)
+	}
+	if deleted, err := restarted.GC(ctx); err != nil || deleted != 1 {
+		t.Errorf("GC after partial recursive DELETE: deleted=%d err=%v, want one orphan blob reclaimed", deleted, err)
+	}
 }
