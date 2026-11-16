@@ -1,5 +1,7 @@
 = nando - 納戸
 
+image:manual/public/nando.svg[nando logo, width=128]
+
 == About the Name
 
 nando is a Japanese word for a household storeroom: a place to keep useful

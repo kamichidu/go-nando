@@ -8,6 +8,7 @@ export default withMermaid(defineConfig({
   base: '/go-nando/',
   cleanUrls: true,
   themeConfig: {
+    logo: '/nando.svg',
     nav: [
       { text: 'Getting started', link: '/getting-started/install' },
       { text: 'Setup', link: '/setup/repository' },
@@ -56,4 +57,5 @@ export default withMermaid(defineConfig({
     socialLinks: [{ icon: 'github', link: 'https://github.com/kamichidu/go-nando' }],
     footer: { message: 'The design authority is `docs/design.ir.yaml`; consult the implementation for actual behavior.' },
   },
+  head: [['link', { rel: 'icon', type: 'image/svg+xml', href: '/nando.svg' }]],
 }))
