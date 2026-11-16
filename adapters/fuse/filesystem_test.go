@@ -680,6 +680,101 @@ func TestSetattrResponseReflectsUncommittedSession(t *testing.T) {
 	}
 }
 
+func TestFtruncateUpdatesSameHandleGetattrAndReopenedFile(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("prefix-data"))
+	adapter := New(daemon)
+	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	state, errno := adapter.startWrite(ctx, node, false)
+	if errno != 0 {
+		t.Fatalf("start write: %v", errno)
+	}
+	h := &fileHandle{node: node, write: state, writable: true}
+	defer func() {
+		if errno := h.Release(ctx); errno != 0 {
+			t.Errorf("release writer: %v", errno)
+		}
+	}()
+
+	for _, size := range []uint64{100, 4} {
+		in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE, Size: size}}
+		var setAttrOut fuse.AttrOut
+		if errno := node.Setattr(ctx, h, in, &setAttrOut); errno != 0 {
+			t.Fatalf("Setattr size %d: %v", size, errno)
+		}
+		if setAttrOut.Size != size {
+			t.Fatalf("Setattr response size=%d, want %d", setAttrOut.Size, size)
+		}
+		var attr fuse.AttrOut
+		if errno := node.Getattr(ctx, h, &attr); errno != 0 {
+			t.Fatalf("same-handle Getattr after size %d: %v", size, errno)
+		}
+		if attr.Size != size {
+			t.Fatalf("same-handle Getattr size=%d after truncate to %d", attr.Size, size)
+		}
+		if size == 100 {
+			buf := make([]byte, 12)
+			result, errno := h.Read(ctx, buf, int64(len("prefix-data")))
+			if errno != 0 {
+				t.Fatalf("read extended hole: %v", errno)
+			}
+			got, status := result.Bytes(buf)
+			if status != fuse.OK || len(got) != len(buf) {
+				t.Fatalf("extended hole length=%d status=%v, want %d bytes", len(got), status, len(buf))
+			}
+			for i, b := range got {
+				if b != 0 {
+					t.Fatalf("extended hole byte %d=%d, want zero", i, b)
+				}
+			}
+		}
+	}
+
+	buf := make([]byte, 4)
+	result, errno := h.Read(ctx, buf, 0)
+	if errno != 0 {
+		t.Fatalf("read preserved prefix: %v", errno)
+	}
+	got, status := result.Bytes(buf)
+	if status != fuse.OK || string(got) != "pref" {
+		t.Fatalf("preserved prefix=%q status=%v, want %q", got, status, "pref")
+	}
+
+	if errno := h.Fsync(ctx, 0); errno != 0 {
+		t.Fatalf("Fsync: %v", errno)
+	}
+	if daemon.entry.Size != 4 || string(daemon.content) != "pref" {
+		t.Fatalf("committed size=%d content=%q, want size 4 and %q", daemon.entry.Size, daemon.content, "pref")
+	}
+
+	readHandle, _, errno := node.Open(ctx, uint32(os.O_RDONLY))
+	if errno != 0 {
+		t.Fatalf("reopen committed file: %v", errno)
+	}
+	reopened := mustFileHandle(t, readHandle)
+	defer func() {
+		if errno := reopened.Release(ctx); errno != 0 {
+			t.Errorf("release reopened handle: %v", errno)
+		}
+	}()
+	var reopenedAttr fuse.AttrOut
+	if errno := node.Getattr(ctx, reopened, &reopenedAttr); errno != 0 {
+		t.Fatalf("reopened Getattr: %v", errno)
+	}
+	if reopenedAttr.Size != 4 {
+		t.Fatalf("reopened Getattr size=%d, want 4", reopenedAttr.Size)
+	}
+	reopenedBuf := make([]byte, 8)
+	result, errno = reopened.Read(ctx, reopenedBuf, 0)
+	if errno != 0 {
+		t.Fatalf("read reopened file: %v", errno)
+	}
+	got, status = result.Bytes(reopenedBuf)
+	if status != fuse.OK || string(got) != "pref" {
+		t.Fatalf("reopened bytes=%q status=%v, want %q", got, status, "pref")
+	}
+}
+
 func TestEphemeralSetattrResponseAndCommitUseLogicalMode(t *testing.T) {
 	ctx := context.Background()
 	daemon := newStub(t, []byte("content"))

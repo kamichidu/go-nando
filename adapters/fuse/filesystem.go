@@ -395,12 +395,28 @@ func (n *entryNode) currentEntry() controlrpc.Entry {
 	return n.entry
 }
 
-func (n *entryNode) Getattr(ctx context.Context, _ fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+func (n *entryNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	if errno := n.owner.resolveNode(ctx, n); errno != 0 {
 		return errno
 	}
 	entry := n.currentEntry()
 	setAttr(&out.Attr, entry, n.StableAttr().Ino)
+	// A writable handle owns uncommitted size changes until Fsync/Release.
+	// The Entry can therefore still carry the committed size after Setattr.
+	if h, ok := f.(*fileHandle); ok && h.write != nil {
+		h.write.mu.Lock()
+		defer h.write.mu.Unlock()
+		if h.write.file == nil {
+			return syscall.ESTALE
+		}
+		info, err := h.write.file.Stat()
+		if err != nil {
+			return errnoFor(err)
+		}
+		out.Size = uint64(max(info.Size(), 0))
+		out.Mtime = uint64(info.ModTime().Unix())
+		out.Mtimensec = uint32(info.ModTime().Nanosecond())
+	}
 	return 0
 }
 
