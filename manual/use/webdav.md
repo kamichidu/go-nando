@@ -29,9 +29,9 @@ The following method surface is implemented by the adapter. This is an explicit 
 | `MOVE` | Moves a resource to an absent destination. Replacement is unsupported; an absolute destination with a different host is rejected. |
 | `COPY` | Copies a file to an absent destination. Directory COPY, destination replacement, and an absolute destination with a different host are unsupported. |
 
-PUT supports `If-Match` and `If-None-Match` against the Entry snapshot captured when the write begins. The implementation also handles `If-Unmodified-Since`. The `If`, `If-Modified-Since`, and `If-Range` headers are rejected for PUT. A precondition conflict does not commit the request body.
+PUT supports `If-Match` and `If-None-Match` against the file state captured when the write begins. `If-Unmodified-Since` is also supported. The `If`, `If-Modified-Since`, and `If-Range` headers are rejected for PUT. A precondition conflict does not commit the request body.
 
-`LOCK`, `UNLOCK`, and `PROPPATCH` return `501 Not Implemented`. Locking and dead-property updates are not implemented; PROPFIND does not advertise the unsupported lock property. A WebDAV client that requires these features or replacement semantics may not work with this adapter. The project checks a targeted method subset; it does not claim full WebDAV compliance or broad client interoperability.
+`LOCK`, `UNLOCK`, and `PROPPATCH` return `501 Not Implemented`. Locking and dead-property updates are unavailable; PROPFIND does not advertise the unsupported lock property. A WebDAV client that requires these features or replacement semantics may not work with this adapter. The supported methods are a subset and do not imply full WebDAV compliance or broad client compatibility.
 
 For a simple file transfer and collection listing using curl:
 
