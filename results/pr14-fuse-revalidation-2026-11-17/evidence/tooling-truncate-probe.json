@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "tool_name": "truncate-probe",
+  "version": "Python 3.11.9",
+  "version_check": {
+    "command": [
+      "/home/sekito_centsys_jp/.anyenv/envs/pyenv/versions/3.11.9/bin/python3",
+      "--version"
+    ],
+    "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline",
+    "exit_code": 0,
+    "stdout": "Python 3.11.9\n",
+    "stdout_sha256": "bc470e08cfeae31ebc8be9f6a8b9e86e415842ad13f9afb19828ca2ac42e81b5",
+    "stderr": "",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "source_revision": "55259881880991254d7a11a24507c3c595979071",
+  "installation_notes": "Host Python interpreter; committed truncate probe.",
+  "prepared_at": "2026-11-16T15:41:00.164068+00:00",
+  "preconditions": {
+    "target": "real host FUSE mount"
+  },
+  "executables": [
+    {
+      "name": "/home/sekito_centsys_jp/.anyenv/envs/pyenv/versions/3.11.9/bin/python3",
+      "path": "/home/sekito_centsys_jp/.anyenv/envs/pyenv/versions/3.11.9/bin/python3.11",
+      "sha256": "7830d61808bae0c99f2d0ed4ab9d89c555c15fce7c19368782d375ae3c35a43b"
+    }
+  ],
+  "source_trees": [
+    {
+      "path": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline/results/compatibility-2026-11-16/fsx-truncate-repro",
+      "sha256": "73508639321c7b6520afaf2eaceefe037fa036341831a19c9002c75287d3a641"
+    }
+  ],
+  "environment": {
+    "platform": "Linux-6.8.0-1070-gcp-x86_64-with-glibc2.35",
+    "kernel": "6.8.0-1070-gcp",
+    "machine": "x86_64",
+    "python": "3.11.9",
+    "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline"
+  }
+}

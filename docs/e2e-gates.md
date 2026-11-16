@@ -1,6 +1,6 @@
 = Reproducible E2E gates
 
-`e2e/run.sh` is the host one-command entry point for G0-G3 plus WebDAV G5. Docker Compose owns only the pinned `fake-gcs-server` external dependency. Go checks, `nando`, `nando-fuse`, `nando-webdav`, and the scenario runner execute directly on the Linux/WSL host. The gate never mounts FUSE inside a container, requests `privileged`, or grants a container mount capabilities.
+`e2e/run.sh` is the host one-command entry point for G0-G3, real FUSE truncate/fsx G6, and WebDAV G5. Docker Compose owns only the pinned `fake-gcs-server` external dependency. Go checks, `nando`, `nando-fuse`, `nando-webdav`, and the scenario runner execute directly on the Linux/WSL host. The gate never mounts FUSE inside a container, requests `privileged`, or grants a container mount capabilities.
 
 Run the required gates:
 
@@ -43,6 +43,19 @@ The host needs Go 1.25.1, Python 3, curl, Docker Compose v2, `golangci-lint`, `f
 Every run creates an isolated temporary evidence and repository directory and a unique Compose project. The command starts fake GCS, then G0 runs root, FUSE, and WebDAV module unit and race tests, workspace install targets, the repository lint configuration and checks for all modules, native binary builds, and the pinned Design IR validator. G1 uses only a Local-mode repository and makes no GCS requests. G2 uses a project-scoped named volume and loopback-only host port to test fake GCS delivery, outage, restart, and retry. A host-only HTTP fault proxy holds the successful upload response after fake GCS has durably accepted one object; the gate kills the daemon before the response can acknowledge transfer completion, restarts it, and verifies an actual replay keeps the same generation and single object name. The proxy is test infrastructure only; it adds no production hook. Native binaries use the isolated repositories and Unix sockets. Exit cleanup discovers only processes whose executable arguments refer to that run's artifact directory, terminates their process groups or recorded proxy PID with deadlines, unmounts only mounts under that directory, reports D-state processes, captures Compose status and logs, and runs `docker compose down --volumes --remove-orphans`. Any remaining process, mount, or cleanup failure makes the command fail. Evidence remains under the printed `/tmp/go-nando-e2e.*` path. No existing repository state or volume is reused.
 
 Missing FUSE prerequisites produce G1-G3 `SKIP` and a nonzero overall result. A failed or unavailable real mount never becomes PASS. Each scenario has a 45-second deadline; readiness and eventual conditions poll against monotonic deadlines, and each gate has an outer timeout. Logs include `gates.tsv`, per-gate command output, `scenarios.jsonl`, `scenarios.log`, native daemon/FUSE logs, and Compose logs. If a kernel operation becomes uninterruptible, the gate fails, attempts unmount and process cleanup, and leaves the evidence directory for diagnosis.
+
+G6 reuses the native daemon startup, readiness probe, `runner.py` mount context, and
+scoped EXIT cleanup. It builds `nando-fuse` from the checked out HEAD in G0,
+mounts with the adapter defaults (an empty mount option list), then runs the
+committed truncate reproduction and the prepared xfstests-dev `fsx` through
+`tools/validation_capture.py`. It does not request `allow_other`; the mount is
+accessed by the same host user that starts it. The prepared fsx manifest checks
+the executable digest, source revision, source tree, and read-only version
+command before running. Captures are copied to
+`results/pr14-fuse-revalidation-2026-11-17/evidence/`, including each command,
+revision, exit status, conditions, preflight, stdout, stderr, and result JSON.
+The gate distinguishes a successful command from a captured nonzero failure;
+missing prerequisites remain `SKIP`, and neither state is reported as PASS.
 
 == Scenario catalog
 
@@ -127,6 +140,9 @@ Missing FUSE prerequisites produce G1-G3 `SKIP` and a nonzero overall result. A 
 |G5 `G5-01`
 |WebDAV HTTP interoperability smoke check
 |Host curl verifies OPTIONS, GET/HEAD and ETag, PUT with If-Match/If-None-Match, MKCOL/PROPFIND, MOVE, file COPY to an absent path, DELETE, and explicit 501 responses for LOCK/PROPPATCH.
+|G6 `G6-01` / `G6-02`
+|Real FUSE truncate and fsx revalidation
+|The committed truncate reproduction and pinned fsx run against a fresh Local repository through the G0-built `nando-fuse`; `validation_capture.py` records independent result JSON and raw logs. Mount options are empty and `allow_other` is omitted.
 |===
 
 == Emulator scope

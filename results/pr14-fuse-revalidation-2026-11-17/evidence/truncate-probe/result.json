@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "suite": "truncate-probe",
+  "tool": {
+    "name": "truncate-probe",
+    "version": "Python 3.11.9",
+    "source_revision": "55259881880991254d7a11a24507c3c595979071",
+    "installation_notes": "Host Python interpreter; committed truncate probe.",
+    "manifest": "/tmp/go-nando-e2e.muU2PX/fsx-validation/tooling-truncate-probe.json",
+    "manifest_sha256": "7e347721ef7d048b76c4ad2fa321a8418415198f2c0b9a73c2f233f2d666e251",
+    "preconditions": {
+      "target": "real host FUSE mount"
+    },
+    "executables": [
+      {
+        "name": "/home/sekito_centsys_jp/.anyenv/envs/pyenv/versions/3.11.9/bin/python3",
+        "path": "/home/sekito_centsys_jp/.anyenv/envs/pyenv/versions/3.11.9/bin/python3.11",
+        "sha256": "7830d61808bae0c99f2d0ed4ab9d89c555c15fce7c19368782d375ae3c35a43b"
+      }
+    ],
+    "source_trees": [
+      {
+        "path": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline/results/compatibility-2026-11-16/fsx-truncate-repro",
+        "sha256": "73508639321c7b6520afaf2eaceefe037fa036341831a19c9002c75287d3a641"
+      }
+    ],
+    "version_check": {
+      "command": [
+        "/home/sekito_centsys_jp/.anyenv/envs/pyenv/versions/3.11.9/bin/python3",
+        "--version"
+      ],
+      "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline",
+      "exit_code": 0,
+      "stdout": "Python 3.11.9\n",
+      "stdout_sha256": "bc470e08cfeae31ebc8be9f6a8b9e86e415842ad13f9afb19828ca2ac42e81b5",
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "target": "real host FUSE mount",
+  "command": [
+    "/home/sekito_centsys_jp/.anyenv/envs/pyenv/versions/3.11.9/bin/python3",
+    "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline/results/compatibility-2026-11-16/fsx-truncate-repro/reproduce.py",
+    "/tmp/go-nando-e2e.muU2PX/mount-fsx-validation-3186687"
+  ],
+  "command_display": "/home/sekito_centsys_jp/.anyenv/envs/pyenv/versions/3.11.9/bin/python3 /home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline/results/compatibility-2026-11-16/fsx-truncate-repro/reproduce.py /tmp/go-nando-e2e.muU2PX/mount-fsx-validation-3186687",
+  "started_at": "2026-11-16T15:41:00.258305+00:00",
+  "finished_at": "2026-11-16T15:41:00.534894+00:00",
+  "duration_seconds": 0.2765533709898591,
+  "timeout_seconds": 900.0,
+  "status": "completed",
+  "failure_kind": null,
+  "failure_classification": "unclassified",
+  "preflight": {
+    "status": "passed",
+    "checks": {
+      "tooling_manifest_sha256": "7e347721ef7d048b76c4ad2fa321a8418415198f2c0b9a73c2f233f2d666e251",
+      "tooling_manifest": "passed",
+      "conditions": "passed",
+      "executables": "passed",
+      "source_trees": [
+        {
+          "path": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline/results/compatibility-2026-11-16/fsx-truncate-repro",
+          "expected_sha256": "73508639321c7b6520afaf2eaceefe037fa036341831a19c9002c75287d3a641",
+          "actual_sha256": "73508639321c7b6520afaf2eaceefe037fa036341831a19c9002c75287d3a641"
+        }
+      ],
+      "version_check": "passed"
+    },
+    "version_check": {
+      "command": [
+        "/home/sekito_centsys_jp/.anyenv/envs/pyenv/versions/3.11.9/bin/python3",
+        "--version"
+      ],
+      "exit_code": 0,
+      "stdout": "Python 3.11.9\n",
+      "stdout_sha256": "bc470e08cfeae31ebc8be9f6a8b9e86e415842ad13f9afb19828ca2ac42e81b5",
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "launch_error": null,
+  "timeout_error": null,
+  "exit_code": 0,
+  "conditions": {
+    "target": "real host FUSE mount",
+    "mount_options": [],
+    "allow_other": false,
+    "workload": "committed truncate/fstat/read/fsync reproduction",
+    "uid": 736972916,
+    "gid": 736972916
+  },
+  "conditions_sha256": "0c23246a4b437537beec6c951be009da658a523f471759ed6bd8daf0d534c8ec",
+  "tooling_manifest_sha256": "7e347721ef7d048b76c4ad2fa321a8418415198f2c0b9a73c2f233f2d666e251",
+  "repository_sha": "55259881880991254d7a11a24507c3c595979071",
+  "environment": {
+    "platform": "Linux-6.8.0-1070-gcp-x86_64-with-glibc2.35",
+    "python": "3.11.9",
+    "machine": "x86_64",
+    "kernel": "6.8.0-1070-gcp",
+    "cwd": "/tmp/go-nando-e2e.muU2PX/mount-fsx-validation-3186687"
+  },
+  "logs": {
+    "stdout": {
+      "path": "stdout.log",
+      "sha256": "b12abf3611f0aaafb74ca2a6be374b5190808a498c3712d280e5f3b7822c70f0"
+    },
+    "stderr": {
+      "path": "stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "preflight": {
+      "path": "preflight.log",
+      "sha256": "d9db7c99d078f8a14fdbead0981a856b64e57e34672b7b2d01c50764411f2762"
+    },
+    "tooling_manifest_input": {
+      "path": "tooling-manifest.input.json",
+      "sha256": "7e347721ef7d048b76c4ad2fa321a8418415198f2c0b9a73c2f233f2d666e251"
+    },
+    "conditions_input": {
+      "path": "conditions.input.json",
+      "sha256": "0c23246a4b437537beec6c951be009da658a523f471759ed6bd8daf0d534c8ec"
+    },
+    "version_check_stdout": {
+      "path": "version-check.stdout.log",
+      "sha256": "bc470e08cfeae31ebc8be9f6a8b9e86e415842ad13f9afb19828ca2ac42e81b5"
+    },
+    "version_check_stderr": {
+      "path": "version-check.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+}

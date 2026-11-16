@@ -254,6 +254,13 @@ Ubuntu package `0.13-4`. The exact version-check commands and their actual
 stdout/stderr are in each preparation manifest. All run commands only verify
 the pinned preparation and execute the already installed tools.
 
+The PR #14 real-mount revalidation is integrated as E2E gate G6. It reuses the
+G0-built `nando-fuse`, native daemon lifecycle, and `runner.py` mount cleanup.
+The truncate reproduction and prepared fsx run each use
+`tools/validation_capture.py`; their status and raw logs are retained under
+`results/pr14-fuse-revalidation-2026-11-17/evidence/`. The adapter default
+mount options are used, so `allow_other` is not requested.
+
 The benchmark files are E2E measurements on this host, not adapter-only
 measurements. They retain their different connection, cache, and commit
 boundaries, and the successful summaries use nearest-rank percentiles. Read

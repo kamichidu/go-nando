@@ -19,6 +19,7 @@ export E2E_ARTIFACTS_DIR="$ARTIFACTS"
 export E2E_NANDO_BIN="$ARTIFACTS/bin/nando"
 export E2E_FUSE_BIN="$ARTIFACTS/bin/nando-fuse"
 export E2E_WEBDAV_BIN="$ARTIFACTS/bin/nando-webdav"
+export E2E_FSX_BIN=${E2E_FSX_BIN:-/tmp/nando-validation-tools/xfstests/ltp/fsx}
 export E2E_SOCKET="$ARTIFACTS/run/nando.sock"
 export E2E_REPOSITORY="$ARTIFACTS/state/local/repository"
 export E2E_PROJECT="$PROJECT"
@@ -59,7 +60,15 @@ cleanup() {
     timeout -k 5s 35s "${COMPOSE[@]}" down --volumes --remove-orphans --timeout 8 >"$ARTIFACTS/compose-down.log" 2>&1
     if (($? != 0)); then mark CLEANUP FAIL "compose down failed; see compose-down.log"; overall=1; fi
   fi
-  for gate in G0 G1 G2 G3 G5; do
+  if [[ -d "$ARTIFACTS/fsx-validation" ]]; then
+    local saved="$ROOT/results/pr14-fuse-revalidation-2026-11-17"
+    mkdir -p "$saved"
+    cp -a "$ARTIFACTS/fsx-validation" "$saved/evidence"
+    cp "$ARTIFACTS/daemon-fsx.log" "$saved/" 2>/dev/null || true
+    cp "$ARTIFACTS/nando-fuse-fsx-validation.log" "$saved/" 2>/dev/null || true
+    mark EVIDENCE PASS "validation_capture output copied to $saved/evidence"
+  fi
+  for gate in G0 G1 G2 G3 G5 G6; do
     if ! cut -f1 "$GATES" | rg -qx "$gate"; then mark "$gate" SKIP "stopped before this gate ran"; fi
   done
   if ((STRESS)) && ! cut -f1 "$GATES" | rg -qx G4; then mark G4 SKIP "stress requested but prerequisites did not complete"; fi
@@ -77,6 +86,7 @@ if ! command -v fusermount3 >/dev/null || [[ ! -c /dev/fuse || ! -r /dev/fuse ||
   mark G2 SKIP "native real FUSE runner unavailable"
   mark G3 SKIP "native real FUSE runner unavailable"
   mark G5 SKIP "native Linux/WSL E2E prerequisites unavailable"
+  mark G6 SKIP "native Linux/WSL E2E prerequisites unavailable"
   exit 2
 fi
 if [[ ! -d "$DESIGN_IR_REPO/.git" || "$(git -C "$DESIGN_IR_REPO" rev-parse HEAD 2>/dev/null || true)" != "$DESIGN_IR_COMMIT" ]]; then
@@ -178,6 +188,20 @@ if ! run_gate G3 "native daemon/FUSE crash, restart and recovery" 480 bash -c '
   setsid "$1" --repository "$2" --daemon-listen "unix://$3" daemon >>"$4/daemon-g3.log" 2>&1 & daemon=$!
   python3 "$5/e2e/runner.py" wait-daemon
   python3 "$5/e2e/runner.py" g3-verify-recovery
+' _ "$E2E_NANDO_BIN" "$E2E_REPOSITORY" "$E2E_SOCKET" "$ARTIFACTS" "$ROOT"; then exit 1; fi
+
+if [[ ! -x "$E2E_FSX_BIN" || ! -f "$ROOT/results/compatibility-2026-11-16/tooling-fsx.json" ]]; then
+  mark G6 SKIP "prepared fsx executable or manifest unavailable"
+  overall=1
+elif ! run_gate G6 "real host FUSE truncate repro and pinned fsx captured through validation_capture" 1200 bash -c '
+  set -Eeuo pipefail
+  rm -rf "$2"
+  "$1" --repository "$2" init --delivery-mode local
+  setsid "$1" --repository "$2" --daemon-listen "unix://$3" daemon >"$4/daemon-fsx.log" 2>&1 & daemon=$!
+  trap "kill -TERM \$daemon 2>/dev/null || true; wait \$daemon 2>/dev/null || true" EXIT
+  export E2E_REPOSITORY="$2" E2E_SOCKET="$3"
+  python3 "$5/e2e/runner.py" wait-daemon
+  python3 "$5/e2e/runner.py" fsx-validation
 ' _ "$E2E_NANDO_BIN" "$E2E_REPOSITORY" "$E2E_SOCKET" "$ARTIFACTS" "$ROOT"; then exit 1; fi
 
 if ((STRESS)); then
