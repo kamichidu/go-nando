@@ -1,0 +1,122 @@
+= Filesystem Compatibility and Interface Benchmark Evidence
+
+This workflow records observations from independent filesystem suites and
+compares a small set of operations through daemon control RPC, a mounted FUSE
+filesystem, and WebDAV. It does not change the implementation to accommodate a
+suite. Compatibility failures are evidence, not a CI gate. Do not set fixed
+performance thresholds in CI from these measurements.
+
+== Starting conditions
+
+Begin from an up-to-date `main`, create an isolated repository using local
+delivery, and start its daemon. Use one repository and equivalent filesystem
+state for each interface when comparing results. Record adapter versions,
+mount options, WebDAV URL, payload size, iteration count, storage type, and any
+environment restrictions alongside the evidence. The scripts require Python
+3; FUSE also requires the platform's normal mount permissions and kernel FUSE
+support.
+
+. Fetch `main`, create a working branch, and build the commands from the
+  repository root:
+
+[source,bash]
+----
+git fetch origin main
+git switch -c bench/compatibility-evidence origin/main
+go build -o .local/bin/nando ./cmd/nando
+go build -o .local/bin/nando-fuse ./adapters/fuse/cmd/nando-fuse
+go build -o .local/bin/nando-webdav ./adapters/webdav/cmd/nando-webdav
+export PATH="$PWD/.local/bin:$PATH"
+----
+
+. Initialize an isolated local repository and run its daemon in a dedicated
+  terminal:
+
+[source,bash]
+----
+mkdir -p .bench
+nando --repository "$PWD/.bench/repository" init --delivery-mode local
+nando --repository "$PWD/.bench/repository" --daemon-listen "unix://$PWD/.bench/nando.sock" daemon
+----
+
+. In a second terminal, start the adapters with a mount directory on the same
+  host and an unused WebDAV port:
+
+[source,bash]
+----
+mkdir -p .bench/mount
+nando-fuse --repository "$PWD/.bench/repository" --daemon-listen "unix://$PWD/.bench/nando.sock" \
+  --fuse-mountpoint "$PWD/.bench/mount"
+nando-webdav --repository "$PWD/.bench/repository" --daemon-listen "unix://$PWD/.bench/nando.sock" \
+  --webdav-listen 127.0.0.1:18080
+----
+
+Each iteration creates and fsyncs a file, reads it, stats it, lists the root,
+renames it, and deletes it. The JSON contains per-operation samples and
+median/p95/min/max summaries. RPC operates directly on the public control
+protocol and its file Resources; FUSE uses `fsync`; WebDAV uses HTTP/WebDAV
+methods. These are comparable logical operations, though their protocol and
+durability boundaries differ:
+
+[cols="1,1,1,1",options="header"]
+|===
+| Operation | Daemon RPC | FUSE | WebDAV
+| Create/commit | Resource begin, write, commit, release | Write and `fsync` | `PUT`
+| Read | Resource begin, read, release | File read | `GET`
+| Stat | `repository.stat` | `stat(2)` | `PROPFIND` with depth 0
+| List | `repository.list` | Directory iteration | `PROPFIND` with depth 1
+| Rename | `repository.move` | `rename(2)` | `MOVE`
+| Delete | `repository.remove` | `unlink(2)` | `DELETE`
+|===
+
+Keep each interface's JSON result; combine runs only after checking matching
+conditions.
+
+[source,bash]
+----
+mkdir -p results
+python3 tools/interface_benchmark.py --interface rpc --rpc-endpoint "unix://$PWD/.bench/nando.sock" \
+  --iterations 100 --payload-bytes 4096 --output results/rpc.json
+python3 tools/interface_benchmark.py --interface fuse --mountpoint "$PWD/.bench/mount" \
+  --iterations 100 --payload-bytes 4096 --output results/fuse.json
+python3 tools/interface_benchmark.py --interface webdav --webdav-url http://127.0.0.1:18080 \
+  --iterations 100 --payload-bytes 4096 --output results/webdav.json
+----
+
+== Running external compatibility suites
+
+Install and configure pjdfstest, fsx, or litmus using that suite's own
+instructions. Point it at the interface under examination. The capture
+wrapper runs the supplied command unchanged, saves stdout and stderr as
+separate byte-for-byte logs, records their SHA-256 digests, timestamps,
+duration, exit code, repository SHA, and host environment in `result.json`,
+and returns the suite's exit status. Its output directory must not already
+exist. A non-zero suite exit remains a recorded failure; it does not discard
+the logs or assign a cause.
+
+[source,bash]
+----
+python3 tools/validation_capture.py --output results/pjdfstest-fuse \
+  --suite pjdfstest --target fuse --cwd "$PWD/.bench/mount" -- \
+  prove -rv "$PJDFSTEST/tests"
+python3 tools/validation_capture.py --output results/fsx-fuse \
+  --suite fsx --target fuse -- fsx -N 10000 "$PWD/.bench/mount/fsx.data"
+python3 tools/validation_capture.py --output results/litmus-webdav \
+  --suite litmus --target webdav -- litmus http://127.0.0.1:18080/
+----
+
+Replace example suite arguments with the invocation supported by the installed
+version. The wrapper deliberately does not rewrite test inputs, filter cases,
+or convert failures to success. Repeat per target interface. Save each
+run-directory and benchmark JSON as CI artifacts or attach them to the change.
+
+== Interpreting evidence
+
+The machine-readable result has `failure_classification: unclassified` (or
+`classification: unclassified` for benchmarks) by design. Review raw logs and
+assign any later analysis to one of: specification not implemented,
+compatibility issue, implementation defect, environment issue, or unresolved.
+Keep that interpretation separate from the observed exit code and output.
+Performance is descriptive only; compare matching hosts, repository/storage
+configuration, build SHA, mount options, workload, and load. No fixed CI
+threshold is defined.

@@ -4,6 +4,10 @@ image:manual/public/nando.svg[nando logo, width=128]
 
 link:https://kamichidu.github.io/go-nando/[User Manual] | link:https://kamichidu.github.io/go-nando/getting-started/quickstart[Quick Start]
 
+Filesystem compatibility suite capture and RPC/FUSE/WebDAV benchmark
+instructions are in
+link:docs/validation-benchmark.adoc[the validation and benchmark guide].
+
 == About the Name
 
 nando is a Japanese word for a household storeroom: a place to keep useful
