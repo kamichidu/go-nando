@@ -9,9 +9,13 @@ The Debian package installs a system template and a user-manager template. They 
 | `nando@<instance>.service` | Dedicated non-login `nando` account | `/etc/nando/<instance>.toml` | Set the repository path in that file; package state is under `/var/lib/nando/<instance>` and runtime socket directory is `/run/nando-<instance>` |
 | `nando@<instance>.service` in the user manager | The logged-in user | `%E/nando/<instance>.toml`; `%E` is the manager config root (`$XDG_CONFIG_HOME` for the user manager) | Configured repository path, or the user's XDG data default; the unit permits writes under `~/.local/share/nando` and its runtime directory |
 
-The two units share a template name but belong to different systemd managers. The rest of this page documents the system service, which is the package's usual multi-user service setup. The Unix socket configured in this system-service procedure is owner-only: run its CLI and adapters as the `nando` account with the same instance config. A normal login account cannot use that socket directly; the examples use `sudo -u nando` so the client process has the service account identity. The daemon also supports a separately configured TCP endpoint with TLS and bearer authentication, but this procedure uses the local Unix socket.
+The two units share a template name but belong to different systemd managers. The rest of this page covers the system service, the package's usual multi-user setup.
 
-For personal use, initialize and run a repository as your logged-in account, following the [quick start](../getting-started/quickstart). Those commands use your account's XDG data directory and socket. They do not automatically select the system service repository. The intended future behavior of naturally selecting a system-standard repository with an explicit switch to personal storage is not implemented; repository discovery and cross-account socket access are separate unresolved implementation requirements.
+The system-service procedure configures an owner-only Unix socket. Run its CLI and adapters as the `nando` account with the same instance config; a normal login account cannot use the socket directly. Examples use `sudo -u nando` to run clients as the service account. Although the daemon also supports a separately configured TCP endpoint with TLS and bearer authentication, this procedure uses the local Unix socket.
+
+For personal use, initialize and run a repository as your logged-in account using the [quick start](../getting-started/quickstart). Those commands use your account's XDG data directory and socket; they do not automatically select the system-service repository.
+
+Automatic selection of a system-standard repository, an explicit switch to personal storage, and cross-account socket access are not implemented.
 
 ## Configure and start a system instance
 
@@ -61,7 +65,15 @@ This example uses the instance name `archive` and repository path `/var/lib/nand
    sudo -u nando /usr/bin/nando --config /etc/nando/archive.toml doctor
    ```
 
-Run other repository commands as `nando` with the same config, for example `sudo -u nando /usr/bin/nando --config /etc/nando/archive.toml ls /`. The daemon reads `/etc/nando/archive.toml`, stores repository data under `/var/lib/nando/archive`, and creates its control socket under `/run/nando-archive`. The config file itself is owned by root and readable by group `nando`. Do not run an ordinary login-user client against this owner-only socket; cross-account authorization is not implemented. `doctor` checks that the daemon responds and its repository integrity check passes; it does not report the resolved path or confirm that remote deliveries have completed.
+Run repository commands as `nando` with the same config. For example:
+
+```sh
+sudo -u nando /usr/bin/nando --config /etc/nando/archive.toml ls /
+```
+
+The daemon reads `/etc/nando/archive.toml`, stores data under `/var/lib/nando/archive`, and creates its control socket under `/run/nando-archive`. The config file is owned by root and readable by group `nando`. Cross-account authorization is not implemented, so do not run an ordinary login-user client against the owner-only socket.
+
+`doctor` checks that the daemon responds and its repository integrity check passes. It does not report the resolved path or confirm that remote deliveries have completed.
 
 ## Use FUSE or WebDAV with the instance
 

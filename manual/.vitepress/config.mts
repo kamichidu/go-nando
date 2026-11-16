@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitepress'
+import { withMermaid } from 'vitepress-plugin-mermaid'
 
-export default defineConfig({
+export default withMermaid(defineConfig({
   lang: 'en-US',
   title: 'nando Manual',
   description: 'Installation, usage, and operations guide for nando',
@@ -29,7 +30,7 @@ export default defineConfig({
         { text: 'Initialize a repository', link: '/setup/repository' },
         { text: 'Configuration file', link: '/setup/configuration' },
         { text: 'Google Cloud Storage', link: '/setup/gcs' },
-        { text: 'S3 / Wasabi', link: '/setup/s3' },
+        { text: 'S3-compatible storage', link: '/setup/s3' },
         { text: 'systemd system service', link: '/setup/systemd' },
       ] },
       { text: 'Use', items: [
@@ -55,4 +56,4 @@ export default defineConfig({
     socialLinks: [{ icon: 'github', link: 'https://github.com/kamichidu/go-nando' }],
     footer: { message: 'The design authority is `docs/design.ir.yaml`; consult the implementation for actual behavior.' },
   },
-})
+}))
