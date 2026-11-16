@@ -25,6 +25,6 @@ nando init \
   --remote-uri gs://my-bucket/nando/
 ```
 
-For S3-compatible storage, use `--remote-backend s3` and an `s3://bucket[/prefix]` URI. A repository selects one `remote_backend`; the URI prefix is used literally in object keys, so a trailing `/` is not added automatically. See [GCS](./gcs) or [S3 / Wasabi](./s3) for provider setup and required daemon scheduler settings.
+For S3-compatible storage, use `--remote-backend s3` and an `s3://bucket[/prefix]` URI. A repository selects one `remote_backend`; the URI prefix is used literally in object keys, so a trailing `/` is not added automatically. See [GCS](./gcs) or [S3-compatible storage](./s3) for connection setup and required daemon scheduler settings.
 
 After initialization, start the [daemon](../operations/daemon), then use the [FUSE](../use/fuse) or [WebDAV](../use/webdav) adapter for everyday file access. The CLI is available for [administration and diagnostics](../use/cli).

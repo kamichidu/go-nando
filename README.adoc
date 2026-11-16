@@ -29,7 +29,7 @@ Examples include:
 * A local-first repository with asynchronous delivery to remote object
   storage.
 
-For remote delivery, nando supports Google Cloud Storage (GCS) and one S3-compatible adapter for AWS S3 or Wasabi. Content is committed locally first; delivery to the selected remote backend is asynchronous. A repository uses local storage alone or local storage with exactly one remote backend. Combining multiple remote backends in one repository is unsupported.
+For remote delivery, nando supports Google Cloud Storage (GCS) and one S3-compatible storage adapter. The adapter can connect to Amazon S3 or compatible services such as Wasabi. Content is committed locally first; delivery to the selected remote backend is asynchronous. A repository uses local storage alone or local storage with exactly one remote backend. Combining multiple remote backends in one repository is unsupported.
 
 == Architecture
 
@@ -69,7 +69,8 @@ That transaction atomically commits the Entry reference and durable
 remote-delivery queue obligation; remote delivery is asynchronous. If the SQLite
 transaction fails, the published Local object remains unreferenced for later
 cleanup. S3-compatible uploads use one conditional PutObject and reconcile by
-HEAD metadata; multipart is unsupported pending Wasabi validation.
+HEAD metadata. Multipart upload is unsupported; compatibility is limited to the
+single-part operations and endpoint behavior documented here.
 
 == Requirements
 
@@ -234,7 +235,7 @@ to an empty string is a configuration error. GCS uses
 `gs://bucket[/prefix]` URI. S3-compatible storage uses
 `remote_backend: "s3"` and an `s3://bucket[/prefix]` URI. For AWS S3, the
 AWS credential chain supplies credentials and the SDK selects the regional
-endpoint by default. For Wasabi or another compatible endpoint, set
+endpoint by default. For another S3-compatible service, such as Wasabi, set
 `[remote.s3].endpoint` and `[remote.s3].region`. Credentials come from the AWS
 SDK v2 Default Credential Chain, including environment variables, shared
 profiles, web identity, or IAM roles; credentials cannot be set in TOML. S3

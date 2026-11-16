@@ -46,7 +46,7 @@ max_delivery_delay = "30m"
 sync_parallelism = 2
 ```
 
-Configure credentials for the daemon account, then initialize with the backend and URI using the provider-specific [GCS](./gcs) or [S3 / Wasabi](./s3) procedure. Start the daemon with that config.
+Configure credentials for the daemon account, then initialize with the backend and URI using the [GCS](./gcs) or [S3-compatible storage](./s3) procedure. Start the daemon with that config.
 
 `nando doctor` confirms that the selected daemon responds and that its repository integrity check passes. It does not report delivery progress. No command reports when the remote delivery queue has drained, and a successful write does not confirm remote durability.
 
