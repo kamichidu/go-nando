@@ -102,6 +102,28 @@ def percentile(values, fraction):
     return ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
 
 
+def summarize_series(values):
+    if not values:
+        return None
+    return {"samples": len(values), "median_ns": statistics.median(values),
+            "p95_ns": percentile(values, .95), "p99_ns": percentile(values, .99),
+            "min_ns": min(values), "max_ns": max(values)}
+
+
+def summarize_records(records, operation_names):
+    successful_summary, failed_partial_summary = {}, {}
+    for name in operation_names:
+        successful = [r["operations"][name] for r in records if r["status"] == "ok" and name in r["operations"]]
+        partial = [r["operations"][name] for r in records if r["status"] == "failed" and name in r["operations"]]
+        summary = summarize_series(successful)
+        failed_summary = summarize_series(partial)
+        if summary:
+            successful_summary[name] = summary
+        if failed_summary:
+            failed_partial_summary[name] = failed_summary
+    return successful_summary, failed_partial_summary
+
+
 def cleanup_iteration(interface, rpc, root, base, old, new):
     results = []
     for path in (old, new):
@@ -229,13 +251,8 @@ def main():
             errors.append(failure)
             records.append(record)
 
-    operation_summary = {}
-    for key in ("create_write_ns", "read_ns", "stat_ns", "list_ns", "rename_ns", "delete_ns"):
-        values = [r["operations"][key] for r in records if key in r["operations"]]
-        if values:
-            operation_summary[key] = {"samples": len(values), "median_ns": statistics.median(values),
-                                      "p95_ns": percentile(values, .95), "p99_ns": percentile(values, .99),
-                                      "min_ns": min(values), "max_ns": max(values)}
+    operation_names = ("create_write_ns", "read_ns", "stat_ns", "list_ns", "rename_ns", "delete_ns")
+    operation_summary, failed_observation_summary = summarize_records(records, operation_names)
     try:
         sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     except (OSError, subprocess.CalledProcessError):
@@ -273,7 +290,9 @@ def main():
               "cleanup_failed": sum(r.get("cleanup", {}).get("status") == "failed" for r in records),
               "status": "completed" if not errors else "failed",
               "run_conditions": additional_conditions, "percentile_method": "nearest-rank: sorted sample at ceil(p*n)-1 (1-indexed)",
-              "classification": "unclassified", "summary": operation_summary, "iterations": records, "errors": errors}
+              "classification": "unclassified", "summary_successful_iterations": operation_summary,
+              "summary_failed_partial_observations": failed_observation_summary,
+              "iterations": records, "errors": errors}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"result": str(args.output), "completed": result["completed"], "failed": result["failed"]}))

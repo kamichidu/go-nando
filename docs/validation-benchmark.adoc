@@ -55,7 +55,11 @@ nando-webdav --repository "$PWD/.bench/repository" --daemon-listen "unix://$PWD/
 ----
 
 Each iteration creates a file, reads it, stats it, lists the root, renames it,
-and deletes it. The JSON contains per-operation samples and
+and deletes it. The JSON retains every partial iteration. Aggregate percentiles
+in `summary_successful_iterations` use successful iterations only; measurements
+collected before a failed iteration are summarized separately in
+`summary_failed_partial_observations`.
+The JSON contains per-operation samples and
 median/p95/p99/min/max summaries. Percentiles use the nearest-rank method:
 sort the `n` samples and choose rank `ceil(p*n)` (1-indexed). For small samples,
 p95 and p99 may select the same observation. The result records these
@@ -127,16 +131,17 @@ Install a chosen pinned pjdfstest, fsx, or litmus release/source revision using
 its upstream instructions and record its prerequisites and installation
 method. Do not install or update tools in the run phase. `validation_tooling.py`
 only snapshots already installed executables, their resolved paths and SHA-256
-digests, the declared tool version/source revision, prerequisites, and
-preparation host. It does not install, download, build, or update anything.
-The declared version is the version verified by the operator during
-preparation; the manifest also locks executable content and location.
+digests, test-tree content hashes, prerequisites, and preparation host. It
+runs a required version-check command and stores its exact command,
+stdout/stderr, hashes, and exit code. It does not install, download, build, or
+update anything.
 
 . Install/build the chosen version in a dedicated environment using that
   project's upstream instructions. Pin a package release or source commit and
   satisfy the documented OS, privilege, compiler, and mount prerequisites.
-. Verify the installed suite version and prerequisites yourself. Record the
-  exact version/source revision and installation method in the next command.
+. Select a command that reports the installed version or pinned source
+  revision and verify it succeeds. Use a read-only query. The preparation tool
+  records and runs that command; it is rerun during preflight to detect changes.
 . Create a preparation manifest for the installed executable(s). This records
   them and does not perform installation.
 
@@ -144,26 +149,35 @@ preparation; the manifest also locks executable content and location.
 ----
 mkdir -p results
 python3 tools/validation_tooling.py --output results/tooling-pjdfstest.json \
-  --tool-name pjdfstest --version '<verified version>' --source-revision '<tag-or-commit>' \
+  --tool-name pjdfstest --version-command "git -C '$PJDFSTEST' rev-parse HEAD" \
+  --source-revision '<tag-or-commit>' --source-tree "$PJDFSTEST/tests" \
   --installation-notes '<pinned source checkout and upstream build steps>' \
-  --executable prove --precondition 'mount=fuse' --precondition 'privileges=<required level>'
+  --executable prove --executable git --precondition 'mount=fuse' --precondition 'privileges=<required level>'
 python3 tools/validation_tooling.py --output results/tooling-fsx.json \
-  --tool-name fsx --version '<verified version>' --installation-notes '<pinned package or source steps>' \
+  --tool-name fsx --version-command 'fsx --version' \
+  --installation-notes '<pinned package or source steps>' \
   --executable fsx --precondition 'target=<mounted test directory>'
 python3 tools/validation_tooling.py --output results/tooling-litmus.json \
-  --tool-name litmus --version '<verified version>' --installation-notes '<pinned package or source steps>' \
+  --tool-name litmus --version-command 'litmus --version' \
+  --installation-notes '<pinned package or source steps>' \
   --executable litmus --precondition 'target=webdav loopback endpoint'
 ----
+
+Replace a suite's `--version-command` with an installed package query or
+upstream version command if that executable does not support `--version`. The
+preparation step fails if the selected command exits nonzero.
 
 == Running external compatibility suites
 
 Prepare a JSON conditions file for each run. Include target/mount options,
 workload parameters, relevant privilege requirements, and load/storage details.
-The run command below only verifies the prepared manifest and invokes the
-specified existing executable. It never runs an installer or updater. It
-records the tool name/version, command, conditions, manifest digest, repository
-SHA, environment, stdout/stderr digests, duration, and result. Its output
-directory must not already exist.
+The run command below verifies the prepared manifest, each executable digest,
+the test-tree content hash, and the live output of the prepared version-check
+command before invoking the specified existing executable. It never runs an
+installer or updater. It records the tool name/version, command, conditions,
+manifest digest and input, repository SHA, environment, stdout/stderr digests,
+duration, preflight log, and result. Its output directory must not already
+exist.
 
 [source,bash]
 ----
@@ -190,15 +204,16 @@ python3 tools/validation_capture.py --output results/litmus-webdav \
   --conditions-json results/litmus-conditions.json -- litmus http://127.0.0.1:18080/
 ----
 
-The capture wrapper preserves non-zero exit codes as `command_failed` with
-`failure_kind: exit_code`. If the executable is absent, changed since
-preparation, or cannot be launched, it writes `result.json` and empty logs with
-`status: launch_failed`, `failure_kind: environment_launch_error`, and
-`failure_classification: environment_issue`; its own process exits with 127.
-Other suite failures remain `unclassified`. The wrapper does not rewrite test
-inputs, filter cases, or convert failures to success. Repeat preparation and
-runs per suite/version and interface as needed, without updating the pinned
-tool during measurement.
+Preflight failures, including unreadable/invalid manifests or conditions,
+executable hash errors, changed test-tree content, and version-check mismatch,
+are recorded as `preflight_failed` with error details and evidence logs. The
+wrapper exits with 125 and does not run the suite. A process start error is
+`launch_failed` (`environment_launch_error`, exit 127); a launched test with a
+nonzero status is `command_failed` (`exit_code`, the child's code). These
+statuses are distinct. Other suite failures remain `unclassified`. The wrapper
+does not rewrite test inputs, filter cases, or convert failures to success.
+Repeat preparation and runs per suite/version and interface as needed, without
+updating the pinned tool during measurement.
 Retain each `tooling-*.json` manifest together with the result directory; the
 result records the manifest digest and path for verification.
 
@@ -212,3 +227,10 @@ matching hosts, repository/storage configuration, build SHA, mount options,
 workload, load, tool version, and preparation manifest. Never interpret total
 E2E latency differences as adapter-only costs. No fixed CI threshold is
 defined.
+
+Run the harness failure-path checks without installing external suites with:
+
+[source,bash]
+----
+python3 -m unittest -v tools/test_validation_harness.py
+----
