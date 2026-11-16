@@ -1,0 +1,9 @@
+{
+  "target": "HEAD-built nando WebDAV loopback HTTP",
+  "url": "http://127.0.0.1:60525/",
+  "auth": "none",
+  "workload": "unmodified full Litmus 0.13-4 default suite with --keep-going",
+  "repository": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline/results/pr14-copy-move-2026-11-17/state/g7-final/repository",
+  "mount": "native daemon repository",
+  "isolation": "fresh Local repository; no concurrent workload"
+}

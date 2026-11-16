@@ -30,10 +30,10 @@ The executable defaults to `127.0.0.1:8080` and rejects addresses that resolve o
 |Daemon-owned namespace remove/create operations.
 
 |MOVE
-|Daemon-owned path move; occupied destinations fail. Replacement is not implied.
+|Daemon-owned path move; `Overwrite: F` rejects an occupied destination with 412. Replacement remains unsupported.
 
 |COPY
-|File-to-absent-path copy using read and write Resource sessions, followed by Commit. Directory copy is unsupported.
+|File copy with `Overwrite: T` by default or `F` explicitly, using read and CAS write Resource sessions. Existing file replacement returns 204; creation returns 201. Directory copy is unsupported.
 
 |LOCK, UNLOCK
 |501 Not Implemented. The design does not select lock persistence, scope, or interaction with repository CAS.
@@ -41,9 +41,99 @@ The executable defaults to `127.0.0.1:8080` and rejects addresses that resolve o
 |PROPPATCH / dead properties
 |501 Not Implemented. The repository has no authoritative dead-property store or persistence contract.
 
-|COPY overwrite / MOVE overwrite
-|Existing destinations are rejected or reported unsupported. Repository replacement semantics for these WebDAV operations are not specified.
+|MOVE overwrite / collection COPY
+|MOVE replacement and collection COPY are intentionally unsupported in Phase A. The repository has no atomic namespace replacement or subtree clone operation; composing Remove/Move or repeated MKCOL/PUT would expose partial state on failure.
 |===
+
+== COPY/MOVE semantics decision table
+
+The HTTP outcomes below follow RFC 4918 Sections 9.6.1, 9.6.2, 9.8, and 9.9.1; repository safety constraints may narrow the supported operation set as recorded above. `Destination` must be same-origin and a valid repository path. `Overwrite` accepts only `T` or `F`; omission means `T`.
+
+[cols="2,2,2,2,2"]
+|===
+|Condition |RFC 4918 expectation |COPY Phase A |MOVE Phase A |Namespace invariant
+
+|Source absent
+|404 Not Found (9.8.4, 9.9.1)
+|404, unchanged
+|404, unchanged
+|No destination or staging Resource created
+
+|Destination parent absent
+|409 Conflict (9.8.4, 9.9.1)
+|409, unchanged
+|409, unchanged
+|No implicit parent creation
+
+|Destination parent is a file
+|409 Conflict
+|409, unchanged
+|409, unchanged
+|No staged write
+
+|Destination absent; parent collection exists
+|201 Created
+|201 for file; collection source returns 501 (unsupported)
+|201 for successful move
+|Commit is the only point that publishes a copied file
+
+|Destination exists, `Overwrite: F`
+|412 Precondition Failed (9.6.1)
+|412, unchanged
+|412, unchanged
+|No staging or source mutation
+
+|Destination exists, `Overwrite` omitted or `T`, file to file
+|Replace and return 204 (9.6.1)
+|204; Begin-time Entry ID/revision CAS protects concurrent replacement
+|501 (replacement outside Phase A)
+|Source unchanged; destination changes only at successful Commit
+
+|Destination exists, `Overwrite: T`, incompatible type / collection replacement
+|RFC operation-specific constraints apply; 403/409 may result (9.8.4, 9.9.1)
+|Collection replacement 501
+|501
+|No destructive pre-delete
+
+|Source equals Destination
+|COPY: 403; MOVE: 403 (9.8.4, 9.9.1)
+|403, unchanged
+|403, unchanged
+|No-op is not reported as successful mutation
+
+|Destination is an ancestor/descendant of a collection source
+|COPY depth infinity: 403; MOVE into own subtree: 403 (9.8.4, 9.9.1)
+|Collection COPY 501 before mutation
+|Repository rejects unsafe subtree moves; 403/409 mapping
+|No partial subtree publication
+
+|Collection COPY, `Depth: 0`
+|Copy collection resource only; omit members (9.8.3)
+|501 (Phase A subset)
+|N/A
+|No destination collection is created
+
+|Collection COPY, `Depth: infinity` or omitted
+|Recursive collection copy (9.8.3); infinity is default
+|501 (Phase A subset)
+|N/A
+|No partial tree or unreachable staged children
+
+|MOVE with `Depth` other than infinity
+|400 Bad Request (9.9.1)
+|N/A
+|Not separately implemented yet
+|No mutation before header validation
+
+|Malformed `Overwrite` value
+|400 Bad Request
+|400, unchanged
+|400, unchanged
+|No RPC mutation
+
+|===
+
+For file COPY, source and destination are resolved before allocating a write Resource. Any failure after BeginWrite attempts daemon `Abort`; it never treats Release alone as successful cleanup. A Commit CAS failure leaves the previous destination visible. This is not a claim of multi-entry transactionality or crash-atomic subtree replacement.
 
 The adapter evaluates WebDAV entity-tag conditions against the same Begin-time CAS snapshot used by Commit, avoiding a Stat/Begin race. A concurrent update after Begin therefore fails repository CAS rather than overwriting newer content. Entry conflicts map to HTTP 412; absent resources map to 404; namespace collisions map to 412 or 405 according to the operation surface. `OPTIONS` advertises `DAV: 1`; it does not advertise class 2 locking, consistent with LOCK/UNLOCK returning 501.
 

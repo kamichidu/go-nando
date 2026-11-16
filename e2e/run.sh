@@ -315,7 +315,7 @@ if any(g["name"]=="basic" and g["status"]=="PASS" for g in groups):
 if any(g["status"]=="FAIL" for g in groups):
  analysis["causes"].append({"classification":"FAIL","scope":"Litmus group failures","detail":"Inspect raw Litmus and WebDAV logs for the observed failed cases."})
 analysis["causes"].append({"classification":"UNSUPPORTED","scope":"COPY/MOVE and properties","detail":"Cases explicitly rejected with HTTP 501 are recorded UNSUPPORTED; they remain outside this DELETE change."})
-analysis["causes"].append({"classification":"INDEPENDENT_REPRO","scope":"COPY/MOVE","detail":"Non-501 COPY/MOVE failures are independent of collection DELETE; the baseline isolated reproduction remains at results/compatibility-2026-11-16/litmus-isolated-repro/. This task does not change COPY/MOVE semantics."})
+analysis["causes"].append({"classification":"RFC4918_REVIEW","scope":"COPY/MOVE","detail":"Classify against RFC 4918 and docs/webdav-phase-a.adoc. Phase A supports file COPY with overwrite; collection COPY and MOVE replacement remain intentionally unsupported due missing atomic repository operations."})
 result["suite_analysis"]=analysis
 result["derived_suite_status"]="PASS" if len(groups)==5 and all(g["status"]=="PASS" for g in groups) else "FAIL"
 open(sys.argv[2].replace("result.json","analysis.json"),"w").write(json.dumps(analysis,indent=2)+"\n")

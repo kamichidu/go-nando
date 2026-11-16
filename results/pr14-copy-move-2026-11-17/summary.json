@@ -1,0 +1,28 @@
+{
+  "target_branch": "bench/fuse-webdav-baseline",
+  "base_observed": "f83bb237020021a72d2c9fc36fa7a5eed299d8ba",
+  "results": {
+    "webdav_module_tests": {"command": "cd adapters/webdav && go test ./...", "exit_code": 0},
+    "static_gate": {
+      "command": "bash e2e/static.sh $PWD $PWD/../design-ir",
+      "exit_code": 1,
+      "passed": ["root go test ./...", "root go test -race ./...", "root golangci-lint", "FUSE/WebDAV module test and race", "FUSE/WebDAV lint", "root/FUSE/WebDAV builds"],
+      "blocked_at": "tools/validate-design-ir.sh",
+      "reason": "sibling Design IR checkout lacks schema/design-ir.schema.json; expected digest 9b109dbc7ac09b32d3dbe2e233eed7da1378bc912d0e84c479c3ed0bed9f7103"
+    },
+    "http_gate": {"command": "bash e2e/webdav-http.sh against HEAD-built daemon and WebDAV loopback", "exit_code": 0, "status": "PASS"},
+    "litmus_g7": {
+      "command": "python3 tools/validation_capture.py --suite litmus --target webdav -- litmus --keep-going <loopback URL>",
+      "process_exit_code": 0,
+      "suite_status": "FAIL",
+      "groups": {"basic": "16/16 PASS", "copymove": "8/13 FAIL", "props": "10/14 FAIL", "locks": "3/3 PASS", "http": "4/4 PASS"},
+      "evidence": "litmus-capture-final/"
+    },
+    "canonical_e2e": {"status": "BLOCKED", "reason": "G0 Design IR schema dependency is unavailable; prior PR evidence also records Docker bind 127.0.0.1:4443 already allocated"}
+  },
+  "copy_move_classification": {
+    "fixed": ["file COPY Overwrite omitted/T replaces with 204", "Overwrite F existing destination returns 412", "missing destination parent returns 409", "identical source/destination returns 403", "MOVE Depth other than infinity returns 400", "COPY failures after BeginWrite attempt Abort"],
+    "unsupported_phase_a": ["collection COPY Depth 0/infinity", "MOVE replacement", "collection replacement"],
+    "not_introduced": ["multi-entry atomicity", "automatic recovery", "journal/GC changes"]
+  }
+}
