@@ -1,0 +1,33 @@
+Working tree: /home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline
+
+1) /tmp/nando-validation-tools/nando --repository /tmp/nando-validation-tools/run-69e4bb6/repository init --delivery-mode local
+exit code: 0
+stdout: Initialized empty nando repository in /tmp/nando-validation-tools/run-69e4bb6/repository
+stderr: empty
+
+2) /tmp/nando-validation-tools/nando --repository /tmp/nando-validation-tools/run-69e4bb6/repository --daemon-listen unix:///tmp/nando-validation-tools/run-69e4bb6/nando.sock daemon
+exit code: 1 (first attempt)
+stderr: Error: unix socket parent directory "/tmp/nando-validation-tools/run-69e4bb6" must be private (mode 0700)
+After chmod 0700, one daemon instance started (PID 3086423 in initial attempt; PID 3089303 in same-call attempt). A later overlapping attempt exited 1: listen on Unix socket: bind: address already in use.
+
+3) /tmp/nando-validation-tools/nando-fuse --repository /tmp/nando-validation-tools/run-69e4bb6/repository --daemon-listen unix:///tmp/nando-validation-tools/run-69e4bb6/nando.sock --fuse-mountpoint /tmp/nando-validation-tools/run-69e4bb6/mount --fuse-mount-option allow_other
+exit code: mount attempt failed
+stderr: /usr/bin/fusermount3: option allow_other only allowed if 'user_allow_other' is set in /etc/fuse.conf; Error: mount FUSE filesystem: fusermount exited with code 256 (allow_other may require user_allow_other in /etc/fuse.conf)
+Attempt to append user_allow_other to /etc/fuse.conf: exit code 1, permission denied.
+
+4) /tmp/nando-validation-tools/nando-fuse --repository /tmp/nando-validation-tools/run-69e4bb6/repository --daemon-listen unix:///tmp/nando-validation-tools/run-69e4bb6/nando.sock --fuse-mountpoint /tmp/nando-validation-tools/run-69e4bb6/mount
+exit code: process started; mountpoint appeared. After parent command ended, mount became disconnected (Transport endpoint is not connected, errno 107).
+
+5) python3 results/compatibility-2026-11-16/fsx-truncate-repro/reproduce.py /tmp/nando-validation-tools/run-69e4bb6/mount
+exit code: 1
+stderr: OSError [Errno 107] Transport endpoint is not connected at initial os.open; no probe operations ran.
+
+6) Same-call retained-process retry:
+/tmp/nando-validation-tools/nando --repository /tmp/nando-validation-tools/run-69e4bb6/repository --daemon-listen unix:///tmp/nando-validation-tools/run-69e4bb6/nando.sock daemon (background)
+/tmp/nando-validation-tools/nando-fuse --repository /tmp/nando-validation-tools/run-69e4bb6/repository --daemon-listen unix:///tmp/nando-validation-tools/run-69e4bb6/nando.sock --fuse-mountpoint /tmp/nando-validation-tools/run-69e4bb6/mount (background)
+python3 results/compatibility-2026-11-16/fsx-truncate-repro/reproduce.py /tmp/nando-validation-tools/run-69e4bb6/mount
+exit code: 1; stderr: OSError [Errno 5] Input/output error at initial os.open.
+/tmp/nando-validation-tools/xfstests/ltp/fsx -N 10000 -l 1048576 /tmp/nando-validation-tools/run-69e4bb6/mount/fsx.data
+exit code: 91; stdout: Seed set to 1; /tmp/nando-validation-tools/run-69e4bb6/mount/fsx.data: Input/output error; stderr empty.
+
+The original allow_other conditions were unavailable due to host /etc/fuse.conf permissions. No result is attributed to truncate behavior.
