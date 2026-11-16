@@ -27,7 +27,7 @@ These are filesystem operations; they are not WebDAV HTTP methods.
 
 ## Write and commit behavior
 
-Writes go to daemon-managed staging. `fsync` synchronizes dirty staging and requests a repository commit; successful return is the synchronous local commit boundary. In Remote mode, delivery to object storage remains asynchronous. Final close also attempts to commit remaining dirty data. FUSE `Flush` is not a commit signal. If a commit fails, the unfinished write is retained for Recovery rather than reported as committed. Use `fsync` when an application needs a synchronous local commit point; do not rely on close alone for that guarantee.
+Writes go to daemon-managed staging. For a linked file, `fsync` synchronizes dirty staging and requests a repository commit; successful return is the synchronous local commit boundary. In Remote mode, delivery to object storage remains asynchronous. When the last writable handle for a still-linked file closes, the adapter also attempts to commit remaining dirty data. FUSE `Flush` is not a commit signal. If a commit fails, the unfinished write is retained for Recovery rather than reported as committed. If a file is unlinked while a writer is open, that handle's staging is not committed back into the namespace; `fsync` only syncs its private staging. Use `fsync` when an application needs a synchronous local commit point; do not rely on close alone for that guarantee.
 
 ## Unmount
 
