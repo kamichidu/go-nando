@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "suite": "litmus",
+  "tool": {
+    "name": "litmus",
+    "version": "0.13-4",
+    "source_revision": "Debian source package litmus 0.13-4",
+    "installation_notes": "Preinstalled Ubuntu/Debian package litmus 0.13-4; prepared separately, no runtime installation or update.",
+    "manifest": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline/results/pr14-litmus-g7-2026-11-17/tooling-litmus.json",
+    "manifest_sha256": "ae03fcab98081ae5409a17029c323d6c8261060cb14d70be5c7c9ecae84255dc",
+    "preconditions": {
+      "target": "real loopback WebDAV HTTP endpoint",
+      "auth": "none"
+    },
+    "executables": [
+      {
+        "name": "litmus",
+        "path": "/usr/bin/litmus",
+        "sha256": "c48fd902ddd4464605f2f5bda2f54ee8d634431886c7ed16c4681c5d3a0f2704"
+      },
+      {
+        "name": "dpkg-query",
+        "path": "/usr/bin/dpkg-query",
+        "sha256": "11b7055ec6ec739838f171182ced296ca75ec2da2d32e4331e9926021d6f8d08"
+      }
+    ],
+    "source_trees": [],
+    "version_check": {
+      "command": [
+        "dpkg-query",
+        "-W",
+        "-f=${Version}",
+        "litmus"
+      ],
+      "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline",
+      "exit_code": 0,
+      "stdout": "0.13-4",
+      "stdout_sha256": "50414a8fdc9ed0c1fc8f044289b73188edc757f66ce398a0d8ff9ab818d160bc",
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "target": "webdav",
+  "command": [
+    "litmus",
+    "--keep-going",
+    "http://127.0.0.1:50623/"
+  ],
+  "command_display": "litmus --keep-going http://127.0.0.1:50623/",
+  "started_at": "2026-11-16T16:16:17.065506+00:00",
+  "finished_at": "2026-11-16T16:16:17.460743+00:00",
+  "duration_seconds": 0.39521058194804937,
+  "timeout_seconds": 600.0,
+  "status": "completed",
+  "failure_kind": null,
+  "failure_classification": "unclassified",
+  "preflight": {
+    "status": "passed",
+    "checks": {
+      "tooling_manifest_sha256": "ae03fcab98081ae5409a17029c323d6c8261060cb14d70be5c7c9ecae84255dc",
+      "tooling_manifest": "passed",
+      "conditions": "passed",
+      "executables": "passed",
+      "source_trees": [],
+      "version_check": "passed"
+    },
+    "version_check": {
+      "command": [
+        "dpkg-query",
+        "-W",
+        "-f=${Version}",
+        "litmus"
+      ],
+      "exit_code": 0,
+      "stdout": "0.13-4",
+      "stdout_sha256": "50414a8fdc9ed0c1fc8f044289b73188edc757f66ce398a0d8ff9ab818d160bc",
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "launch_error": null,
+  "timeout_error": null,
+  "exit_code": 0,
+  "conditions": {
+    "target": "real nando WebDAV loopback HTTP",
+    "url": "http://127.0.0.1:50623/",
+    "auth": "none",
+    "workload": "unmodified full Litmus default suite with --keep-going",
+    "repository": "/tmp/go-nando-g7.GUjF6M/state/repository",
+    "mount": "daemon-backed native repository; FUSE not applicable to WebDAV adapter",
+    "isolation": "fresh Local repository; no concurrent workload"
+  },
+  "conditions_sha256": "33398a2f8ec99eaa86c3112a90b257ca6dd9d2890814b5e9563946e44892e678",
+  "tooling_manifest_sha256": "ae03fcab98081ae5409a17029c323d6c8261060cb14d70be5c7c9ecae84255dc",
+  "repository_sha": "be769c79461db2ec996b29ccc3f48d49624a8bc6",
+  "environment": {
+    "platform": "Linux-6.8.0-1070-gcp-x86_64-with-glibc2.35",
+    "python": "3.11.9",
+    "machine": "x86_64",
+    "kernel": "6.8.0-1070-gcp",
+    "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline"
+  },
+  "logs": {
+    "stdout": {
+      "path": "stdout.log",
+      "sha256": "0d1b8b48a4e510d5850af088c5455660cea0ea5c0453517685aedde43fd0e487"
+    },
+    "stderr": {
+      "path": "stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "preflight": {
+      "path": "preflight.log",
+      "sha256": "c1f1f57321bdb75d7385a3bf3c8af7c47da3d4c8592140cdd3727e4a3144c594"
+    },
+    "tooling_manifest_input": {
+      "path": "tooling-manifest.input.json",
+      "sha256": "ae03fcab98081ae5409a17029c323d6c8261060cb14d70be5c7c9ecae84255dc"
+    },
+    "conditions_input": {
+      "path": "conditions.input.json",
+      "sha256": "33398a2f8ec99eaa86c3112a90b257ca6dd9d2890814b5e9563946e44892e678"
+    },
+    "version_check_stdout": {
+      "path": "version-check.stdout.log",
+      "sha256": "50414a8fdc9ed0c1fc8f044289b73188edc757f66ce398a0d8ff9ab818d160bc"
+    },
+    "version_check_stderr": {
+      "path": "version-check.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "suite_analysis": {
+    "groups": [
+      {
+        "name": "basic",
+        "tests_run": 16,
+        "passed": 16,
+        "failed": 0,
+        "status": "PASS"
+      },
+      {
+        "name": "copymove",
+        "tests_run": 2,
+        "passed": 1,
+        "failed": 1,
+        "status": "FAIL"
+      },
+      {
+        "name": "props",
+        "tests_run": 2,
+        "passed": 1,
+        "failed": 1,
+        "status": "FAIL"
+      },
+      {
+        "name": "locks",
+        "tests_run": 2,
+        "passed": 1,
+        "failed": 1,
+        "status": "FAIL"
+      },
+      {
+        "name": "http",
+        "tests_run": 2,
+        "passed": 1,
+        "failed": 1,
+        "status": "FAIL"
+      }
+    ],
+    "groups_seen": 5,
+    "missing_groups": [],
+    "causes": [
+      {
+        "classification": "PASS",
+        "scope": "basic",
+        "detail": "16/16 cases passed; two MKCOL missing-parent cases emitted non-failing RFC 409 warnings."
+      },
+      {
+        "classification": "FAIL",
+        "scope": "DELETE non-empty collection",
+        "detail": "After basic leaves content in /litmus/, each later group DELETE gets 409; collection remains mapped."
+      },
+      {
+        "classification": "DEPENDENT",
+        "scope": "subsequent MKCOL",
+        "detail": "Each later group MKCOL then gets 405 because prior DELETE 409 left /litmus/ mapped; not an independent creation failure."
+      },
+      {
+        "classification": "FAIL",
+        "scope": "COPY/MOVE",
+        "detail": "Independent fresh-parent run outcomes: COPY overwrite 412 matches the existing-destination rejection boundary; COPY into a missing destination collection incorrectly succeeded; collection COPY and replacement/collection MOVE returned 501 because those operations are unsupported by the Phase A contract. Later MKCOL 405 in that independent sequence is also dependent on a previous failed cleanup."
+      },
+      {
+        "classification": "UNSUPPORTED",
+        "scope": "LOCK/PROPPATCH",
+        "detail": "Feature boundary is intentionally unsupported by current WebDAV contract; default suite cannot reach these cases after setup failure, so no current run case is counted as unsupported."
+      },
+      {
+        "classification": "UNSUPPORTED_NOT_REACHED",
+        "scope": "LOCK/PROPPATCH",
+        "detail": "The contract intentionally returns 501 for LOCK/UNLOCK and PROPPATCH/dead properties; the default run failed group setup before issuing these requests, so they are not counted as observed run outcomes."
+      }
+    ],
+    "independent_reproduction": {
+      "copy_move": "results/compatibility-2026-11-16/litmus-isolated-repro/manifest.json and copymove raw logs demonstrate setup succeeds on fresh path then COPY/MOVE failures.",
+      "delete_mkcol": "2026-11-16 raw debug log directly links DELETE 409 then MKCOL 405; default run again shows all four later groups fail at their begin setup."
+    },
+    "raw_evidence": {
+      "current_default_stdout": "evidence/stdout.log",
+      "current_default_http_debug": "evidence/debug.log (DELETE /litmus/ 409 at request trace around 982, then MKCOL /litmus/ 405 around 1018; repeated for each later group)",
+      "independent_copymove": "../compatibility-2026-11-16/litmus-isolated-repro/copymove.stdout.log and debug.log"
+    }
+  },
+  "derived_suite_status": "completed_with_failed_groups",
+  "target_commit": "be769c79461db2ec996b29ccc3f48d49624a8bc6",
+  "auxiliary_logs": {
+    "debug.log": {
+      "path": "debug.log",
+      "sha256": "d7f92c1bb9bbf11a7ffd0fc62481ca5fdd7c217b0cede080229111ee4a124ca5",
+      "bytes": 39316
+    },
+    "child.log": {
+      "path": "child.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  }
+}

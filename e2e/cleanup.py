@@ -21,7 +21,11 @@ def proc_stat(pid: int) -> tuple[str, int] | None:
 
 
 def processes(artifact: Path, repo: Path) -> list[tuple[int, list[str]]]:
-    allowed_bins = {str((artifact / "bin/nando").resolve()), str((artifact / "bin/nando-fuse").resolve())}
+    allowed_bins = {
+        str((artifact / "bin/nando").resolve()),
+        str((artifact / "bin/nando-fuse").resolve()),
+        str((artifact / "bin/nando-webdav").resolve()),
+    }
     holder = str((repo / "e2e/holder.py").resolve())
     found = []
     for item in Path("/proc").iterdir():

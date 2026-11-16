@@ -261,6 +261,28 @@ The truncate reproduction and prepared fsx run each use
 `results/pr14-fuse-revalidation-2026-11-17/evidence/`. The adapter default
 mount options are used, so `allow_other` is not requested.
 
+The current Litmus baseline is integrated as E2E gate G7. It uses the G0-built
+`nando` and `nando-webdav` binaries, an isolated Local repository, daemon
+readiness, and a real loopback HTTP listener. The complete Litmus 0.13-4
+default suite runs with `--keep-going`; group summaries determine the gate
+status even when the process exits zero. `PASS`, `FAIL`, `UNSUPPORTED`, and
+`SKIP` are recorded distinctly. The 2026-11-17 capture, prepared tooling
+manifest, conditions, raw stdout/stderr, exact command, target commit, and
+derived cause analysis are under `results/pr14-litmus-g7-2026-11-17/`.
+The baseline collection completed: `basic` passed 16/16, while `copymove`,
+`props`, `locks`, and `http` failed their setup. Each later group's `DELETE`
+of the non-empty `/litmus/` collection returned 409, followed by a dependent
+`MKCOL` 405 because the collection remained mapped. This does not establish
+an independent MKCOL failure. A separately retained fresh-parent COPY/MOVE
+reproduction reaches the methods and records independent 412/501 compatibility
+failures. The fresh-parent COPY/MOVE detail distinguishes overwrite COPY 412
+(existing destination rejection), an unexpected successful COPY into a
+missing destination collection, and collection or replacement COPY/MOVE 501
+(unsupported Phase A operations). LOCK and property patch cases are
+intentionally unsupported by the current contract and are not counted as
+executed in the failed setup groups. No DELETE/COPY/MOVE implementation
+semantics were changed as part of G7.
+
 The benchmark files are E2E measurements on this host, not adapter-only
 measurements. They retain their different connection, cache, and commit
 boundaries, and the successful summaries use nearest-rank percentiles. Read

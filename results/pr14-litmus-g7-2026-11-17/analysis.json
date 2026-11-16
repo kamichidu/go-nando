@@ -1,0 +1,82 @@
+{
+  "groups": [
+    {
+      "name": "basic",
+      "tests_run": 16,
+      "passed": 16,
+      "failed": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "copymove",
+      "tests_run": 2,
+      "passed": 1,
+      "failed": 1,
+      "status": "FAIL"
+    },
+    {
+      "name": "props",
+      "tests_run": 2,
+      "passed": 1,
+      "failed": 1,
+      "status": "FAIL"
+    },
+    {
+      "name": "locks",
+      "tests_run": 2,
+      "passed": 1,
+      "failed": 1,
+      "status": "FAIL"
+    },
+    {
+      "name": "http",
+      "tests_run": 2,
+      "passed": 1,
+      "failed": 1,
+      "status": "FAIL"
+    }
+  ],
+  "groups_seen": 5,
+  "missing_groups": [],
+  "causes": [
+    {
+      "classification": "PASS",
+      "scope": "basic",
+      "detail": "16/16 cases passed; two MKCOL missing-parent cases emitted non-failing RFC 409 warnings."
+    },
+    {
+      "classification": "FAIL",
+      "scope": "DELETE non-empty collection",
+      "detail": "After basic leaves content in /litmus/, each later group DELETE gets 409; collection remains mapped."
+    },
+    {
+      "classification": "DEPENDENT",
+      "scope": "subsequent MKCOL",
+      "detail": "Each later group MKCOL then gets 405 because prior DELETE 409 left /litmus/ mapped; not an independent creation failure."
+    },
+    {
+      "classification": "FAIL",
+      "scope": "COPY/MOVE",
+      "detail": "Independent fresh-parent run outcomes: COPY overwrite 412 matches the existing-destination rejection boundary; COPY into a missing destination collection incorrectly succeeded; collection COPY and replacement/collection MOVE returned 501 because those operations are unsupported by the Phase A contract. Later MKCOL 405 in that independent sequence is also dependent on a previous failed cleanup."
+    },
+    {
+      "classification": "UNSUPPORTED",
+      "scope": "LOCK/PROPPATCH",
+      "detail": "Feature boundary is intentionally unsupported by current WebDAV contract; default suite cannot reach these cases after setup failure, so no current run case is counted as unsupported."
+    },
+    {
+      "classification": "UNSUPPORTED_NOT_REACHED",
+      "scope": "LOCK/PROPPATCH",
+      "detail": "The contract intentionally returns 501 for LOCK/UNLOCK and PROPPATCH/dead properties; the default run failed group setup before issuing these requests, so they are not counted as observed run outcomes."
+    }
+  ],
+  "independent_reproduction": {
+    "copy_move": "results/compatibility-2026-11-16/litmus-isolated-repro/manifest.json and copymove raw logs demonstrate setup succeeds on fresh path then COPY/MOVE failures.",
+    "delete_mkcol": "2026-11-16 raw debug log directly links DELETE 409 then MKCOL 405; default run again shows all four later groups fail at their begin setup."
+  },
+  "raw_evidence": {
+    "current_default_stdout": "evidence/stdout.log",
+    "current_default_http_debug": "evidence/debug.log (DELETE /litmus/ 409 at request trace around 982, then MKCOL /litmus/ 405 around 1018; repeated for each later group)",
+    "independent_copymove": "../compatibility-2026-11-16/litmus-isolated-repro/copymove.stdout.log and debug.log"
+  }
+}

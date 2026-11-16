@@ -1,6 +1,6 @@
 = Reproducible E2E gates
 
-`e2e/run.sh` is the host one-command entry point for G0-G3, real FUSE truncate/fsx G6, and WebDAV G5. Docker Compose owns only the pinned `fake-gcs-server` external dependency. Go checks, `nando`, `nando-fuse`, `nando-webdav`, and the scenario runner execute directly on the Linux/WSL host. The gate never mounts FUSE inside a container, requests `privileged`, or grants a container mount capabilities.
+`e2e/run.sh` is the host one-command entry point for G0-G3, real FUSE truncate/fsx G6, WebDAV HTTP G5, and full Litmus WebDAV G7. Docker Compose owns only the pinned `fake-gcs-server` external dependency. Go checks, `nando`, `nando-fuse`, `nando-webdav`, Litmus, and the scenario runner execute directly on the Linux/WSL host. The gate never mounts FUSE inside a container, requests `privileged`, or grants a container mount capabilities.
 
 Run the required gates:
 
@@ -56,6 +56,28 @@ command before running. Captures are copied to
 revision, exit status, conditions, preflight, stdout, stderr, and result JSON.
 The gate distinguishes a successful command from a captured nonzero failure;
 missing prerequisites remain `SKIP`, and neither state is reported as PASS.
+
+G7 uses the G0-built `nando` and `nando-webdav` binaries, native daemon ping
+readiness, a loopback HTTP readiness probe, and bounded process cleanup. It
+creates a fresh Local repository and runs every default Litmus 0.13-4 group
+with `--keep-going`. `tools/validation_capture.py` records executable and
+`dpkg-query` hashes, the Debian source package revision, exact command, target
+URL and conditions, repository commit, exit code, stdout, stderr, and
+preflight. G7 parses every group summary; process exit zero does not override
+failed cases or missing default groups. Captures and derived analysis are
+retained under `results/pr14-litmus-g7-2026-11-17/`.
+
+The default suite shares `/litmus/` across groups. A non-empty collection
+`DELETE` returning 409 leaves the URL mapped, so the following `MKCOL` 405 is
+recorded as a dependent failure. The saved fresh-parent COPY/MOVE reproduction
+under `results/compatibility-2026-11-16/litmus-isolated-repro/` shows the
+independent outcomes: overwrite COPY returns 412, COPY into a missing
+destination collection succeeds unexpectedly, and collection or replacement
+COPY/MOVE cases return 501 under the Phase A unsupported boundary. `LOCK` and
+`PROPPATCH` are intentional unsupported contract areas, but are not counted as
+`UNSUPPORTED` when setup prevents those requests from running. `PASS`, `FAIL`, `UNSUPPORTED`, and
+`SKIP` remain separate states. A complete baseline collection can therefore
+finish while G7 correctly reports `FAIL`.
 
 == Scenario catalog
 
@@ -143,6 +165,10 @@ missing prerequisites remain `SKIP`, and neither state is reported as PASS.
 |G6 `G6-01` / `G6-02`
 |Real FUSE truncate and fsx revalidation
 |The committed truncate reproduction and pinned fsx run against a fresh Local repository through the G0-built `nando-fuse`; `validation_capture.py` records independent result JSON and raw logs. Mount options are empty and `allow_other` is omitted.
+
+|G7 `G7-litmus`
+|Full prepared Litmus WebDAV compatibility suite
+|All five default groups run against the HEAD-built daemon and WebDAV HTTP server. Group summaries determine PASS/FAIL. Missing prepared tooling is `SKIP`; captured failed cases make G7 `FAIL` without discarding the baseline.
 |===
 
 == Emulator scope

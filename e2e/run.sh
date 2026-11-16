@@ -68,7 +68,16 @@ cleanup() {
     cp "$ARTIFACTS/nando-fuse-fsx-validation.log" "$saved/" 2>/dev/null || true
     mark EVIDENCE PASS "validation_capture output copied to $saved/evidence"
   fi
-  for gate in G0 G1 G2 G3 G5 G6; do
+  if [[ -d "$ARTIFACTS/litmus-capture" ]]; then
+    local saved="$ROOT/results/pr14-litmus-g7-2026-11-17"
+    mkdir -p "$saved"
+    cp -a "$ARTIFACTS/litmus-capture" "$saved/evidence"
+    for file in litmus-conditions.json litmus-daemon.log litmus-webdav.log; do
+      cp "$ARTIFACTS/$file" "$saved/" 2>/dev/null || true
+    done
+    mark EVIDENCE PASS "Litmus validation_capture output copied to $saved/evidence"
+  fi
+  for gate in G0 G1 G2 G3 G5 G6 G7; do
     if ! cut -f1 "$GATES" | rg -qx "$gate"; then mark "$gate" SKIP "stopped before this gate ran"; fi
   done
   if ((STRESS)) && ! cut -f1 "$GATES" | rg -qx G4; then mark G4 SKIP "stress requested but prerequisites did not complete"; fi
@@ -87,6 +96,7 @@ if ! command -v fusermount3 >/dev/null || [[ ! -c /dev/fuse || ! -r /dev/fuse ||
   mark G3 SKIP "native real FUSE runner unavailable"
   mark G5 SKIP "native Linux/WSL E2E prerequisites unavailable"
   mark G6 SKIP "native Linux/WSL E2E prerequisites unavailable"
+  mark G7 SKIP "native Linux/WSL E2E prerequisites unavailable"
   exit 2
 fi
 if [[ ! -d "$DESIGN_IR_REPO/.git" || "$(git -C "$DESIGN_IR_REPO" rev-parse HEAD 2>/dev/null || true)" != "$DESIGN_IR_COMMIT" ]]; then
@@ -238,3 +248,64 @@ if ! run_gate G5 "host-native WebDAV HTTP methods, validators, and contract-boun
   done
   "$5/e2e/webdav-http.sh"
 ' _ "$E2E_NANDO_BIN" "$E2E_REPOSITORY" "$E2E_SOCKET" "$ARTIFACTS" "$ROOT" "$E2E_WEBDAV_BIN"; then exit 1; fi
+
+if ! command -v litmus >/dev/null || [[ ! -f "$ROOT/results/compatibility-2026-11-16/tooling-litmus.json" ]]; then
+  mark G7 SKIP "prepared Litmus executable or manifest unavailable"
+  overall=1
+elif ! run_gate G7 "full prepared Litmus suite against HEAD-built daemon and WebDAV over loopback HTTP" 720 bash -c '
+  set -Eeuo pipefail
+  repository="$4/state/litmus/repository"
+  socket="$4/run/litmus.sock"
+  mkdir -p "$(dirname "$repository")"
+  "$1" --repository "$repository" init --delivery-mode local
+  port=$(python3 -c "import socket; s=socket.socket(); s.bind((\"127.0.0.1\",0)); print(s.getsockname()[1]); s.close()")
+  address="127.0.0.1:$port"
+  url="http://$address/"
+  setsid "$1" --repository "$repository" --daemon-listen "unix://$socket" daemon >"$4/litmus-daemon.log" 2>&1 & daemon=$!
+  webdav=""
+  cleanup_litmus() {
+    if [[ -n "$webdav" ]]; then kill -TERM "$webdav" 2>/dev/null || true; wait "$webdav" 2>/dev/null || true; fi
+    kill -TERM "$daemon" 2>/dev/null || true; wait "$daemon" 2>/dev/null || true
+  }
+  trap cleanup_litmus EXIT
+  export E2E_SOCKET="$socket"
+  python3 "$5/e2e/runner.py" wait-daemon
+  setsid "$2" --daemon-listen "unix://$socket" --webdav-listen "$address" >"$4/litmus-webdav.log" 2>&1 & webdav=$!
+  deadline=$((SECONDS+15))
+  until curl --silent --show-error --max-time 1 -X OPTIONS "$url" >/dev/null 2>&1; do
+    if ((SECONDS >= deadline)); then cat "$4/litmus-webdav.log" >&2; exit 1; fi
+    sleep 0.1
+  done
+  python3 - "$4/litmus-conditions.json" "$url" "$repository" <<"PY"
+import json, sys
+json.dump({"target":"real nando WebDAV loopback HTTP","url":sys.argv[2],"auth":"none","workload":"unmodified full Litmus default suite with --keep-going","repository":sys.argv[3],"mount":"native daemon repository; no FUSE mount in WebDAV adapter path","isolation":"fresh Local repository; no concurrent workload"},open(sys.argv[1],"w"),indent=2)
+PY
+  mkdir -p "$4/litmus-work"
+  python3 "$5/tools/validation_capture.py" --output "$4/litmus-capture" --suite litmus --target webdav --cwd "$4/litmus-work" --timeout-seconds 600 --tooling-manifest "$5/results/pr14-litmus-g7-2026-11-17/tooling-litmus.json" --conditions-json "$4/litmus-conditions.json" -- litmus --keep-going "$url"
+  capture_rc=$?
+  cp "$4/litmus-conditions.json" "$4/litmus-conditions.saved.json"
+  cp "$4/litmus-work/debug.log" "$4/litmus-capture/debug.log" 2>/dev/null || true
+  cp "$4/litmus-work/child.log" "$4/litmus-capture/child.log" 2>/dev/null || true
+  if ((capture_rc != 0)); then exit "$capture_rc"; fi
+  python3 - "$4/litmus-capture/stdout.log" "$4/litmus-capture/result.json" <<"PY"
+import hashlib, json, pathlib, re, sys
+raw=open(sys.argv[1],errors="replace").read()
+groups=[]
+for name,run,passed,failed in re.findall(r"summary for .([a-z]+).: of ([0-9]+) tests run: ([0-9]+) passed, ([0-9]+) failed[.]",raw):
+ groups.append({"name":name,"tests_run":int(run),"passed":int(passed),"failed":int(failed),"status":"passed" if int(failed)==0 else "failed"})
+result=json.load(open(sys.argv[2]))
+analysis={"groups":groups,"groups_seen":len(groups),"failed_groups":sum(g["failed"]>0 for g in groups),"all_default_groups_observed":{n:any(g["name"]==n for g in groups) for n in ("basic","copymove","props","locks","http")},"causes":[{"classification":"FAIL","cause":"non-empty collection DELETE returns 409; Litmus basic leaves children under /litmus/"},{"classification":"DEPENDENT","cause":"the following MKCOL returns 405 because the failed DELETE leaves the collection mapped"},{"classification":"INDEPENDENT_REPRO","cause":"fresh-parent COPY/MOVE reproduction is retained at results/compatibility-2026-11-16/litmus-isolated-repro/: overwrite COPY returns 412 (existing-destination rejection boundary), COPY into missing destination collection succeeds unexpectedly, and collection/replacement COPY or MOVE return 501 (unsupported Phase A operations)"},{"classification":"UNSUPPORTED_NOT_REACHED","cause":"LOCK and PROPPATCH are contractually unsupported, but the default groups stop at setup; no case in this run is counted UNSUPPORTED"}]}
+result["suite_analysis"]=analysis
+result["derived_suite_status"]="passed" if len(groups)==5 and all(g["failed"]==0 for g in groups) else "completed_with_failed_or_missing_groups"
+open(sys.argv[2].replace("result.json","analysis.json"),"w").write(json.dumps(analysis,indent=2)+"\n")
+aux={}
+for name in ("debug.log","child.log"):
+ path=pathlib.Path(sys.argv[2]).parent/name
+ if path.exists():
+  content=path.read_bytes()
+  aux[name]={"path":name,"sha256":hashlib.sha256(content).hexdigest(),"bytes":len(content)}
+result["auxiliary_logs"]=aux
+open(sys.argv[2],"w").write(json.dumps(result,indent=2)+"\n")
+if result["derived_suite_status"]!="passed": sys.exit(1)
+PY
+' _ "$E2E_NANDO_BIN" "$E2E_WEBDAV_BIN" "$E2E_SOCKET" "$ARTIFACTS" "$ROOT"; then exit 1; fi

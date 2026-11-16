@@ -1,0 +1,6 @@
+target_commit=be769c79461db2ec996b29ccc3f48d49624a8bc6
+command: go build -o /tmp/go-nando-g7.GUjF6M/bin/nando ./cmd/nando
+command: go build -o /tmp/go-nando-g7.GUjF6M/bin/nando-webdav ./adapters/webdav/cmd/nando-webdav
+command: /tmp/go-nando-g7.GUjF6M/bin/nando --repository /tmp/go-nando-g7.GUjF6M/state/repository init --delivery-mode local
+capture_exit_code=0
+runtime_evidence=/tmp/go-nando-g7.GUjF6M

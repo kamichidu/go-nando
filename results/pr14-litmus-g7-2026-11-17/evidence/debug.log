@@ -1,0 +1,1270 @@
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:52551 begins.
+HTTP session to http://127.0.0.1:52551 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:52551
+X-Litmus: basic: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:52551
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:15:01 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:15:01 GMT]
+[hdr] Content-Length: 123
+Header Name: [content-length], Value: [123]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 123 bytes of response body.
+Got 123 bytes.
+Read block (123 bytes):
+[call daemon: Post "http://nando/rpc": dial unix /tmp/go-nando-g7.CGuEOO/run/nando.sock: connect: no such file or directory
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:52551
+X-Litmus: basic: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:15:01 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:15:01 GMT]
+[hdr] Content-Length: 123
+Header Name: [content-length], Value: [123]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 123 bytes of response body.
+Got 123 bytes.
+Read block (123 bytes):
+[call daemon: Post "http://nando/rpc": dial unix /tmp/go-nando-g7.CGuEOO/run/nando.sock: connect: no such file or directory
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:52551 begins.
+HTTP session to http://127.0.0.1:52551 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:52551
+X-Litmus: copymove: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:52551
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:15:01 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:15:01 GMT]
+[hdr] Content-Length: 123
+Header Name: [content-length], Value: [123]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 123 bytes of response body.
+Got 123 bytes.
+Read block (123 bytes):
+[call daemon: Post "http://nando/rpc": dial unix /tmp/go-nando-g7.CGuEOO/run/nando.sock: connect: no such file or directory
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:52551
+X-Litmus: copymove: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:15:01 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:15:01 GMT]
+[hdr] Content-Length: 123
+Header Name: [content-length], Value: [123]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 123 bytes of response body.
+Got 123 bytes.
+Read block (123 bytes):
+[call daemon: Post "http://nando/rpc": dial unix /tmp/go-nando-g7.CGuEOO/run/nando.sock: connect: no such file or directory
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:52551 begins.
+HTTP session to http://127.0.0.1:52551 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:52551
+X-Litmus: props: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:52551
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:15:01 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:15:01 GMT]
+[hdr] Content-Length: 123
+Header Name: [content-length], Value: [123]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 123 bytes of response body.
+Got 123 bytes.
+Read block (123 bytes):
+[call daemon: Post "http://nando/rpc": dial unix /tmp/go-nando-g7.CGuEOO/run/nando.sock: connect: no such file or directory
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:52551
+X-Litmus: props: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:15:01 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:15:01 GMT]
+[hdr] Content-Length: 123
+Header Name: [content-length], Value: [123]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 123 bytes of response body.
+Got 123 bytes.
+Read block (123 bytes):
+[call daemon: Post "http://nando/rpc": dial unix /tmp/go-nando-g7.CGuEOO/run/nando.sock: connect: no such file or directory
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:52551 begins.
+HTTP session to http://127.0.0.1:52551 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:52551
+X-Litmus: locks: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:52551
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:15:01 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:15:01 GMT]
+[hdr] Content-Length: 123
+Header Name: [content-length], Value: [123]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 123 bytes of response body.
+Got 123 bytes.
+Read block (123 bytes):
+[call daemon: Post "http://nando/rpc": dial unix /tmp/go-nando-g7.CGuEOO/run/nando.sock: connect: no such file or directory
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:52551
+X-Litmus: locks: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:15:01 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:15:01 GMT]
+[hdr] Content-Length: 123
+Header Name: [content-length], Value: [123]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 123 bytes of response body.
+Got 123 bytes.
+Read block (123 bytes):
+[call daemon: Post "http://nando/rpc": dial unix /tmp/go-nando-g7.CGuEOO/run/nando.sock: connect: no such file or directory
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:52551 begins.
+HTTP session to http://127.0.0.1:52551 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:52551
+X-Litmus: http: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:52551
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:15:01 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:15:01 GMT]
+[hdr] Content-Length: 123
+Header Name: [content-length], Value: [123]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 123 bytes of response body.
+Got 123 bytes.
+Read block (123 bytes):
+[call daemon: Post "http://nando/rpc": dial unix /tmp/go-nando-g7.CGuEOO/run/nando.sock: connect: no such file or directory
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:52551
+X-Litmus: http: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:15:01 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:15:01 GMT]
+[hdr] Content-Length: 123
+Header Name: [content-length], Value: [123]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 123 bytes of response body.
+Got 123 bytes.
+Read block (123 bytes):
+[call daemon: Post "http://nando/rpc": dial unix /tmp/go-nando-g7.CGuEOO/run/nando.sock: connect: no such file or directory
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:50623 begins.
+HTTP session to http://127.0.0.1:50623 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:50623
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+******* Running test 2: options ********
+Running pre_send hooks
+Sending request headers:
+OPTIONS /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 2 (options)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 200 OK
+[hdr] Allow: GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY
+Header Name: [allow], Value: [GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY]
+[hdr] Dav: 1
+Header Name: [dav], Value: [1]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 200 class 2xx, error line:
+200 OK
+Running destroy hooks.
+Request ends.
+******* Running test 3: put_get ********
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/res HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+Content-Length: 41
+X-Litmus: basic: 3 (put_get)
+
+Sending request-line and headers:
+Sending request body:
+Body block (41 bytes):
+[This is
+a test file.
+for litmus
+testing.
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "331f81b0-2886-42e0-aa14-c79cbc67b57d-1"
+Header Name: [etag], Value: ["331f81b0-2886-42e0-aa14-c79cbc67b57d-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+GET /litmus/res HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 3 (put_get)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 200 OK
+[hdr] Accept-Ranges: bytes
+Header Name: [accept-ranges], Value: [bytes]
+[hdr] Content-Length: 41
+Header Name: [content-length], Value: [41]
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] Etag: "331f81b0-2886-42e0-aa14-c79cbc67b57d-1"
+Header Name: [etag], Value: ["331f81b0-2886-42e0-aa14-c79cbc67b57d-1"]
+[hdr] Last-Modified: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [last-modified], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 41 bytes of response body.
+Got 41 bytes.
+Read block (41 bytes):
+[This is
+a test file.
+for litmus
+testing.
+]
+Running post_send hooks
+Running destroy hooks.
+Request ends.
+******* Running test 4: put_get_utf8_segment ********
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/res-%e2%82%ac HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+Content-Length: 41
+X-Litmus: basic: 4 (put_get_utf8_segment)
+
+Sending request-line and headers:
+Sending request body:
+Body block (41 bytes):
+[This is
+a test file.
+for litmus
+testing.
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "98fa5aa4-6daf-4ed3-8b78-23117073e000-1"
+Header Name: [etag], Value: ["98fa5aa4-6daf-4ed3-8b78-23117073e000-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+GET /litmus/res-%e2%82%ac HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 4 (put_get_utf8_segment)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 200 OK
+[hdr] Accept-Ranges: bytes
+Header Name: [accept-ranges], Value: [bytes]
+[hdr] Content-Length: 41
+Header Name: [content-length], Value: [41]
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] Etag: "98fa5aa4-6daf-4ed3-8b78-23117073e000-1"
+Header Name: [etag], Value: ["98fa5aa4-6daf-4ed3-8b78-23117073e000-1"]
+[hdr] Last-Modified: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [last-modified], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 41 bytes of response body.
+Got 41 bytes.
+Read block (41 bytes):
+[This is
+a test file.
+for litmus
+testing.
+]
+Running post_send hooks
+Running destroy hooks.
+Request ends.
+******* Running test 5: put_no_parent ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/409me/noparent.txt/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 5 (put_no_parent)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+******* Running test 6: mkcol_over_plain ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/res-%e2%82%ac/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 6 (mkcol_over_plain)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 405 Method Not Allowed
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 47
+Header Name: [content-length], Value: [47]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 47 bytes of response body.
+Got 47 bytes.
+Read block (47 bytes):
+[JSON-RPC error -32012: metadata entry conflict
+]
+Running post_send hooks
+Request ends, status 405 class 4xx, error line:
+405 Method Not Allowed
+Running destroy hooks.
+Request ends.
+******* Running test 7: delete ********
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/res-%e2%82%ac HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 7 (delete)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+******* Running test 8: delete_null ********
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/404me HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 8 (delete_null)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+******* Running test 9: delete_fragment ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/frag/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 9 (delete_fragment)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/frag/#ment HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 9 (delete_fragment)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/frag/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 9 (delete_fragment)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+******* Running test 10: mkcol ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/coll/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 10 (mkcol)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+******* Running test 11: mkcol_again ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/coll/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 11 (mkcol_again)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 405 Method Not Allowed
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 47
+Header Name: [content-length], Value: [47]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 47 bytes of response body.
+Got 47 bytes.
+Read block (47 bytes):
+[JSON-RPC error -32012: metadata entry conflict
+]
+Running post_send hooks
+Request ends, status 405 class 4xx, error line:
+405 Method Not Allowed
+Running destroy hooks.
+Request ends.
+******* Running test 12: delete_coll ********
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/coll/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 12 (delete_coll)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+******* Running test 13: mkcol_no_parent ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/409me/noparent/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: basic: 13 (mkcol_no_parent)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+******* Running test 14: mkcol_with_body ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/mkcolbody HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+Content-Type: xzy-foo/bar-512
+Content-Length: 8
+X-Litmus: basic: 14 (mkcol_with_body)
+
+Sending request-line and headers:
+Sending request body:
+Body block (8 bytes):
+[afafafaf]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 415 Unsupported Media Type
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 34
+Header Name: [content-length], Value: [34]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 34 bytes of response body.
+Got 34 bytes.
+Read block (34 bytes):
+[MKCOL request body is unsupported
+]
+Running post_send hooks
+Request ends, status 415 class 4xx, error line:
+415 Unsupported Media Type
+Running destroy hooks.
+Request ends.
+******* Running test 15: finish ********
+sess: Destroying session.
+sess: Closing connection.
+sess: Connection closed.
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:50623 begins.
+HTTP session to http://127.0.0.1:50623 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: copymove: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:50623
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 409 Conflict
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 82
+Header Name: [content-length], Value: [82]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 82 bytes of response body.
+Got 82 bytes.
+Read block (82 bytes):
+[JSON-RPC error -32013: cannot remove non-empty directory: metadata entry conflict
+]
+Running post_send hooks
+Request ends, status 409 class 4xx, error line:
+409 Conflict
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: copymove: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 405 Method Not Allowed
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 47
+Header Name: [content-length], Value: [47]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 47 bytes of response body.
+Got 47 bytes.
+Read block (47 bytes):
+[JSON-RPC error -32012: metadata entry conflict
+]
+Running post_send hooks
+Request ends, status 405 class 4xx, error line:
+405 Method Not Allowed
+Running destroy hooks.
+Request ends.
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:50623 begins.
+HTTP session to http://127.0.0.1:50623 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: props: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:50623
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 409 Conflict
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 82
+Header Name: [content-length], Value: [82]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 82 bytes of response body.
+Got 82 bytes.
+Read block (82 bytes):
+[JSON-RPC error -32013: cannot remove non-empty directory: metadata entry conflict
+]
+Running post_send hooks
+Request ends, status 409 class 4xx, error line:
+409 Conflict
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: props: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 405 Method Not Allowed
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 47
+Header Name: [content-length], Value: [47]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 47 bytes of response body.
+Got 47 bytes.
+Read block (47 bytes):
+[JSON-RPC error -32012: metadata entry conflict
+]
+Running post_send hooks
+Request ends, status 405 class 4xx, error line:
+405 Method Not Allowed
+Running destroy hooks.
+Request ends.
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:50623 begins.
+HTTP session to http://127.0.0.1:50623 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: locks: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:50623
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 409 Conflict
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 82
+Header Name: [content-length], Value: [82]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 82 bytes of response body.
+Got 82 bytes.
+Read block (82 bytes):
+[JSON-RPC error -32013: cannot remove non-empty directory: metadata entry conflict
+]
+Running post_send hooks
+Request ends, status 409 class 4xx, error line:
+409 Conflict
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: locks: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 405 Method Not Allowed
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 47
+Header Name: [content-length], Value: [47]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 47 bytes of response body.
+Got 47 bytes.
+Read block (47 bytes):
+[JSON-RPC error -32012: metadata entry conflict
+]
+Running post_send hooks
+Request ends, status 405 class 4xx, error line:
+405 Method Not Allowed
+Running destroy hooks.
+Request ends.
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:50623 begins.
+HTTP session to http://127.0.0.1:50623 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: http: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:50623
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 409 Conflict
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 82
+Header Name: [content-length], Value: [82]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 82 bytes of response body.
+Got 82 bytes.
+Read block (82 bytes):
+[JSON-RPC error -32013: cannot remove non-empty directory: metadata entry conflict
+]
+Running post_send hooks
+Request ends, status 409 class 4xx, error line:
+409 Conflict
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:50623
+X-Litmus: http: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 405 Method Not Allowed
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:16:17 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:16:17 GMT]
+[hdr] Content-Length: 47
+Header Name: [content-length], Value: [47]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 47 bytes of response body.
+Got 47 bytes.
+Read block (47 bytes):
+[JSON-RPC error -32012: metadata entry conflict
+]
+Running post_send hooks
+Request ends, status 405 class 4xx, error line:
+405 Method Not Allowed
+Running destroy hooks.
+Request ends.

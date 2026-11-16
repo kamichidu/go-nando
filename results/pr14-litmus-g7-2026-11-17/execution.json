@@ -1,0 +1,45 @@
+{
+  "status": "baseline_collection_completed",
+  "g7": "FAIL",
+  "litmus_process_exit_code": 0,
+  "derived_suite_status": "completed_with_failed_groups",
+  "target_commit": "be769c79461db2ec996b29ccc3f48d49624a8bc6",
+  "builds": [
+    {
+      "command": "go build -o /tmp/go-nando-g7.GUjF6M/bin/nando ./cmd/nando",
+      "exit_code": 0,
+      "sha256": "dc8ee3071f1c649c66e8cb0bd2c384b4a033721ffef29e2f7f051a0c46683cb3"
+    },
+    {
+      "command": "go build -o /tmp/go-nando-g7.GUjF6M/bin/nando-webdav ./adapters/webdav/cmd/nando-webdav",
+      "exit_code": 0,
+      "sha256": "41d226160e8a1742981edf8a9bf358f8a90c68576b81914c0054ec912ba1db5e"
+    }
+  ],
+  "repository_init": {
+    "command": "/tmp/go-nando-g7.GUjF6M/bin/nando --repository /tmp/go-nando-g7.GUjF6M/state/repository init --delivery-mode local",
+    "exit_code": 0
+  },
+  "daemon_readiness": {
+    "command": "python3 e2e/runner.py wait-daemon",
+    "exit_code": 0
+  },
+  "webdav_readiness": {
+    "command": "curl -X OPTIONS <captured loopback URL>/",
+    "exit_code": 0
+  },
+  "suite_command": "litmus --keep-going <captured loopback URL>/",
+  "suite_process_exit_code": 0,
+  "preflight": {
+    "command": "e2e/run.sh",
+    "exit_code": 2,
+    "reason": "required ../design-ir checkout at 455ed318b7bc409d3e1da320620ef92d457042b9 is absent; G0-G7 skipped in the canonical gate invocation"
+  },
+  "independent_checks": {
+    "webdav_http_gate": "PASS (e2e/webdav-http.sh)",
+    "root_go_test": "PASS (go test ./...)",
+    "webdav_go_test": "PASS (cd adapters/webdav && go test ./...)",
+    "webdav_go_race": "PASS (cd adapters/webdav && go test -race ./...)"
+  },
+  "evidence_path": "evidence/"
+}
