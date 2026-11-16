@@ -13,11 +13,11 @@ nando init
 nando daemon
 ```
 
-Run CLI operations in another terminal. `init` creates the repository directly; `daemon` opens it for normal use. See the [quick start](../getting-started/quickstart).
+For everyday file access, start the daemon and then use [FUSE](../use/fuse) or [WebDAV](../use/webdav) with the same account and repository defaults. `init` creates the repository directly; the daemon opens it for clients. Follow the [Quick Start](../getting-started/quickstart). CLI commands remain available for administration and diagnostics.
 
 ## Choose a different repository
 
-To keep a repository somewhere else, either pass `--repository /absolute/path/to/repository` consistently to `init`, `daemon`, and each CLI operation, or set a persistent `[repository].path` in the TOML file:
+To keep a repository somewhere else, either pass `--repository /absolute/path/to/repository` consistently to `init`, `daemon`, the CLI, and each adapter, or set a persistent `[repository].path` in the TOML file:
 
 ```toml
 [repository]

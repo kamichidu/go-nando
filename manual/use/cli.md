@@ -1,19 +1,17 @@
-# Use the CLI
+# CLI for administration and diagnostics
 
-The CLI is one client of the running daemon. Global options such as `--config` and `--repository` go before the subcommand. If you use the shared XDG defaults, you can omit both:
+The CLI is primarily for repository setup, administration, diagnostics, and debugging. For everyday file access, use [FUSE](./fuse) or [WebDAV](./webdav).
+
+`nando init` creates a repository directly. Repository commands such as `doctor`, `gc`, and Recovery operations connect to the running daemon. Put global options such as `--config` and `--repository` before the subcommand; use the same repository and endpoint selection as the daemon.
 
 ```sh
-nando ls /
-nando put ./photo.jpg /photo.jpg
-nando stat /photo.jpg
-nando cat /photo.jpg
-nando get /photo.jpg ./photo-copy.jpg
-nando mv /photo.jpg /original.jpg
-nando rm /original.jpg
+nando doctor
+nando gc
+nando recovery list
+nando recovery retry SESSION_ID
+nando recovery discard SESSION_ID
 ```
 
-For a normal workflow, initialize once with `nando init`, keep `nando daemon` running (or use the [systemd service](../setup/systemd)), then use commands such as `put`, `ls`, and `get`. `nando init` creates the repository directly and does not connect to the daemon. All other repository selection must match the daemon's repository and endpoint.
+For a quick connectivity and integrity check, `nando doctor` reports whether the selected daemon responds and its repository integrity check passes. It does not report the resolved repository path, configured Local capacity limit, or remote delivery queue status.
 
-Commands also include `doctor`, `gc`, `recovery list|retry|discard`, and `admin recover`. `nando sync` is present but not implemented. The [CLI reference](../reference/cli) summarizes commands; run `nando --help` or a command's `--help` for its supported options.
-
-The `fuse` and `webdav` subcommands start separate adapter executables. See [FUSE](./fuse) and [WebDAV](./webdav) for workflows.
+Other commands include `init`, `admin recover`, and `admin migrate`. `nando sync` is present but not implemented. The [CLI reference](../reference/cli) lists commands; run `nando --help` or a command's `--help` for supported options.

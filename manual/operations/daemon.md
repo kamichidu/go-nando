@@ -1,6 +1,6 @@
 # Daemon operations
 
-One daemon process opens and owns a repository, handles CLI, FUSE, and WebDAV requests, and runs maintenance and remote delivery scheduling. Do not start multiple daemon instances against the same repository.
+One daemon process opens and owns a repository, handles requests from the CLI, FUSE, and WebDAV clients, and runs maintenance and remote delivery scheduling. FUSE and WebDAV are the everyday file-access interfaces; the CLI is available for administration and diagnostics. Do not start multiple daemon instances against the same repository.
 
 On Debian and Ubuntu Linux, use the [systemd system service](../setup/systemd) for ordinary operation. systemd starts the daemon, restarts it after failure, and sends SIGTERM during shutdown. It does not start FUSE or WebDAV adapters. Those are separate processes started when needed.
 

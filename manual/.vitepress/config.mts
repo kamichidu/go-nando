@@ -10,7 +10,8 @@ export default defineConfig({
     nav: [
       { text: 'Getting started', link: '/getting-started/install' },
       { text: 'Setup', link: '/setup/repository' },
-      { text: 'Use', link: '/use/cli' },
+      { text: 'Use', link: '/use/fuse' },
+      { text: 'Administration', link: '/use/cli' },
       { text: 'Operations', link: '/operations/daemon' },
       { text: 'Reference', link: '/reference/cli' },
     ],
@@ -32,10 +33,12 @@ export default defineConfig({
         { text: 'systemd system service', link: '/setup/systemd' },
       ] },
       { text: 'Use', items: [
-        { text: 'CLI', link: '/use/cli' },
         { text: 'FUSE', link: '/use/fuse' },
         { text: 'WebDAV', link: '/use/webdav' },
         { text: 'Remote delivery', link: '/use/remote-delivery' },
+      ] },
+      { text: 'Administration', items: [
+        { text: 'CLI', link: '/use/cli' },
       ] },
       { text: 'Operations', items: [
         { text: 'daemon', link: '/operations/daemon' },

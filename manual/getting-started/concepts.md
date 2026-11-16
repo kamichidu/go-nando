@@ -20,7 +20,7 @@ flowchart LR
   init --> local
 ```
 
-`nando init` creates the repository directly; it does not need a running daemon. In normal use, `nando` commands such as `ls`, `put`, and `get` connect to the daemon. FUSE and WebDAV each run in their own process and also connect to that daemon. The daemon owns the repository and coordinates metadata, local objects, and background remote delivery. Do not start two daemons against the same repository.
+`nando init` creates the repository directly; it does not need a running daemon. For everyday file access, use FUSE or WebDAV; each runs in its own process and connects to the daemon. CLI commands such as `doctor`, `gc`, and Recovery operations are available for administration and diagnostics; commands that operate on repository data connect to the daemon. The daemon owns the repository and coordinates metadata, local objects, and background remote delivery. Do not start two daemons against the same repository.
 
 The CLI, daemon, FUSE adapter, and WebDAV adapter resolve the repository from an explicit `--repository` option, then `[repository].path` in the shared TOML configuration, then the XDG-style data default (`${XDG_DATA_HOME:-~/.local/share}/nando`). Their daemon endpoint comes from `--daemon-listen`, then `[daemon].listen`, then a repository-derived local Unix socket. A system service usually selects its own config and repository explicitly. Config-file lookup chooses settings; it does not discover a system-wide repository or switch between repositories automatically. See [configuration](../setup/configuration) and [systemd](../setup/systemd).
 

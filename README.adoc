@@ -11,7 +11,8 @@ dependable home for files that should be preserved and retrieved when needed.
 nando is a content-addressed file repository for keeping durable collections
 of files. It stores file content as immutable objects and organizes names and
 directories in a separate metadata namespace. A daemon owns a repository while
-command-line and filesystem clients access it.
+client processes access it. FUSE and WebDAV provide everyday file access; the
+CLI is for initialization, administration, diagnostics, and debugging.
 
 The design suits collections that are written, preserved, and read over time.
 It is less suited to workloads that frequently rewrite files in place, require
@@ -123,6 +124,10 @@ adapters as `nando fuse` and `nando webdav`. The resolved executable lives in
 tests.
 
 == Quick Start
+
+For everyday file access, use the FUSE or WebDAV adapter described in the
+link:https://kamichidu.github.io/go-nando/[nando manual]. The CLI sequence here
+is an optional smoke check, not the normal file-access workflow.
 
 Initialize the repository using the current account's XDG-style data default
 (`${XDG_DATA_HOME:-~/.local/share}/nando`):
@@ -256,11 +261,13 @@ link:packaging/README.md[Debian service guide] for setup details.
 
 == Operations
 
-The main commands are `init`, `daemon`, `put`, `get`, `cat`, `ls`, `stat`, `mv`,
-`rm`, `gc`, `doctor`, `recovery`, and `admin recover`. Run commands with
-`--help` for their flags and arguments. `doctor` checks repository health;
-`recovery list`, `recovery retry`, and `recovery discard` manage preserved
-write work after an interrupted operation.
+CLI setup and administration commands include `init`, `daemon`, `gc`,
+`doctor`, `recovery`, and `admin recover`. Direct CLI file commands such as
+`put`, `get`, `cat`, `ls`, `stat`, `mv`, and `rm` are available for scripting and
+optional checks; everyday file access is through FUSE or WebDAV as described in
+the manual. Run CLI commands with `--help` for their flags and arguments.
+`doctor` checks repository health; `recovery list`, `recovery retry`, and
+`recovery discard` manage preserved write work after an interrupted operation.
 
 For safe backup and restore, stop clients and the daemon and preserve the
 complete repository as one consistent set. Follow the

@@ -8,15 +8,13 @@ Imagine that your home storeroom opens onto a vast place for keeping things. You
 
 Different storage products make different tradeoffs. nando explores this particular way of working; it does not make other approaches less useful.
 
-Today, nando stores content locally and can deliver it asynchronously to one selected GCS or S3-compatible backend. It deduplicates content by content ID. It provides a CLI, a FUSE filesystem adapter, and a loopback-only WebDAV adapter. Remote delivery is not a mounted cloud drive: files are committed locally first, delivery happens in the background, and a successful write does not confirm remote durability. See [current limitations](./reference/limitations) for the implemented boundaries.
+Today, nando is designed for everyday file access through its FUSE filesystem adapter or loopback-only WebDAV adapter. The CLI is for initialization, administration, diagnostics, and debugging. nando stores content locally and can deliver it asynchronously to one selected GCS or S3-compatible backend; it deduplicates content by content ID. Remote delivery is not a mounted cloud drive: files are committed locally first, delivery happens in the background, and a successful write does not confirm remote durability. See [current limitations](./reference/limitations) for the implemented boundaries.
 
 ## Start here
 
-- [Overview and architecture](./getting-started/concepts)
-- [Install nando](./getting-started/install)
-- [Quick start](./getting-started/quickstart)
-- [Configure a remote backend](./setup/gcs)
-- [Run a systemd system service](./setup/systemd)
-- [Back up and restore a repository](./operations/backup-restore)
+1. [Install nando](./getting-started/install).
+2. [Initialize a repository and follow the Quick Start](./getting-started/quickstart).
+3. Start its daemon in the foreground for personal use, or follow the [systemd system-service procedure](./setup/systemd) for a packaged system repository.
+4. Choose [FUSE](./use/fuse) or [WebDAV](./use/webdav) for everyday file access.
 
-See the [CLI reference](./reference/cli), [configuration examples](https://github.com/kamichidu/go-nando/blob/main/samples/config.toml), and [configuration reference](./reference/configuration) for more detail.
+The [CLI administration guide](./use/cli) and [CLI reference](./reference/cli) cover setup, maintenance, and diagnostics. See [remote backend setup](./setup/gcs), [configuration examples](https://github.com/kamichidu/go-nando/blob/main/samples/config.toml), and the [configuration reference](./reference/configuration) for more detail. The [backup and restore guide](./operations/backup-restore) covers repository operations.
