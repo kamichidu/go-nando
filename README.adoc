@@ -11,7 +11,8 @@ dependable home for files that should be preserved and retrieved when needed.
 nando is a content-addressed file repository for keeping durable collections
 of files. It stores file content as immutable objects and organizes names and
 directories in a separate metadata namespace. A daemon owns a repository while
-command-line and filesystem clients access it.
+client processes access it. FUSE and WebDAV provide everyday file access; the
+CLI is for initialization, administration, diagnostics, and debugging.
 
 The design suits collections that are written, preserved, and read over time.
 It is less suited to workloads that frequently rewrite files in place, require
@@ -87,7 +88,7 @@ Each release lists supported operating systems and architectures. Linux amd64
 releases include a Debian package; archives are available for Linux amd64/arm64,
 macOS amd64/arm64, and Windows amd64/arm64. See
 link:packaging/README.md[the package and service guide] for Debian package and
-systemd user service details.
+system and user systemd service details.
 
 To build from source, clone the repository. The committed `go.work` includes
 the root, FUSE, and WebDAV modules. From the repository root, install all three
@@ -124,32 +125,40 @@ tests.
 
 == Quick Start
 
-Initialize a local repository:
+For everyday file access, use the FUSE or WebDAV adapter described in the
+link:https://kamichidu.github.io/go-nando/[nando manual]. The CLI sequence here
+is an optional smoke check, not the normal file-access workflow.
+
+Initialize the repository using the current account's XDG-style data default
+(`${XDG_DATA_HOME:-~/.local/share}/nando`):
 
 [source,bash]
 ----
-nando --repository "$HOME/nando-data" init
+nando init
 ----
 
-In one terminal, start its daemon:
-
-[source,bash]
-----
-nando --repository "$HOME/nando-data" daemon
-----
-
-In another terminal, import a file and browse or export it:
+In one terminal, start the daemon for that repository:
 
 [source,bash]
 ----
-nando --repository "$HOME/nando-data" put ./photo.jpg /photos/photo.jpg
-nando --repository "$HOME/nando-data" ls /photos
-nando --repository "$HOME/nando-data" get /photos/photo.jpg ./photo-copy.jpg
+nando daemon
 ----
 
-The daemon must remain running while clients use the repository. The examples
-choose a repository path explicitly so every command addresses the same
-repository.
+In another terminal, use the CLI to import, browse, or export a file:
+
+[source,bash]
+----
+nando put ./photo.jpg /photos/photo.jpg
+nando ls /photos
+nando get /photos/photo.jpg ./photo-copy.jpg
+----
+
+With no `--repository` or configured `[repository].path`, `init`, `daemon`, and
+the CLI resolve the same per-user XDG repository and repository-derived local
+Unix socket. The CLI commands connect to the running daemon; `init` creates
+the repository directly. Keep the daemon running while clients use it. For a
+different repository, select the same path for initialization, daemon, and
+client commands.
 
 == Configuration
 
@@ -242,19 +251,23 @@ data. TOML scheduler settings are supported only under `[remote]` with the four
 keys shown above; other spellings are rejected. Reinitializing an existing
 repository does not change its selected backend or remote URI.
 
-The daemon runs remote delivery processing, Capacity GC, and Orphan/Invalid GC
-as independent tasks. Remote delivery queue rows retain durable enqueue
+When the daemon has a complete scheduler policy, it runs remote delivery,
+Capacity GC, and Orphan/Invalid GC as independent tasks. Remote mode requires
+all four scheduler values; Local-mode scheduled GC runs only when those values
+are explicitly configured. Remote delivery queue rows retain durable enqueue
 timestamps so maximum-delay eligibility survives daemon restart. See the
 link:samples/config.toml[configuration example] and
 link:packaging/README.md[Debian service guide] for setup details.
 
 == Operations
 
-The main commands are `init`, `daemon`, `put`, `get`, `cat`, `ls`, `stat`, `mv`,
-`rm`, `gc`, `doctor`, `recovery`, and `admin recover`. Run commands with
-`--help` for their flags and arguments. `doctor` checks repository health;
-`recovery list`, `recovery retry`, and `recovery discard` manage preserved
-write work after an interrupted operation.
+CLI setup and administration commands include `init`, `daemon`, `gc`,
+`doctor`, `recovery`, and `admin recover`. Direct CLI file commands such as
+`put`, `get`, `cat`, `ls`, `stat`, `mv`, and `rm` are available for scripting and
+optional checks; everyday file access is through FUSE or WebDAV as described in
+the manual. Run CLI commands with `--help` for their flags and arguments.
+`doctor` checks repository health; `recovery list`, `recovery retry`, and
+`recovery discard` manage preserved write work after an interrupted operation.
 
 For safe backup and restore, stop clients and the daemon and preserve the
 complete repository as one consistent set. Follow the

@@ -1,15 +1,17 @@
-# CLI
+# CLI for administration and diagnostics
 
-All CLI commands accept the common `--config`, `--repository`, `--daemon-listen`, `--daemon-token-file`, and `--daemon-ca-cert` options. Put global options before the subcommand.
+The CLI is primarily for repository setup, administration, diagnostics, and debugging. For everyday file access, use [FUSE](./fuse) or [WebDAV](./webdav).
+
+`nando init` creates a repository directly. Repository commands such as `doctor`, `gc`, and Recovery operations connect to the running daemon. Put global options such as `--config` and `--repository` before the subcommand; use the same repository and endpoint selection as the daemon.
 
 ```sh
-nando --repository "$HOME/nando-data" ls /
-nando --repository "$HOME/nando-data" put ./photo.jpg /photo.jpg
-nando --repository "$HOME/nando-data" stat /photo.jpg
-nando --repository "$HOME/nando-data" cat /photo.jpg
-nando --repository "$HOME/nando-data" get /photo.jpg ./photo-copy.jpg
-nando --repository "$HOME/nando-data" mv /photo.jpg /original.jpg
-nando --repository "$HOME/nando-data" rm /original.jpg
+nando doctor
+nando gc
+nando recovery list
+nando recovery retry SESSION_ID
+nando recovery discard SESSION_ID
 ```
 
-`nando daemon` starts the daemon. `nando doctor` checks repository health, `nando gc` runs garbage collection, and `nando recovery list|retry|discard` manages unfinished write sessions. `nando admin migrate` currently validates the schema. See the [CLI reference](../reference/cli) for the command list.
+For a quick connectivity and integrity check, `nando doctor` reports whether the selected daemon responds and its repository integrity check passes. It does not report the resolved repository path, configured Local capacity limit, or remote delivery queue status.
+
+Other commands include `init`, `admin recover`, and `admin migrate`. `nando sync` is present but not implemented. The [CLI reference](../reference/cli) lists commands; run `nando --help` or a command's `--help` for supported options.

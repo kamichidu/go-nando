@@ -10,16 +10,19 @@ export default defineConfig({
     nav: [
       { text: 'Getting started', link: '/getting-started/install' },
       { text: 'Setup', link: '/setup/repository' },
-      { text: 'Use', link: '/use/cli' },
+      { text: 'Use', link: '/use/fuse' },
+      { text: 'Administration', link: '/use/cli' },
       { text: 'Operations', link: '/operations/daemon' },
       { text: 'Reference', link: '/reference/cli' },
     ],
     sidebar: [
-      { text: 'Overview', items: [{ text: 'About nando', link: '/' }] },
+      { text: 'Overview', items: [
+        { text: 'About nando', link: '/' },
+        { text: 'Architecture', link: '/getting-started/concepts' },
+      ] },
       { text: 'Getting started', items: [
         { text: 'Install', link: '/getting-started/install' },
-        { text: 'Local quickstart', link: '/getting-started/quickstart' },
-        { text: 'Core concepts', link: '/getting-started/concepts' },
+        { text: 'Quick start', link: '/getting-started/quickstart' },
         { text: 'Versions and updates', link: '/getting-started/versioning' },
       ] },
       { text: 'Setup', items: [
@@ -30,10 +33,12 @@ export default defineConfig({
         { text: 'systemd system service', link: '/setup/systemd' },
       ] },
       { text: 'Use', items: [
-        { text: 'CLI', link: '/use/cli' },
         { text: 'FUSE', link: '/use/fuse' },
         { text: 'WebDAV', link: '/use/webdav' },
         { text: 'Remote delivery', link: '/use/remote-delivery' },
+      ] },
+      { text: 'Administration', items: [
+        { text: 'CLI', link: '/use/cli' },
       ] },
       { text: 'Operations', items: [
         { text: 'daemon', link: '/operations/daemon' },
