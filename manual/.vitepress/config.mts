@@ -30,7 +30,7 @@ export default withMermaid(defineConfig({
         { text: 'Initialize a repository', link: '/setup/repository' },
         { text: 'Configuration file', link: '/setup/configuration' },
         { text: 'Google Cloud Storage', link: '/setup/gcs' },
-        { text: 'S3 / Wasabi', link: '/setup/s3' },
+        { text: 'S3-compatible storage', link: '/setup/s3' },
         { text: 'systemd system service', link: '/setup/systemd' },
       ] },
       { text: 'Use', items: [
