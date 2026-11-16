@@ -1,0 +1,1 @@
+{"target":"FUSE","mountpoint":"/tmp/nando-validation-tools/run/mount","mount_options":["allow_other"],"workload":"unmodified upstream tests tree via prove -rv","privilege":"root (required by upstream suite)","repository":"isolated local repository on XFS","other_workload":"idle except nando daemon and adapters"}

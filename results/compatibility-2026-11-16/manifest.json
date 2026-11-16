@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-11-16",
+  "repository_sha_at_run": "bd12fbe8654fb3165ff359048e44ae64b74fd80b",
+  "harness_sources": {
+    "repository_sha_at_run": "bd12fbe8654fb3165ff359048e44ae64b74fd80b",
+    "working_tree_modified_during_run": true,
+    "sha256": {
+      "tools/interface_benchmark.py": "1d6b8075997a1b55d8c29422b067ba0742076a069adf55af3fd5ceb3484b7bd4",
+      "tools/validation_capture.py": "76409607b16b0d7356524a549238cbc250d9f55e0d256a02d32884f554467ee6",
+      "tools/validation_tooling.py": "9326a6a6637c6b0affcdb6b1bec2a45eb3511daa23063df5995ae95cc39fcc19"
+    }
+  },
+  "environment": "environment.json",
+  "preparation": "preparation.json",
+  "tools": {
+    "pjdfstest": {
+      "version": "85a8aea9e685999ef0540392fd80535f873d7ff7",
+      "source_revision": "85a8aea9e685999ef0540392fd80535f873d7ff7",
+      "manifest": "tooling-pjdfstest.json"
+    },
+    "fsx": {
+      "version": "d07dca72d2455f4ba8c660ad4c008541ccccb707",
+      "source_revision": "d07dca72d2455f4ba8c660ad4c008541ccccb707",
+      "manifest": "tooling-fsx.json"
+    },
+    "litmus": {
+      "version": "0.13-4",
+      "source_revision": "",
+      "manifest": "tooling-litmus.json"
+    }
+  },
+  "compatibility_suites": {
+    "pjdfstest": {
+      "status": "command_failed",
+      "exit_code": 1,
+      "analysis": "pjdfstest-fuse/analysis.json",
+      "raw_stdout": "pjdfstest-fuse/stdout.log",
+      "raw_stderr": "pjdfstest-fuse/stderr.log"
+    },
+    "fsx": {
+      "status": "command_failed",
+      "exit_code": 130,
+      "analysis": "fsx-fuse/analysis.json",
+      "raw_stdout": "fsx-fuse/stdout.log",
+      "raw_stderr": "fsx-fuse/stderr.log"
+    },
+    "litmus": {
+      "process_status": "completed",
+      "exit_code": 0,
+      "suite_analysis": "litmus-webdav/analysis.json",
+      "raw_stdout": "litmus-webdav/stdout.log",
+      "raw_stderr": "litmus-webdav/stderr.log",
+      "raw_debug": "litmus-webdav/debug.log"
+    }
+  },
+  "benchmark_comparison": {
+    "rpc": {
+      "status": "completed",
+      "completed": 10,
+      "failed": 0,
+      "result": "benchmark-rpc-first-success.json"
+    },
+    "fuse": {
+      "status": "completed",
+      "completed": 10,
+      "failed": 0,
+      "result": "benchmark-fuse-first-success.json"
+    },
+    "webdav": {
+      "status": "completed",
+      "completed": 10,
+      "failed": 0,
+      "result": "benchmark-webdav-first-success.json"
+    }
+  },
+  "verification": "verification.json",
+  "cleanup": "cleanup.json",
+  "summary": "summary.adoc",
+  "unclassified_failures_are_preserved": true,
+  "service_logs": {
+    "fuse_adapter": "fuse-adapter.log"
+  }
+}

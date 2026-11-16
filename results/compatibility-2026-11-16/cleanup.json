@@ -1,0 +1,15 @@
+{
+  "started_at": "2026-11-16T14:14:00.254069+00:00",
+  "target": "/tmp/nando-validation-tools/run/mount",
+  "best_effort": true,
+  "entries_before": 17,
+  "files_removed": 13,
+  "directories_removed": 15,
+  "errors": [],
+  "entries_after": 0,
+  "finished_at": "2026-11-16T14:14:00.697220+00:00",
+  "status": "completed",
+  "fuse_unmounted": true,
+  "user_allow_other_setting_restored": true,
+  "isolated_repository_and_socket_dir_removed": true
+}

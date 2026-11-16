@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "repository_sha_at_run": "bd12fbe8654fb3165ff359048e44ae64b74fd80b",
+  "results": [
+    {
+      "name": "root Go module",
+      "command": "go test ./...",
+      "status": "passed",
+      "log": "verification/go-root.log"
+    },
+    {
+      "name": "FUSE Go module",
+      "command": "cd adapters/fuse && go test ./...",
+      "status": "passed",
+      "log": "verification/go-fuse.log"
+    },
+    {
+      "name": "WebDAV Go module",
+      "command": "cd adapters/webdav && go test ./...",
+      "status": "passed",
+      "log": "verification/go-webdav.log"
+    },
+    {
+      "name": "Python harness tests",
+      "command": "python3 -m unittest -v tools/test_validation_harness.py",
+      "status": "passed",
+      "passed": 5,
+      "failed": 0,
+      "log": "verification/python-unittest.log"
+    },
+    {
+      "name": "Python bytecode compilation",
+      "command": "python3 -m py_compile tools/validation_capture.py tools/validation_tooling.py tools/interface_benchmark.py",
+      "status": "passed",
+      "log": "verification/python-compile.log"
+    },
+    {
+      "name": "Whitespace check",
+      "command": "git diff --check",
+      "status": "passed",
+      "log": "verification/diff-check.log"
+    }
+  ]
+}

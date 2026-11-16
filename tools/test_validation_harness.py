@@ -78,6 +78,24 @@ class HarnessTest(unittest.TestCase):
         self.assertEqual(result["failure_kind"], "environment_launch_error")
         self.assertEqual(result["launch_error"]["type"], "FileNotFoundError")
 
+    def test_timeout_streams_logs_and_records_timeout(self):
+        out = self.root / "timeout"
+        proc = subprocess.run([
+            sys.executable, str(CAPTURE), "--output", str(out), "--suite", "smoke",
+            "--target", "local", "--tooling-manifest", str(self.prepared),
+            "--conditions-json", str(self.conditions), "--timeout-seconds", "0.1", "--",
+            sys.executable, "-c",
+            "import sys, time; print('before-timeout', flush=True); "
+            "print('stderr-before-timeout', file=sys.stderr, flush=True); time.sleep(10)",
+        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual(proc.returncode, 124)
+        self.assertEqual(result["status"], "timed_out")
+        self.assertEqual(result["failure_kind"], "timeout")
+        self.assertEqual(result["timeout_seconds"], 0.1)
+        self.assertEqual((out / "stdout.log").read_text(encoding="utf-8").strip(), "before-timeout")
+        self.assertEqual((out / "stderr.log").read_text(encoding="utf-8").strip(), "stderr-before-timeout")
+
     def test_preflight_manifest_conditions_tree_and_version_failures_are_recorded(self):
         malformed = self.root / "malformed.json"
         malformed.write_text("{", encoding="utf-8")

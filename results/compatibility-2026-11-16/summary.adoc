@@ -1,0 +1,63 @@
+= Compatibility and Benchmark Run Summary
+
+Run date: 2026-11-16 (UTC host logs). Repository SHA at run start: `bd12fbe8654fb3165ff359048e44ae64b74fd80b`. The capture and benchmark source digests are in `harness-sources.json`.
+
+== Environment and preparation
+
+Host/package facts are recorded in `environment.json`; exact install/build provenance and supporting tool version command output are in `preparation.json`. Suite preparation manifests record executable hashes, source revisions, test-tree hashes, and live version-check output. The run phase performed no installs or updates.
+
+== Suite outcomes
+
+|===
+|Suite |Target |Outcome |Notes
+|pjdfstest |FUSE |FAIL (exit 1; command_failed) |237/238 upstream `.t` files started: 120 pass, 117 fail, 0 skip; 1 not started. 8,791 TAP assertions were reported (3,357 pass, 5,434 fail). Upstream bailout recorded; see per-file `pjdfstest-fuse/analysis.json` and raw logs.
+|fsx |FUSE |FAIL (exit 130) |Upstream run reported `no extend on truncate! not posix!`; see `fsx-fuse/`.
+|Litmus 0.13-4 |WebDAV |Process exit 0; suite groups failed setup |`basic`: 16/16 passed with 3 warnings. `copymove`, `props`, `locks`, and `http` each stopped at initial MKCOL 405. See raw output and debug logs under `litmus-webdav/`.
+|===
+
+The suite commands and inputs were unmodified. A process exit of zero is not treated as suite success when raw suite output reports failed groups. pjdfstest stderr records repeated `cut` invalid-range diagnostics and symlink creation returning `Operation not supported`; the exact bailout test attribution is not inferred. Compatibility results remain unclassified for later specification/compatibility/defect/environment analysis.
+
+== E2E measurements
+
+Each comparison run used 10 iterations and a 4,096-byte payload on an isolated local repository. All three interfaces completed 10/10 iterations in the first successful comparison set. Conditions and unmodified per-iteration records are in `benchmark-conditions.json` and `benchmark-*-first-success.json`. The earlier daemon startup failures are retained as `benchmark-*-initial-failure.json`; they are not included in the comparison.
+
+These are end-to-end observations, not adapter-only costs. RPC creates a new Unix HTTP connection for each JSON-RPC call and includes begin/write/fsync/commit/release; FUSE traverses kernel requests with zero metadata TTLs and direct I/O, committing at fsync; WebDAV uses separate HTTP requests and measures PUT completion. Cache, connection reuse, and commit boundaries differ. Simple latency deltas do not isolate adapter thinness or overhead.
+
+The following values are milliseconds. Percentiles use nearest-rank (`ceil(p*n)`, 1-indexed); at 10 samples p95 and p99 select the maximum observation. Successful iterations only are summarized. There are no CI performance thresholds.
+
+|===
+|Operation |Interface |Median ms |p95 ms |p99 ms
+|Create/write |RPC |59.675 |69.012 |69.012
+|Create/write |FUSE |135.744 |154.432 |154.432
+|Create/write |WEBDAV |72.373 |86.097 |86.097
+|Read |RPC |23.530 |27.160 |27.160
+|Read |FUSE |18.920 |22.236 |22.236
+|Read |WEBDAV |23.235 |29.235 |29.235
+|Stat |RPC |1.390 |1.814 |1.814
+|Stat |FUSE |2.046 |3.457 |3.457
+|Stat |WEBDAV |91.569 |112.903 |112.903
+|List |RPC |1.251 |1.888 |1.888
+|List |FUSE |1.892 |3.015 |3.015
+|List |WEBDAV |94.332 |120.129 |120.129
+|Rename |RPC |9.661 |11.631 |11.631
+|Rename |FUSE |11.308 |17.052 |17.052
+|Rename |WEBDAV |13.226 |15.351 |15.351
+|Delete |RPC |8.572 |9.600 |9.600
+|Delete |FUSE |9.970 |11.740 |11.740
+|Delete |WEBDAV |13.361 |16.243 |16.243
+|===
+
+A separate RPC run overlapped pjdfstest and is retained as `benchmark-rpc-concurrent-pjdfstest.json`; it is explicitly excluded from comparison.
+
+== Verification
+
+* `python3 -m unittest -v tools/test_validation_harness.py`: 5 passed, including preflight, launch, nonzero-exit, and timeout paths; logs are under `verification/`.
+* `go test ./...` at the root module: passed; logs are under `verification/`.
+* `go test ./...` in `adapters/fuse`: passed.
+* `go test ./...` in `adapters/webdav`: passed.
+* Python compilation of `validation_capture.py`, `validation_tooling.py`, and `interface_benchmark.py`: passed; captured under `verification/`.
+* `git diff --check`: passed after final source and documentation edits; output is under `verification/`.
+
+Best-effort cleanup after the suites removed all 17 remaining entries from the isolated FUSE mount (13 files, 15 directories) with zero errors; the FUSE mount was unmounted. The temporary `user_allow_other` setting used for root access was restored after unmount. FUSE final-close and resource-release errors surfaced in the adapter log captured at unmount, `fuse-adapter.log`. Cleanup details are in `cleanup.json`.
+
+`manifest.json` indexes the machine-readable results, raw logs, preparation versions, environment, verification, and cleanup evidence.

@@ -140,8 +140,11 @@ update anything.
   project's upstream instructions. Pin a package release or source commit and
   satisfy the documented OS, privilege, compiler, and mount prerequisites.
 . Select a command that reports the installed version or pinned source
-  revision and verify it succeeds. Use a read-only query. The preparation tool
-  records and runs that command; it is rerun during preflight to detect changes.
+  revision and verify it succeeds. The command MUST be read-only: it may query
+  a version, revision, or package database, but MUST NOT install, update,
+  download, build, or otherwise mutate the prepared tool or its source tree.
+  The preparation tool records and runs that command; it is rerun during
+  preflight to detect changes.
 . Create a preparation manifest for the installed executable(s). This records
   them and does not perform installation.
 
@@ -210,7 +213,12 @@ are recorded as `preflight_failed` with error details and evidence logs. The
 wrapper exits with 125 and does not run the suite. A process start error is
 `launch_failed` (`environment_launch_error`, exit 127); a launched test with a
 nonzero status is `command_failed` (`exit_code`, the child's code). These
-statuses are distinct. Other suite failures remain `unclassified`. The wrapper
+statuses are distinct. A configured timeout stops the process group and is
+recorded as `timed_out` (exit 124), including the timeout and captured logs.
+Suite stdout/stderr are streamed directly to files rather than retained in
+memory. Logs are not truncated; the timeout bounds elapsed time, not output
+bytes, so use an output filesystem with enough free space for the suite.
+Other suite failures remain `unclassified`. The wrapper
 does not rewrite test inputs, filter cases, or convert failures to success.
 Repeat preparation and runs per suite/version and interface as needed, without
 updating the pinned tool during measurement.
@@ -234,3 +242,28 @@ Run the harness failure-path checks without installing external suites with:
 ----
 python3 -m unittest -v tools/test_validation_harness.py
 ----
+
+== Captured mother-environment run
+
+The committed `results/compatibility-2026-11-16/` directory contains the
+preparation manifests, source/test-tree hashes, host conditions, raw suite
+logs, and machine-readable results from an isolated local repository. The
+external sources were pinned to pjdfstest `85a8aea9e685999ef0540392fd80535f873d7ff7`
+and xfstests-dev `d07dca72d2455f4ba8c660ad4c008541ccccb707`; Litmus came from
+Ubuntu package `0.13-4`. The exact version-check commands and their actual
+stdout/stderr are in each preparation manifest. All run commands only verify
+the pinned preparation and execute the already installed tools.
+
+The benchmark files are E2E measurements on this host, not adapter-only
+measurements. They retain their different connection, cache, and commit
+boundaries, and the successful summaries use nearest-rank percentiles. Read
+the per-run conditions and raw result JSON before comparing values. Initial
+failed attempts caused by the daemon socket directory's permissions are also
+retained separately from the successful rerun.
+
+pjdfstest and fsx are run against the live FUSE mount; Litmus is run against
+the live loopback WebDAV server. Incompatibilities, environment failures, and
+suite setup failures remain observations in their raw logs; they are not
+rewritten to match expected behavior. See
+`results/compatibility-2026-11-16/summary.adoc` for suite outcome counts,
+measured values, and limitations.

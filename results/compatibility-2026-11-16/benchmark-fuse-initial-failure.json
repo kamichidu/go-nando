@@ -1,0 +1,501 @@
+{
+  "schema_version": 1,
+  "kind": "interface_benchmark",
+  "interface": "fuse",
+  "started_at": "2026-11-16T13:43:24.530922+00:00",
+  "finished_at": "2026-11-16T13:43:24.815264+00:00",
+  "repository_sha": "bd12fbe8654fb3165ff359048e44ae64b74fd80b",
+  "tool": {
+    "name": "go-nando",
+    "version": "bd12fbe8654f"
+  },
+  "measurement_scope": "end_to_end",
+  "adapter_cost_isolation": "not_measured; cross-interface latency differences are not attributable to adapter-only cost",
+  "comparison_policy": "Do not interpret simple RPC/FUSE/WebDAV latency deltas as adapter thinness or overhead.",
+  "interface_conditions": {
+    "rpc": {
+      "connection": "new Unix HTTP connection for each JSON-RPC request; no connection reuse",
+      "cache": "daemon/resource behavior included; harness adds no cache",
+      "write_commit_boundary": "beginWrite + local Resource write/fsync + commit + release",
+      "read_boundary": "beginRead + local Resource read + release"
+    },
+    "fuse": {
+      "connection": "kernel FUSE requests; adapter RPC behavior included",
+      "cache": "adapter sets zero entry/attribute/negative lookup TTL and uses FOPEN_DIRECT_IO",
+      "write_commit_boundary": "write + fsync; adapter commit performed by fsync",
+      "read_boundary": "open/read/close through FUSE adapter"
+    },
+    "webdav": {
+      "connection": "one urllib HTTP request per operation; no explicit persistent session reuse",
+      "cache": "HTTP client and adapter behavior included; harness adds no cache",
+      "write_commit_boundary": "PUT response completion",
+      "read_boundary": "GET response body consumed"
+    }
+  },
+  "configuration": {
+    "iterations": 10,
+    "payload_bytes": 4096,
+    "rpc_endpoint": null,
+    "mountpoint": "/tmp/nando-validation-tools/run/mount",
+    "webdav_url": null
+  },
+  "environment": {
+    "platform": "Linux-6.8.0-1070-gcp-x86_64-with-glibc2.35",
+    "kernel": "6.8.0-1070-gcp",
+    "machine": "x86_64",
+    "python": "3.11.9",
+    "go_toolchain": "go version go1.25.1 linux/amd64",
+    "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline"
+  },
+  "completed": 0,
+  "failed": 10,
+  "cleanup_failed": 10,
+  "status": "failed",
+  "run_conditions": {
+    "delivery_mode": "local",
+    "cache_state": "fresh unique paths; immediate read; host page cache not cleared",
+    "storage": "isolated local repository on workspace XFS filesystem",
+    "repository_filesystem": "xfs",
+    "other_workload": "isolated test services; no intentional competing workload",
+    "mount_options": [
+      "allow_other"
+    ],
+    "host_uid": 736972916,
+    "payload_bytes": 4096,
+    "iterations": 10
+  },
+  "percentile_method": "nearest-rank: sorted sample at ceil(p*n)-1 (1-indexed)",
+  "classification": "unclassified",
+  "summary_successful_iterations": {},
+  "summary_failed_partial_observations": {},
+  "iterations": [
+    {
+      "iteration": 0,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-f69da583d5514f7f8314280662ae66af",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f69da583d5514f7f8314280662ae66af'"
+          },
+          {
+            "path": "/nando-bench-f69da583d5514f7f8314280662ae66af-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f69da583d5514f7f8314280662ae66af-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 1,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-da0e31c35b7c4c3692f866ce6511538d",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-da0e31c35b7c4c3692f866ce6511538d'"
+          },
+          {
+            "path": "/nando-bench-da0e31c35b7c4c3692f866ce6511538d-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-da0e31c35b7c4c3692f866ce6511538d-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 2,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-8ed5e79bdd9e452cbeecfb621f123fb0",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-8ed5e79bdd9e452cbeecfb621f123fb0'"
+          },
+          {
+            "path": "/nando-bench-8ed5e79bdd9e452cbeecfb621f123fb0-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-8ed5e79bdd9e452cbeecfb621f123fb0-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 3,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-f35c1a7be4bb441593346dca06fd6839",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f35c1a7be4bb441593346dca06fd6839'"
+          },
+          {
+            "path": "/nando-bench-f35c1a7be4bb441593346dca06fd6839-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f35c1a7be4bb441593346dca06fd6839-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 4,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-f580172a22af4359a91c480a5b81c595",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f580172a22af4359a91c480a5b81c595'"
+          },
+          {
+            "path": "/nando-bench-f580172a22af4359a91c480a5b81c595-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f580172a22af4359a91c480a5b81c595-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 5,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-b04a137ba79043a49dd8bf7761a4dc54",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-b04a137ba79043a49dd8bf7761a4dc54'"
+          },
+          {
+            "path": "/nando-bench-b04a137ba79043a49dd8bf7761a4dc54-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-b04a137ba79043a49dd8bf7761a4dc54-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 6,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-f4b6d5f91e574d8bafd21400c969ec48",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f4b6d5f91e574d8bafd21400c969ec48'"
+          },
+          {
+            "path": "/nando-bench-f4b6d5f91e574d8bafd21400c969ec48-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f4b6d5f91e574d8bafd21400c969ec48-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 7,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-d9b850575f974f00b4e9b25b62c602a1",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-d9b850575f974f00b4e9b25b62c602a1'"
+          },
+          {
+            "path": "/nando-bench-d9b850575f974f00b4e9b25b62c602a1-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-d9b850575f974f00b4e9b25b62c602a1-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 8,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-8246976dbd4e40f88f8c664b6acc36a6",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-8246976dbd4e40f88f8c664b6acc36a6'"
+          },
+          {
+            "path": "/nando-bench-8246976dbd4e40f88f8c664b6acc36a6-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-8246976dbd4e40f88f8c664b6acc36a6-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 9,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-0d64ee0389e24dfab579d32edae0c665",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-0d64ee0389e24dfab579d32edae0c665'"
+          },
+          {
+            "path": "/nando-bench-0d64ee0389e24dfab579d32edae0c665-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-0d64ee0389e24dfab579d32edae0c665-renamed'"
+          }
+        ]
+      }
+    }
+  ],
+  "errors": [
+    {
+      "iteration": 0,
+      "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f69da583d5514f7f8314280662ae66af'",
+      "cleanup_error": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-f69da583d5514f7f8314280662ae66af",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f69da583d5514f7f8314280662ae66af'"
+          },
+          {
+            "path": "/nando-bench-f69da583d5514f7f8314280662ae66af-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f69da583d5514f7f8314280662ae66af-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 1,
+      "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-da0e31c35b7c4c3692f866ce6511538d'",
+      "cleanup_error": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-da0e31c35b7c4c3692f866ce6511538d",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-da0e31c35b7c4c3692f866ce6511538d'"
+          },
+          {
+            "path": "/nando-bench-da0e31c35b7c4c3692f866ce6511538d-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-da0e31c35b7c4c3692f866ce6511538d-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 2,
+      "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-8ed5e79bdd9e452cbeecfb621f123fb0'",
+      "cleanup_error": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-8ed5e79bdd9e452cbeecfb621f123fb0",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-8ed5e79bdd9e452cbeecfb621f123fb0'"
+          },
+          {
+            "path": "/nando-bench-8ed5e79bdd9e452cbeecfb621f123fb0-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-8ed5e79bdd9e452cbeecfb621f123fb0-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 3,
+      "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f35c1a7be4bb441593346dca06fd6839'",
+      "cleanup_error": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-f35c1a7be4bb441593346dca06fd6839",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f35c1a7be4bb441593346dca06fd6839'"
+          },
+          {
+            "path": "/nando-bench-f35c1a7be4bb441593346dca06fd6839-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f35c1a7be4bb441593346dca06fd6839-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 4,
+      "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f580172a22af4359a91c480a5b81c595'",
+      "cleanup_error": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-f580172a22af4359a91c480a5b81c595",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f580172a22af4359a91c480a5b81c595'"
+          },
+          {
+            "path": "/nando-bench-f580172a22af4359a91c480a5b81c595-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f580172a22af4359a91c480a5b81c595-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 5,
+      "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-b04a137ba79043a49dd8bf7761a4dc54'",
+      "cleanup_error": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-b04a137ba79043a49dd8bf7761a4dc54",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-b04a137ba79043a49dd8bf7761a4dc54'"
+          },
+          {
+            "path": "/nando-bench-b04a137ba79043a49dd8bf7761a4dc54-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-b04a137ba79043a49dd8bf7761a4dc54-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 6,
+      "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f4b6d5f91e574d8bafd21400c969ec48'",
+      "cleanup_error": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-f4b6d5f91e574d8bafd21400c969ec48",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f4b6d5f91e574d8bafd21400c969ec48'"
+          },
+          {
+            "path": "/nando-bench-f4b6d5f91e574d8bafd21400c969ec48-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-f4b6d5f91e574d8bafd21400c969ec48-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 7,
+      "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-d9b850575f974f00b4e9b25b62c602a1'",
+      "cleanup_error": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-d9b850575f974f00b4e9b25b62c602a1",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-d9b850575f974f00b4e9b25b62c602a1'"
+          },
+          {
+            "path": "/nando-bench-d9b850575f974f00b4e9b25b62c602a1-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-d9b850575f974f00b4e9b25b62c602a1-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 8,
+      "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-8246976dbd4e40f88f8c664b6acc36a6'",
+      "cleanup_error": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-8246976dbd4e40f88f8c664b6acc36a6",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-8246976dbd4e40f88f8c664b6acc36a6'"
+          },
+          {
+            "path": "/nando-bench-8246976dbd4e40f88f8c664b6acc36a6-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-8246976dbd4e40f88f8c664b6acc36a6-renamed'"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 9,
+      "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-0d64ee0389e24dfab579d32edae0c665'",
+      "cleanup_error": {
+        "attempted": true,
+        "status": "failed",
+        "results": [
+          {
+            "path": "/nando-bench-0d64ee0389e24dfab579d32edae0c665",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-0d64ee0389e24dfab579d32edae0c665'"
+          },
+          {
+            "path": "/nando-bench-0d64ee0389e24dfab579d32edae0c665-renamed",
+            "status": "failed",
+            "error": "OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run/mount/nando-bench-0d64ee0389e24dfab579d32edae0c665-renamed'"
+          }
+        ]
+      }
+    }
+  ],
+  "harness_sources_sha256": {
+    "tools/interface_benchmark.py": "1d6b8075997a1b55d8c29422b067ba0742076a069adf55af3fd5ceb3484b7bd4",
+    "tools/validation_capture.py": "76409607b16b0d7356524a549238cbc250d9f55e0d256a02d32884f554467ee6",
+    "tools/validation_tooling.py": "9326a6a6637c6b0affcdb6b1bec2a45eb3511daa23063df5995ae95cc39fcc19"
+  },
+  "working_tree_modified_during_run": true
+}

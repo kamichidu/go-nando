@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import platform
+import signal
 import shlex
 import shutil
 import subprocess
@@ -35,7 +36,38 @@ def hash_tree(root):
 
 
 def executable_digest(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def stop_process(proc):
+    try:
+        if os.name == "posix":
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                return
+        else:
+            proc.terminate()
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        if os.name == "posix":
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            proc.kill()
+        proc.wait()
+    finally:
+        if os.name == "posix":
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def verify_preparation(tooling, conditions, command, evidence):
@@ -74,6 +106,7 @@ def verify_preparation(tooling, conditions, command, evidence):
     version_path = str(Path(version_executable).resolve(strict=True)) if version_executable else None
     if version_path not in approved:
         raise ValueError("version-check executable is not in the prepared manifest")
+    # Preparation manifests must use a read-only query (version/revision/package metadata).
     version_proc = subprocess.run(version_command, cwd=version_check["cwd"], stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, check=False, timeout=30)
     version_evidence = {
@@ -105,17 +138,25 @@ def main():
                         help="manifest produced explicitly by validation_tooling.py")
     parser.add_argument("--conditions-json", required=True, type=Path,
                         help="JSON object describing workload and interface conditions")
+    parser.add_argument("--timeout-seconds", type=float, default=3600,
+                        help="maximum suite runtime; timed-out commands are stopped and recorded")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command and args.command[0] == "--" else args.command
     if not command:
         parser.error("provide a command after --")
+    if args.timeout_seconds <= 0:
+        parser.error("timeout-seconds must be positive")
 
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     started_at = dt.datetime.now(dt.timezone.utc)
     started = time.monotonic()
-    run_stdout = run_stderr = b""
+    stdout_path = output / "stdout.log"
+    stderr_path = output / "stderr.log"
+    stdout_path.touch()
+    stderr_path.touch()
+    run_returncode = None
     tooling = conditions = None
     tooling_bytes = conditions_bytes = None
     manifest_sha = conditions_sha = None
@@ -139,18 +180,24 @@ def main():
 
     proc = None
     launch_error = None
+    timeout_error = None
     if preflight_error is None:
-        try:
-            proc = subprocess.run(command, cwd=args.cwd.resolve(), stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE, check=False)
-            run_stdout, run_stderr = proc.stdout, proc.stderr
-        except OSError as exc:
-            launch_error = {"type": type(exc).__name__, "message": str(exc), "errno": exc.errno}
+        with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
+            try:
+                proc = subprocess.Popen(command, cwd=args.cwd.resolve(), stdout=stdout_file, stderr=stderr_file,
+                                        start_new_session=(os.name == "posix"))
+                try:
+                    run_returncode = proc.wait(timeout=args.timeout_seconds)
+                except subprocess.TimeoutExpired as exc:
+                    timeout_error = {"type": type(exc).__name__, "message": str(exc),
+                                     "timeout_seconds": args.timeout_seconds}
+                    stop_process(proc)
+                    run_returncode = proc.returncode
+            except OSError as exc:
+                launch_error = {"type": type(exc).__name__, "message": str(exc), "errno": exc.errno}
     duration = time.monotonic() - started
     finished_at = dt.datetime.now(dt.timezone.utc)
 
-    (output / "stdout.log").write_bytes(run_stdout)
-    (output / "stderr.log").write_bytes(run_stderr)
     preflight_bytes = (json.dumps(preflight, indent=2) + "\n").encode("utf-8")
     (output / "preflight.log").write_bytes(preflight_bytes)
     if tooling_bytes is not None:
@@ -170,8 +217,10 @@ def main():
         status, failure_kind, failure_classification, exit_code = "preflight_failed", "preflight_error", "environment_issue", None
     elif launch_error:
         status, failure_kind, failure_classification, exit_code = "launch_failed", "environment_launch_error", "environment_issue", None
-    elif proc.returncode != 0:
-        status, failure_kind, failure_classification, exit_code = "command_failed", "exit_code", "unclassified", proc.returncode
+    elif timeout_error:
+        status, failure_kind, failure_classification, exit_code = "timed_out", "timeout", "unclassified", 124
+    elif run_returncode != 0:
+        status, failure_kind, failure_classification, exit_code = "command_failed", "exit_code", "unclassified", run_returncode
     else:
         status, failure_kind, failure_classification, exit_code = "completed", None, "unclassified", 0
 
@@ -192,11 +241,13 @@ def main():
         "started_at": started_at.isoformat(),
         "finished_at": finished_at.isoformat(),
         "duration_seconds": duration,
+        "timeout_seconds": args.timeout_seconds,
         "status": status,
         "failure_kind": failure_kind,
         "failure_classification": failure_classification,
         "preflight": preflight,
         "launch_error": launch_error,
+        "timeout_error": timeout_error,
         "exit_code": exit_code,
         "conditions": conditions,
         "conditions_sha256": conditions_sha,
@@ -206,8 +257,8 @@ def main():
                         "machine": platform.machine(), "kernel": platform.release(),
                         "cwd": str(args.cwd.resolve())},
         "logs": {
-            "stdout": {"path": "stdout.log", "sha256": hashlib.sha256(run_stdout).hexdigest()},
-            "stderr": {"path": "stderr.log", "sha256": hashlib.sha256(run_stderr).hexdigest()},
+            "stdout": {"path": "stdout.log", "sha256": executable_digest(stdout_path)},
+            "stderr": {"path": "stderr.log", "sha256": executable_digest(stderr_path)},
             "preflight": {"path": "preflight.log", "sha256": hashlib.sha256(preflight_bytes).hexdigest()},
             "tooling_manifest_input": {"path": "tooling-manifest.input.json" if tooling_bytes is not None else None,
                                        "sha256": manifest_sha},

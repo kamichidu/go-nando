@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "suite": "litmus",
+  "target": "WebDAV",
+  "process_status": "completed",
+  "process_exit_code": 0,
+  "derived_suite_status": "completed_with_failed_groups",
+  "groups": [
+    {
+      "name": "basic",
+      "tests_run": 16,
+      "passed": 16,
+      "failed": 0,
+      "status": "passed"
+    },
+    {
+      "name": "copymove",
+      "tests_run": 2,
+      "passed": 1,
+      "failed": 1,
+      "status": "failed"
+    },
+    {
+      "name": "props",
+      "tests_run": 2,
+      "passed": 1,
+      "failed": 1,
+      "status": "failed"
+    },
+    {
+      "name": "locks",
+      "tests_run": 2,
+      "passed": 1,
+      "failed": 1,
+      "status": "failed"
+    },
+    {
+      "name": "http",
+      "tests_run": 2,
+      "passed": 1,
+      "failed": 1,
+      "status": "failed"
+    }
+  ],
+  "warnings": 1,
+  "raw_stdout_sha256": "0d1b8b48a4e510d5850af088c5455660cea0ea5c0453517685aedde43fd0e487",
+  "raw_debug_sha256": "5bcafbd1b67134ef199a593298fff3b6a9c339c0e60233909dd31463c31d5f18"
+}

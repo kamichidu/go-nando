@@ -1,0 +1,10 @@
+test_completed_and_nonzero_exit_are_distinct (tools.test_validation_harness.HarnessTest.test_completed_and_nonzero_exit_are_distinct) ... ok
+test_partial_failed_samples_are_separate_from_successful_summary (tools.test_validation_harness.HarnessTest.test_partial_failed_samples_are_separate_from_successful_summary) ... ok
+test_preflight_manifest_conditions_tree_and_version_failures_are_recorded (tools.test_validation_harness.HarnessTest.test_preflight_manifest_conditions_tree_and_version_failures_are_recorded) ... ok
+test_process_launch_failure_is_launch_failed (tools.test_validation_harness.HarnessTest.test_process_launch_failure_is_launch_failed) ... ok
+test_timeout_streams_logs_and_records_timeout (tools.test_validation_harness.HarnessTest.test_timeout_streams_logs_and_records_timeout) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 2.084s
+
+OK
