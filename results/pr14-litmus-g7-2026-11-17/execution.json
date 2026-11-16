@@ -1,45 +1,72 @@
 {
-  "status": "baseline_collection_completed",
+  "status": "completed_with_residual_failures",
   "g7": "FAIL",
-  "litmus_process_exit_code": 0,
-  "derived_suite_status": "completed_with_failed_groups",
-  "target_commit": "be769c79461db2ec996b29ccc3f48d49624a8bc6",
+  "derived_suite_status": "FAIL",
+  "target_commit": "c4341cc540597520777f755a2ff3e2a83c304f5e",
   "builds": [
     {
-      "command": "go build -o /tmp/go-nando-g7.GUjF6M/bin/nando ./cmd/nando",
-      "exit_code": 0,
-      "sha256": "dc8ee3071f1c649c66e8cb0bd2c384b4a033721ffef29e2f7f051a0c46683cb3"
+      "path": "/tmp/go-nando-webdav-head.pjFvSW/bin/nando",
+      "sha256": "ad75c77d0c26cba3749bf63318b27744b9942752333f003a8e97356600fb7884",
+      "built_from": "c4341cc540597520777f755a2ff3e2a83c304f5e"
     },
     {
-      "command": "go build -o /tmp/go-nando-g7.GUjF6M/bin/nando-webdav ./adapters/webdav/cmd/nando-webdav",
-      "exit_code": 0,
-      "sha256": "41d226160e8a1742981edf8a9bf358f8a90c68576b81914c0054ec912ba1db5e"
+      "path": "/tmp/go-nando-webdav-head.pjFvSW/bin/nando-webdav",
+      "sha256": "1e8a7bcb4a3649f3b6378530072acaa9ea24050ed676427edd4d4cc20bac3baa",
+      "built_from": "c4341cc540597520777f755a2ff3e2a83c304f5e"
     }
   ],
   "repository_init": {
-    "command": "/tmp/go-nando-g7.GUjF6M/bin/nando --repository /tmp/go-nando-g7.GUjF6M/state/repository init --delivery-mode local",
-    "exit_code": 0
+    "exit_code": 0,
+    "delivery_mode": "local",
+    "repository": "/tmp/go-nando-webdav-head.pjFvSW/state/repository"
   },
-  "daemon_readiness": {
-    "command": "python3 e2e/runner.py wait-daemon",
-    "exit_code": 0
+  "webdav_http_gate": "PASS",
+  "litmus_process_exit_code": 0,
+  "groups": [
+    {
+      "name": "basic",
+      "tests_run": 16,
+      "passed": 16,
+      "failed": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "copymove",
+      "tests_run": 13,
+      "passed": 7,
+      "failed": 6,
+      "status": "FAIL"
+    },
+    {
+      "name": "props",
+      "tests_run": 14,
+      "passed": 10,
+      "failed": 4,
+      "status": "FAIL"
+    },
+    {
+      "name": "locks",
+      "tests_run": 3,
+      "passed": 3,
+      "failed": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "http",
+      "tests_run": 4,
+      "passed": 4,
+      "failed": 0,
+      "status": "PASS"
+    }
+  ],
+  "setup_chain": "PASS; DELETE 409 \u2192 MKCOL 405 did not recur",
+  "canonical_e2e": {
+    "command": "DESIGN_IR_REPO=/home/sekito_centsys_jp/workspaces/design-ir e2e/run.sh",
+    "design_ir_revision": "455ed318b7bc409d3e1da320620ef92d457042b9",
+    "result": "G0 FAIL because Docker could not bind 127.0.0.1:4443 (already allocated); G1-G7 marked SKIP by canonical runner",
+    "evidence": "canonical-e2e-G0.log"
   },
-  "webdav_readiness": {
-    "command": "curl -X OPTIONS <captured loopback URL>/",
-    "exit_code": 0
-  },
-  "suite_command": "litmus --keep-going <captured loopback URL>/",
-  "suite_process_exit_code": 0,
-  "preflight": {
-    "command": "e2e/run.sh",
-    "exit_code": 2,
-    "reason": "required ../design-ir checkout at 455ed318b7bc409d3e1da320620ef92d457042b9 is absent; G0-G7 skipped in the canonical gate invocation"
-  },
-  "independent_checks": {
-    "webdav_http_gate": "PASS (e2e/webdav-http.sh)",
-    "root_go_test": "PASS (go test ./...)",
-    "webdav_go_test": "PASS (cd adapters/webdav && go test ./...)",
-    "webdav_go_race": "PASS (cd adapters/webdav && go test -race ./...)"
-  },
-  "evidence_path": "evidence/"
+  "go_race": "PASS: go test -race ./... in root, adapters/webdav, and adapters/fuse",
+  "evidence_path": "evidence/",
+  "source_changes_committed": true
 }

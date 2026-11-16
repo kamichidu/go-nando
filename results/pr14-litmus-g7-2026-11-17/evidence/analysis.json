@@ -1,0 +1,389 @@
+{
+  "groups": [
+    {
+      "name": "basic",
+      "tests_run": 16,
+      "passed": 16,
+      "failed": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "copymove",
+      "tests_run": 13,
+      "passed": 7,
+      "failed": 6,
+      "status": "FAIL"
+    },
+    {
+      "name": "props",
+      "tests_run": 14,
+      "passed": 10,
+      "failed": 4,
+      "status": "FAIL"
+    },
+    {
+      "name": "locks",
+      "tests_run": 3,
+      "passed": 3,
+      "failed": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "http",
+      "tests_run": 4,
+      "passed": 4,
+      "failed": 0,
+      "status": "PASS"
+    }
+  ],
+  "groups_seen": 5,
+  "failed_groups": 2,
+  "missing_groups": [],
+  "cases": [
+    {
+      "case": "init",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "begin",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "put_get",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "put_get_utf8_segment",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "mkcol_over_plain",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "delete",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "delete_null",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "delete_fragment",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "mkcol",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "mkcol_again",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "delete_coll",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "mkcol_with_body",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "finish",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "init",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "begin",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "copy_init",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "copy_simple",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "copy_overwrite",
+      "status": "FAIL",
+      "detail": "COPY-on-existing with 'Overwrite: T' should succeed (RFC2518:S8.8.4): 412 Precondition Failed)"
+    },
+    {
+      "case": "copy_nodestcoll",
+      "status": "FAIL",
+      "detail": "COPY into non-existant collection '/litmus/nonesuch' succeeded)"
+    },
+    {
+      "case": "copy_cleanup",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "copy_coll",
+      "status": "UNSUPPORTED",
+      "detail": "collection COPY `/litmus/ccsrc/' to `/litmus/ccdest/': 501 Not Implemented)"
+    },
+    {
+      "case": "copy_shallow",
+      "status": "FAIL",
+      "detail": "MKCOL on `/litmus/ccsrc/': 405 Method Not Allowed)",
+      "relation": "DEPENDENT"
+    },
+    {
+      "case": "move",
+      "status": "UNSUPPORTED",
+      "detail": "MOVE onto existing resource with Overwrite: T `/litmus/move2' to `/litmus/movedest': 501 Not Implemented)"
+    },
+    {
+      "case": "move_coll",
+      "status": "UNSUPPORTED",
+      "detail": "collection COPY `/litmus/mvsrc/' to `/litmus/mvdest2/', depth infinity: 501 Not Implemented)"
+    },
+    {
+      "case": "move_cleanup",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "finish",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "init",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "begin",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propfind_invalid",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propfind_invalid2",
+      "status": "FAIL",
+      "detail": "PROPFIND with invalid namespace declaration in body (see FAQ) got 207 response not 400)"
+    },
+    {
+      "case": "propfind_d0",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propinit",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propset",
+      "status": "UNSUPPORTED",
+      "detail": "PROPPATCH on `/litmus/prop': 501 Not Implemented)"
+    },
+    {
+      "case": "propget",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propextended",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propmove",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propdeletes",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propreplace",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propnullns",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "prophighunicode",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propremoveset",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propsetremove",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propvalnspace",
+      "status": "SKIP",
+      "detail": ""
+    },
+    {
+      "case": "propwformed",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propinit",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propmanyns",
+      "status": "UNSUPPORTED",
+      "detail": "PROPPATCH on `/litmus/prop': 501 Not Implemented)"
+    },
+    {
+      "case": "propget",
+      "status": "FAIL",
+      "detail": "No value given for property {http://example.com/kappa}somename)",
+      "relation": "DEPENDENT"
+    },
+    {
+      "case": "propcleanup",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "finish",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "init",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "begin",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "precond",
+      "status": "SKIP",
+      "detail": "locking tests skipped,"
+    },
+    {
+      "case": "init",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "begin",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "expect100",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "finish",
+      "status": "PASS",
+      "detail": ""
+    }
+  ],
+  "setup_chain": "PASS: Litmus basic 16/16; later group DELETE returned 204 and MKCOL returned 201; no DELETE 409 \u2192 MKCOL 405 chain.",
+  "causes": [
+    {
+      "classification": "PASS",
+      "scope": "collection DELETE",
+      "detail": "All default groups were reached. The non-empty collection DELETE setup and Litmus basic collection cleanup passed."
+    },
+    {
+      "classification": "FAIL",
+      "scope": "COPY/MOVE",
+      "detail": "Overwrite COPY returned 412 and COPY to a missing destination collection succeeded unexpectedly; a later MKCOL 405 depended on failed collection COPY cleanup. No COPY/MOVE behavior changed."
+    },
+    {
+      "classification": "UNSUPPORTED",
+      "scope": "COPY/MOVE and PROPPATCH",
+      "detail": "Collection/replacement COPY or MOVE and PROPPATCH cases explicitly returned 501 and are classified UNSUPPORTED."
+    },
+    {
+      "classification": "FAIL",
+      "scope": "PROPFIND namespace validation",
+      "detail": "Malformed namespace declaration returned 207 instead of expected 400. Missing property read was dependent on the unsupported PROPPATCH."
+    },
+    {
+      "classification": "PASS",
+      "scope": "locks and http",
+      "detail": "No failed cases in either group; Litmus skipped its locking precondition case because Class 2 is not advertised."
+    }
+  ]
+}
