@@ -2,6 +2,8 @@
 
 image:manual/public/nando.svg[nando logo, width=128]
 
+link:https://kamichidu.github.io/go-nando/[User Manual] | link:https://kamichidu.github.io/go-nando/getting-started/quickstart[Quick Start]
+
 == About the Name
 
 nando is a Japanese word for a household storeroom: a place to keep useful
@@ -128,9 +130,12 @@ tests.
 
 == Quick Start
 
-For everyday file access, use the FUSE or WebDAV adapter described in the
-link:https://kamichidu.github.io/go-nando/[nando manual]. The CLI sequence here
-is an optional smoke check, not the normal file-access workflow.
+For everyday file access, use the
+link:https://kamichidu.github.io/go-nando/use/fuse[FUSE] or
+link:https://kamichidu.github.io/go-nando/use/webdav[WebDAV] adapter. This CLI
+sequence is an optional smoke check; follow the manual's
+link:https://kamichidu.github.io/go-nando/getting-started/quickstart[Quick Start]
+for the full setup.
 
 Initialize the repository using the current account's XDG-style data default
 (`${XDG_DATA_HOME:-~/.local/share}/nando`):

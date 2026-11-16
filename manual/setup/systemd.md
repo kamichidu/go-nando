@@ -39,19 +39,36 @@ This example uses the instance name `archive` and repository path `/var/lib/nand
    ```
 
 3. In `/etc/nando/archive.toml`, set the repository path to `/var/lib/nando/archive` and the daemon listener to `unix:///run/nando-archive/control.sock`. For Remote mode, configure all scheduler values. Provision GCS ADC or AWS credentials for the `nando` account outside the package.
-4. Create the repository parent directory and assign it to the service account. Initialization runs as `nando` and creates the repository directory beneath this parent.
+4. If the daemon needs cloud credentials, provide its environment in a systemd drop-in. The system unit has `ProtectHome=yes`, so the service cannot read the invoking user's `~/.aws` files or home-directory ADC files. For AWS, install the profile's config and credentials files at system paths accessible to the service, for example `/etc/nando/aws-config` and `/etc/nando/aws-credentials`, and set their ownership to `root:nando` with mode `0640`. The profile name must exist in the appropriate file, and the `nando` account must be able to read both files. Create `/etc/systemd/system/nando@archive.service.d/credentials.conf` with:
+
+   ```ini
+   [Service]
+   Environment="AWS_PROFILE=archive"
+   Environment="AWS_CONFIG_FILE=/etc/nando/aws-config"
+   Environment="AWS_SHARED_CREDENTIALS_FILE=/etc/nando/aws-credentials"
+   ```
+
+   For GCS, use this alternative drop-in setting instead of the AWS variables:
+
+   ```ini
+   [Service]
+   Environment="GOOGLE_APPLICATION_CREDENTIALS=/etc/nando/credentials/gcs.json"
+   ```
+
+   Place the credential file outside home directories and make it readable by the `nando` account, for example root-owned, group `nando`, mode `0640`. Set only the variables for the backend in use, then run `sudo systemctl daemon-reload` and restart the service after it has been started. The environment variables provide file paths, not credentials; keep the files out of the instance TOML and grant only the selected service identity the required cloud permissions. These paths are read-only inputs under the unit's `ProtectSystem=strict` filesystem protection; do not assume arbitrary service writes are allowed. An `EnvironmentFile=` can hold environment assignments when root-owned and tightly permissioned, but it does not replace securing credential files.
+5. Create the repository parent directory and assign it to the service account. Initialization runs as `nando` and creates the repository directory beneath this parent.
 
    ```sh
    sudo install -d -o nando -g nando -m 0700 /var/lib/nando
    ```
 
-5. Initialize the repository as the service account.
+6. Initialize the repository as the service account.
 
    ```sh
    sudo -u nando /usr/bin/nando --config /etc/nando/archive.toml init
    ```
 
-6. Enable and start the instance.
+7. Enable and start the instance.
 
    ```sh
    sudo systemctl daemon-reload
@@ -59,7 +76,7 @@ This example uses the instance name `archive` and repository path `/var/lib/nand
    sudo systemctl status nando@archive.service
    ```
 
-7. Check daemon connectivity and repository integrity as the service account. A successful `doctor` call does not report remote delivery progress.
+8. Check daemon connectivity and repository integrity as the service account. A successful `doctor` call does not report remote delivery progress.
 
    ```sh
    sudo -u nando /usr/bin/nando --config /etc/nando/archive.toml doctor
