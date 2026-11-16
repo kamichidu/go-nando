@@ -39,19 +39,28 @@ This example uses the instance name `archive` and repository path `/var/lib/nand
    ```
 
 3. In `/etc/nando/archive.toml`, set the repository path to `/var/lib/nando/archive` and the daemon listener to `unix:///run/nando-archive/control.sock`. For Remote mode, configure all scheduler values. Provision GCS ADC or AWS credentials for the `nando` account outside the package.
-4. Create the repository parent directory and assign it to the service account. Initialization runs as `nando` and creates the repository directory beneath this parent.
+4. If the daemon needs an AWS profile or a GCS credential file, provide its environment in a systemd drop-in. For example, create `/etc/systemd/system/nando@archive.service.d/credentials.conf`:
+
+   ```ini
+   [Service]
+   Environment="AWS_PROFILE=archive"
+   Environment="GOOGLE_APPLICATION_CREDENTIALS=/etc/nando/credentials/gcs.json"
+   ```
+
+   Set only the variables you use, then run `sudo systemctl daemon-reload` and restart the service after it has been started. `AWS_PROFILE` selects a profile from AWS shared config/credentials files; it does not provide AWS keys itself. Since this unit has `ProtectHome=yes`, the usual `~/.aws` files are not visible to it. If using a profile, place the AWS files at a readable system path and set `AWS_CONFIG_FILE` and/or `AWS_SHARED_CREDENTIALS_FILE` to those paths in the drop-in. `GOOGLE_APPLICATION_CREDENTIALS` is a path to an ADC credential/configuration file, not the credential contents. Store credential files outside the instance TOML, restrict access (for example, root-owned and group `nando`, mode `0640`), and ensure the `nando` account can read them. The unit has `ProtectSystem=strict`; do not assume arbitrary service writes are allowed. Use paths accessible for reading under the unit's filesystem protections. An `EnvironmentFile=` can be used instead when the file is root-owned and tightly permissioned; it contains environment assignments, not a substitute for securing credential files.
+5. Create the repository parent directory and assign it to the service account. Initialization runs as `nando` and creates the repository directory beneath this parent.
 
    ```sh
    sudo install -d -o nando -g nando -m 0700 /var/lib/nando
    ```
 
-5. Initialize the repository as the service account.
+6. Initialize the repository as the service account.
 
    ```sh
    sudo -u nando /usr/bin/nando --config /etc/nando/archive.toml init
    ```
 
-6. Enable and start the instance.
+7. Enable and start the instance.
 
    ```sh
    sudo systemctl daemon-reload
@@ -59,7 +68,7 @@ This example uses the instance name `archive` and repository path `/var/lib/nand
    sudo systemctl status nando@archive.service
    ```
 
-7. Check daemon connectivity and repository integrity as the service account. A successful `doctor` call does not report remote delivery progress.
+8. Check daemon connectivity and repository integrity as the service account. A successful `doctor` call does not report remote delivery progress.
 
    ```sh
    sudo -u nando /usr/bin/nando --config /etc/nando/archive.toml doctor

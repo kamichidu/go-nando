@@ -14,6 +14,19 @@ automatically available to a system service. Configure environment variables
 or credential-file access for the service account as appropriate, and see the
 [systemd setup guide](./systemd).
 
+For a foreground daemon using a credential configuration or JSON key file,
+set `GOOGLE_APPLICATION_CREDENTIALS` to the file path:
+
+```sh
+GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcloud/application_default_credentials.json" \
+  nando --config "$HOME/.config/nando/gcs.toml" \
+  --repository "$HOME/nando-data" daemon
+```
+
+This path is an example ADC source; ADC also supports other methods described
+in Google's documentation. Keep credential files protected and readable by
+the account running the daemon.
+
 ## Configure a repository
 
 One way to authenticate during development is to create ADC for the user who
