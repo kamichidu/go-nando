@@ -1,0 +1,97 @@
+= Compatibility Evidence Analysis
+
+Date: 2026-11-16. This is an analysis of the baseline evidence in this directory plus two isolated follow-up reproductions. The scope is read-only for Core, daemon, adapters, and all upstream suites. The new files contain classifications and reproduction evidence only.
+
+== Evidence and counting rules
+
+The baseline repository revision was `bd12fbe8654fb3165ff359048e44ae64b74fd80b`. pjdfstest was the unmodified tree at `85a8aea9e685999ef0540392fd80535f873d7ff7`; fsx was xfstests-dev `d07dca72d2455f4ba8c660ad4c008541ccccb707`; Litmus was Ubuntu package `0.13-4`. The captured suite commands, host, and raw logs remain in `pjdfstest-fuse/`, `fsx-fuse/`, and `litmus-webdav/`. Source code and line references below refer to those exact upstream checkouts or the PR worktree.
+
+`pjdfstest-fuse/analysis.json` contains results for all 237 started test files out of 238. It reports 120 file passes, 117 failures, no skips, 8,791 assertions, 3,357 passes, and 5,434 failures. Its 5,434 failed assertion records form this non-overlapping partition by the raw diagnostic shape:
+
+|===
+|Raw observation |Count |Interpretation
+|Expected operation returned `EOPNOTSUPP` |903 |Direct operation refusal; capability limitation is directly observed.
+|Unexpected `ENOENT` |2,114 |Potential cascade or errno/path mismatch. The records alone do not prove that every case descends from an earlier failure.
+|No `tried … expected … got …` detail |1,285 |Unattributed here. These include `test_check` assertions and are not automatically harness failures.
+|Other parsed mismatches |1,132 |Mixed direct and dependent mismatches; inspect individual test order before attribution.
+|Total |5,434 |All failed assertion records from the machine analysis.
+|===
+
+Test-directory totals below count every failed assertion in that directory, including secondary assertions. They overlap with operation classifications: for example, `chmod/00.t` exercises symlink, FIFO, device-node, mode, and cleanup behavior. They must not be summed or interpreted as counts of independent root causes. `classification.json` contains these counts, the partition, and structured evidence links.
+
+== pjdfstest findings
+
+=== Unsupported object and link operations — P1 capability scope
+
+The 903 direct `EOPNOTSUPP` observations split as follows. They are primary operation outcomes, while later `ENOENT` checks on objects that could not be created are secondary candidates.
+
+|===
+|Operation |Direct `EOPNOTSUPP` observations
+|`mknod` |330
+|`symlink` |232
+|`mkfifo` |172
+|`bind` |148
+|hard `link` |21
+|Total |903
+|===
+
+A representative sequence is in `pjdfstest-fuse/stdout.log`, test `chmod/00.t`: assertion 5 gets `EOPNOTSUPP` creating a symlink, followed by `ENOENT` for chmod/stat/unlink against that absent name. These are not independent chmod failures. The operation refusals establish missing capability; whether each operation is a required product feature is a product scope decision.
+
+=== Permission, ownership, and mode — P1 semantics; primary count not established
+
+The directory-level observations are `chmod`: 224 failed assertions in 9 of 13 files, and `chown`: 1,259 in 7 of 11. Both totals include missing-object cascades from unsupported object creation and other test setup failures. A direct ownership mismatch in `chown/00.t` expects `uid,gid` `0,0` after a successful root `chown`, but observes the workspace uid for both. Permission checks in `chmod/00.t` also expect `EPERM` for an unprivileged chmod but observe success. Across the full recorded rows, 121 assertions expected an `EPERM`/`EACCES` variant but observed success; these are direct permission-check mismatches, though unsupported object setup can still contribute. The direct permission-denial subset is far smaller than the directory totals; no exact unique primary total for all permission/mode/ownership behavior is claimed.
+
+`chown/00.t`, `chmod/11.t`, and tests in `rename/` should be separated into (a) failures on existing objects where the expected errno or metadata differs and (b) follow-up checks against absent or stale objects. The available analysis does not establish that the full family totals are independent permission or ownership defects.
+
+=== Regular file size and truncate — P0 likely FUSE metadata defect
+
+The baseline has 28 failed assertions in 5 of 15 `ftruncate/` files and 17 in 5 of 15 `truncate/` files. In `ftruncate/00.t`, the upstream script successfully invokes `ftruncate` but subsequent `lstat` reports size `0` instead of `1234567`; later it reports `1234567` instead of the requested shrink size `567`. The same file then records `EAGAIN` on cleanup, `EEXIST` when recreating the file, and a non-empty parent directory. Those latter observations are dependent residue, not separate truncate defects. The test's expected size changes are visible in the untouched upstream `tests/ftruncate/00.t`.
+
+The fsx failure is independently reproduced and analyzed in the next section. The current FUSE `entryNode.Setattr` (`adapters/fuse/filesystem.go:743-747,909-945`) extracts the requested size, calls `state.file.Truncate`, stats the staged file, and returns the staged size in the FUSE attributes. Despite the successful truncate call, a real FUSE `fstat` returned the pre-truncate size. That discrepancy makes a FUSE-visible size response/cache invalidation defect the top implementation investigation. The exact internal boundary (adapter response versus kernel attribute cache) remains to be localized. The baseline `fuse-adapter.log` contains only final-close commit/release errors and has no per-Setattr trace, so it cannot correlate a particular fsx syscall.
+
+=== Rename and hard link — P1/P2, aggregate heavily affected by cascades
+
+There are 2,834 failed assertions across 14 of 25 `rename/` files and 232 across 9 of 18 `link/` files. Another 147 parsed `rename`/`link` command mismatches fall outside the `ENOENT` dependency-candidate and `EOPNOTSUPP` buckets; these are observed outcomes, not necessarily independent root causes. The `link/` family includes the 21 direct `EOPNOTSUPP` hard-link observations. The large `rename/` total is not a count of 2,834 independent rename bugs: `rename/10.t` alone has 2,099 assertions in a nested matrix over regular files, FIFOs, device nodes, sockets, symlinks, and ownership cases. Its first failures include `EEXIST` while creating/renaming test objects, followed by inode assertions against old or unexpected entries. Those outcomes may be downstream of test-state contamination. A clean, isolated targeted rename/link run is needed to determine the independent rename and hard-link semantics; no implementation change was made.
+
+=== Path length, errno, test harness, and bailout — P2 unresolved split
+
+There are 19 assertions whose expected result is `ENAMETOOLONG`. The observed path-length results include `ENOENT`, `EOPNOTSUPP`, `EEXIST`, `EISDIR`, and success. This is a mixed set: some paths refer to missing or unsupported objects, so the count is not a confirmed path-length defect total.
+
+The raw pjdfstest stderr contains 53,248 `cut: invalid decreasing range` diagnostics. Upstream `tests/misc.sh` `namegen_max`/`dirgen_max` obtains `_PC_NAME_MAX` and `_PC_PATH_MAX` through `pjdfstest pathconf`, then constructs names with GNU `cut`. The actual pathconf values returned on the FUSE mount were not captured, so the malformed argument cannot be assigned conclusively to the adapter, kernel, suite environment, or interaction between them. This is a real test-input-generation/environment problem and a strong source of noise in long-name tests; preserve it separately from semantic failures.
+
+The raw stream ends with `Bailout called` after the output for `utimensat/08.t`; the machine analysis marks `utimensat/09.t` incomplete. Upstream `tests/utimensat/09.t` probes whether timestamps beyond 2038 are preserved. Its exact bailout line is not captured, so attribution remains a high-confidence hypothesis rather than a proven line-level match. The FUSE adapter's `Setattr` only reads size and mode; a request carrying neither is routed to `Getattr`. It does not implement the atime/mtime flags on this path. Timestamp tests report 53 failed assertions in 8 of 9 files, including values left near the current mount time. This supports an unimplemented timestamp-semantics classification, separate from the path-generation stderr noise.
+
+== fsx exit 130 — confirmed truncate-size mismatch, likely implementation defect
+
+The unmodified command in `fsx-fuse/result.json` is:
+
+[source,shell]
+----
+/tmp/nando-validation-tools/xfstests/ltp/fsx -N 10000 -l 1048576 /tmp/nando-validation-tools/run/mount/fsx.data
+----
+
+The process exits `130`, with stdout `Seed set to 1` and `no extend on truncate! not posix!`; stderr is empty. In the pinned upstream `ltp/fsx.c`, `check_trunc_hack()` at lines 782–800 truncates to the current `file_size`, extends by 100,000 bytes, calls `fstat`, and exits 130 only when `st_size != offset`. Main calls this check unconditionally at line 3637 in the non-lite run path. The command has no `-L` option; `-l` sets the maximum file length and does not disable the probe. Therefore exit 130 is not an option-triggered skip or expected upstream feature detection: it records a size mismatch after successful `ftruncate` calls.
+
+The same command and output reproduced against a fresh isolated real FUSE mount. `fsx-truncate-repro/observations.json` and `reproduce.py` also record the requested independent sequence: initial prefix write, extension, stat and hole read, shrink/re-extension, prefix/hole reads, boundary write, and fsync. In that run, `ftruncate` returned success but open-handle `fstat` stayed at 11 bytes after extension; reads beyond the stale reported size returned zero bytes. After the later fsync, path stat reported 101 bytes. Thus the failure is confirmed at the FUSE-visible size observation; the probe does not prove staged bytes were lost after commit. The classification is likely a FUSE metadata/Setattr response or cache-invalidation defect, not an fsx option or suite harness issue. The precise component still needs syscall/FUSE protocol tracing to isolate.
+
+== WebDAV Litmus MKCOL 405 — secondary setup result, with a separate DELETE compatibility failure
+
+In the baseline Litmus run, `basic` created `/litmus/` and then left content there. The next four groups (`copymove`, `props`, `locks`, `http`) each began with `DELETE /litmus/` returning `409 Conflict` and a JSON-RPC error stating that a non-empty directory could not be removed. Each then sent `MKCOL /litmus/`, which returned `405 Method Not Allowed` because that URL was still mapped. The raw evidence is in `litmus-webdav/stdout.log` and `debug.log`; for example, `debug.log` shows the `copymove` DELETE at lines 612 onward followed by its MKCOL at line 648.
+
+RFC 4918 section 9.3.1 defines 405 for MKCOL on a mapped URL, so this 405 does not establish that collection creation is unsupported. The immediate cause is the prior failed cleanup. RFC 4918 section 9.6.1 requires DELETE on a collection to act with depth infinity; the observed refusal to remove a non-empty collection is a WebDAV compatibility issue, unless a particular child resource cannot be deleted (the trace does not show such a resource-level cause). See the [RFC 4918 MKCOL status](https://www.rfc-editor.org/rfc/rfc4918.html#section-9.3.1) and [collection DELETE requirement](https://www.rfc-editor.org/rfc/rfc4918.html#section-9.6.1).
+
+A fresh isolated `copymove` run created a new parent collection (`MKCOL` 201) and used `TESTS=copymove`; Litmus passed its begin/setup and then reported 7 pass / 6 fail. The remaining failures include COPY overwrite returning 412 where Litmus expected success, COPY into a missing destination collection succeeding, collection COPY and MOVE returning 501, and a later MKCOL on a path already created during the failing sequence. Those raw logs are in `litmus-isolated-repro/`. This isolates the original four setup 405s from the additional COPY/MOVE compatibility findings; it does not revise the original default-suite result.
+
+== Priority and classification
+
+|===
+|Priority |Classification |Evidence-based disposition
+|P0 investigate |Likely FUSE truncate-size implementation defect |Successful `ftruncate` followed by stale `fstat` reproduced; inspect FUSE Setattr response/cache invalidation boundary.
+|P1 scope decision |Unimplemented special-object and hard-link operations |903 direct `EOPNOTSUPP` records for `mknod`, symlink, FIFO, bind, and hard link.
+|P1 semantics |Unimplemented timestamp semantics; permission/ownership compatibility candidates |Setattr source ignores time fields; raw `utimensat`, `chmod`, and `chown` results mix direct and dependent failures.
+|P1 compatibility |Non-empty WebDAV collection DELETE fails; original MKCOL 405 is secondary |DELETE 409 leaves mapped collection; a fresh Litmus path creates successfully. RFC 4918 requires recursive collection DELETE.
+|P2 unresolved |Rename/link semantics and errno/path behavior |Large source-family totals are contaminated by failed object creation and secondary checks; targeted clean runs are needed.
+|P2 environment/harness |Long-path input generator emits invalid `cut` ranges |53,248 stderr observations; FUSE `pathconf` output is missing, so the upstream/environment contribution cannot yet be separated from adapter behavior.
+|===
+
+No confirmed issue was corrected in this change. The two follow-up runs used isolated temporary repositories and did not alter the baseline raw evidence or upstream suite source. The detailed machine-readable counts and evidence references are in `classification.json`; reproduction conditions are in `fsx-truncate-repro/manifest.json` and `litmus-isolated-repro/manifest.json`.

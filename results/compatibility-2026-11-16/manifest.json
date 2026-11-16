@@ -80,5 +80,13 @@
   "unclassified_failures_are_preserved": true,
   "service_logs": {
     "fuse_adapter": "fuse-adapter.log"
+  },
+  "detailed_analysis": {
+    "report": "analysis.adoc",
+    "classification": "classification.json",
+    "fsx_truncate_reproduction": "fsx-truncate-repro/manifest.json",
+    "litmus_isolated_reproduction": "litmus-isolated-repro/manifest.json",
+    "scope": "analysis-only; no Core/daemon/adapter implementation or upstream suite modified",
+    "cleanup": "cleanup.json#analysis_followup_cleanup"
   }
 }

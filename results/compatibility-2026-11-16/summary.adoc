@@ -15,7 +15,7 @@ Host/package facts are recorded in `environment.json`; exact install/build prove
 |Litmus 0.13-4 |WebDAV |Process exit 0; suite groups failed setup |`basic`: 16/16 passed with 3 warnings. `copymove`, `props`, `locks`, and `http` each stopped at initial MKCOL 405. See raw output and debug logs under `litmus-webdav/`.
 |===
 
-The suite commands and inputs were unmodified. A process exit of zero is not treated as suite success when raw suite output reports failed groups. pjdfstest stderr records repeated `cut` invalid-range diagnostics and symlink creation returning `Operation not supported`; the exact bailout test attribution is not inferred. Compatibility results remain unclassified for later specification/compatibility/defect/environment analysis.
+The suite commands and inputs were unmodified. A process exit of zero is not treated as suite success when raw suite output reports failed groups. pjdfstest stderr records repeated `cut` invalid-range diagnostics and symlink creation returning `Operation not supported`; the exact bailout test attribution is not inferred. The detailed follow-up classification, primary-versus-cascade evidence partition, fsx reproduction, and Litmus setup analysis are in `analysis.adoc` and `classification.json`; the baseline results and raw suite evidence above are unchanged.
 
 == E2E measurements
 
@@ -61,3 +61,7 @@ A separate RPC run overlapped pjdfstest and is retained as `benchmark-rpc-concur
 Best-effort cleanup after the suites removed all 17 remaining entries from the isolated FUSE mount (13 files, 15 directories) with zero errors; the FUSE mount was unmounted. The temporary `user_allow_other` setting used for root access was restored after unmount. FUSE final-close and resource-release errors surfaced in the adapter log captured at unmount, `fuse-adapter.log`. Cleanup details are in `cleanup.json`.
 
 `manifest.json` indexes the machine-readable results, raw logs, preparation versions, environment, verification, and cleanup evidence.
+
+== Detailed analysis follow-up
+
+The post-run evidence classification and independent reproductions are indexed by `manifest.json` under `detailed_analysis`. They are analysis artifacts only; no production or upstream test semantics were modified.
