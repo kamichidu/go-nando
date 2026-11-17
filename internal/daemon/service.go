@@ -32,6 +32,7 @@ type repositoryUseCases interface {
 	PutExpectedEntryIDWithMode(context.Context, app.PutInput, metadata.Entry, *uint32) error
 	Move(context.Context, app.MoveInput) error
 	MoveEntry(context.Context, metadata.EntryID, string) error
+	CopyEntry(context.Context, metadata.EntryID, string, uint64, string, string, bool) (bool, error)
 	Remove(context.Context, string) error
 	RemoveEntry(context.Context, metadata.EntryID) error
 	GC(context.Context) (int, error)
@@ -175,6 +176,16 @@ func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, mapMethodError(err)
 		}
 		return struct{}{}, nil
+	case controlrpc.MethodCopyEntry:
+		var params controlrpc.CopyEntryParams
+		if err := decodeParams(raw, &params); err != nil || params.EntryID == "" || params.SourcePath == "" || params.Revision == 0 || params.Destination == "" {
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: errors.New("entry_id, source_path, revision and destination are required")}
+		}
+		replaced, err := s.app.CopyEntry(ctx, metadata.EntryID(params.EntryID), params.SourcePath, params.Revision, params.Destination, params.Depth, params.Overwrite)
+		if err != nil {
+			return nil, mapMethodError(err)
+		}
+		return controlrpc.CopyEntryResult{Replaced: replaced}, nil
 	case controlrpc.MethodRemove:
 		var params pathParams
 		if err := decodeParams(raw, &params); err != nil {

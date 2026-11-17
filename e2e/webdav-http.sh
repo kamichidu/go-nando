@@ -82,6 +82,22 @@ request 200 "$E2E_WEBDAV_URL/copied"; cmp "$TMP/winner" "$TMP/body"
 request 412 -X COPY -H 'Overwrite: F' -H "Destination: $E2E_WEBDAV_URL/copied" "$E2E_WEBDAV_URL/moved"
 request 409 -X COPY -H "Destination: $E2E_WEBDAV_URL/no-such-parent/copied" "$E2E_WEBDAV_URL/moved"
 request 403 -X COPY -H "Destination: $E2E_WEBDAV_URL/moved" "$E2E_WEBDAV_URL/moved"
+request 201 -X MKCOL "$E2E_WEBDAV_URL/copy-source"
+request 201 -X MKCOL "$E2E_WEBDAV_URL/copy-source/nested"
+request 201 -X PUT --data-binary @"$TMP/payload" "$E2E_WEBDAV_URL/copy-source/nested/leaf"
+request 201 -X COPY -H 'Depth: 0' -H "Destination: $E2E_WEBDAV_URL/copy-shallow" "$E2E_WEBDAV_URL/copy-source"
+request 207 -X PROPFIND -H 'Depth: 1' -H 'Content-Type: application/xml' --data-binary @"$TMP/propfind" "$E2E_WEBDAV_URL/copy-shallow"
+! grep -q 'nested' "$TMP/body"
+request 201 -X COPY -H 'Depth: infinity' -H "Destination: $E2E_WEBDAV_URL/copy-deep" "$E2E_WEBDAV_URL/copy-source"
+request 200 "$E2E_WEBDAV_URL/copy-deep/nested/leaf"; cmp "$TMP/payload" "$TMP/body"
+request 412 -X COPY -H 'Overwrite: F' -H "Destination: $E2E_WEBDAV_URL/copy-deep" "$E2E_WEBDAV_URL/copy-source"
+request 204 -X COPY -H 'Overwrite: T' -H "Destination: $E2E_WEBDAV_URL/copy-deep" "$E2E_WEBDAV_URL/copy-source"
+request 201 -X MKCOL "$E2E_WEBDAV_URL/copy-file-target"
+request 201 -X MKCOL "$E2E_WEBDAV_URL/copy-file-target/nested"
+request 201 -X PUT --data-binary @"$TMP/payload" "$E2E_WEBDAV_URL/copy-file-target/nested/old"
+request 204 -X COPY -H 'Overwrite: T' -H "Destination: $E2E_WEBDAV_URL/copy-file-target" "$E2E_WEBDAV_URL/moved"
+request 200 "$E2E_WEBDAV_URL/copy-file-target"; cmp "$TMP/winner" "$TMP/body"
+request 403 -X COPY -H 'Depth: infinity' -H "Destination: $E2E_WEBDAV_URL/copy-source/nested/loop" "$E2E_WEBDAV_URL/copy-source"
 request 412 -X MOVE -H 'Overwrite: F' -H "Destination: $E2E_WEBDAV_URL/copied" "$E2E_WEBDAV_URL/moved"
 request 400 -X MOVE -H 'Depth: 0' -H "Destination: $E2E_WEBDAV_URL/moved-depth" "$E2E_WEBDAV_URL/moved"
 request 501 -X LOCK "$E2E_WEBDAV_URL/moved"
@@ -108,7 +124,7 @@ record() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" | tee -a "$RESULTS"; }
 record curl-basic PASS 'GET/HEAD/PUT/DELETE/MKCOL and repository bytes verified; empty and nested non-empty collection DELETE removes every descendant and clears namespace'
 record curl-http PASS 'OPTIONS, ETag and supported ETag conditions verified; unsupported DAV/HTTP PUT conditions explicitly rejected'
 record curl-propfind PASS 'allprop/propname omit supportedlock; explicit supportedlock is 404 at Depth 0/1; Depth 1 retains collections'
-record curl-file-copymove PASS 'file COPY create and replacement, Overwrite F rejection, missing parent, identical path, and file MOVE verified; collection COPY and MOVE replacement remain unsupported'
+record curl-copymove PASS 'file and collection COPY, Depth 0/infinity, Overwrite T/F, shared bytes, overlap rejection, and file MOVE verified'
 record curl-locks SKIP 'LOCK/UNLOCK are deliberately unsupported; a separate assertion confirmed 501'
 record curl-dead-properties SKIP 'PROPPATCH/dead properties are deliberately unsupported; a separate assertion confirmed 501'
 for group in basic copymove props locks http; do

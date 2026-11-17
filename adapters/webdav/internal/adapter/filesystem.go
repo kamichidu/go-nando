@@ -461,7 +461,10 @@ func (h *Handler) move(w http.ResponseWriter, r *http.Request) {
 			// displaced entry reachable at its root-level recovery name.
 			var current controlrpc.Entry
 			if statErr := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": dst}, &current); statusFor(statErr) == http.StatusNotFound {
-				_ = h.client.Call(r.Context(), controlrpc.MethodMoveEntry, controlrpc.MoveEntryParams{EntryID: exists.ID, Destination: dst}, nil)
+				if restoreErr := h.client.Call(r.Context(), controlrpc.MethodMoveEntry, controlrpc.MoveEntryParams{EntryID: exists.ID, Destination: dst}, nil); restoreErr != nil {
+					http.Error(w, errors.Join(err, fmt.Errorf("restore displaced destination at %s: %w", backup, restoreErr)).Error(), http.StatusInternalServerError)
+					return
+				}
 			}
 			http.Error(w, err.Error(), preconditionStatus(err))
 			return
@@ -553,12 +556,52 @@ func (h *Handler) copyFile(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "collection COPY source and destination overlap", http.StatusForbidden)
 			return
 		}
-		http.Error(w, "directory COPY is outside Phase A", http.StatusNotImplemented)
+		var target controlrpc.Entry
+		statErr := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": dst}, &target)
+		exists := statErr == nil
+		if exists && !overwrite {
+			http.Error(w, "destination exists", http.StatusPreconditionFailed)
+			return
+		}
+		if statErr != nil && statusFor(statErr) != http.StatusNotFound {
+			http.Error(w, statErr.Error(), statusFor(statErr))
+			return
+		}
+		var parent controlrpc.Entry
+		if err := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": path.Dir(dst)}, &parent); err != nil {
+			if statusFor(err) == http.StatusNotFound {
+				http.Error(w, err.Error(), http.StatusConflict)
+			} else {
+				http.Error(w, err.Error(), statusFor(err))
+			}
+			return
+		}
+		if parent.Kind != "directory" {
+			http.Error(w, "destination parent is not a collection", http.StatusConflict)
+			return
+		}
+		var result controlrpc.CopyEntryResult
+		if err := h.client.Call(r.Context(), controlrpc.MethodCopyEntry, controlrpc.CopyEntryParams{EntryID: info.ID, SourcePath: src, Revision: info.Revision, Destination: dst, Depth: depth, Overwrite: overwrite}, &result); err != nil {
+			http.Error(w, err.Error(), preconditionStatus(err))
+			return
+		}
+		if result.Replaced || exists {
+			w.WriteHeader(http.StatusNoContent)
+		} else {
+			w.WriteHeader(http.StatusCreated)
+		}
 		return
 	}
 	if info.Kind != "file" {
 		http.Error(w, "unsupported COPY source kind", http.StatusForbidden)
 		return
+	}
+	if strings.HasPrefix(src, dst+"/") {
+		var overlap controlrpc.Entry
+		if err := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": dst}, &overlap); err == nil && overlap.Kind == "directory" {
+			http.Error(w, "COPY source and destination overlap", http.StatusForbidden)
+			return
+		}
 	}
 	var target controlrpc.Entry
 	statErr := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": dst}, &target)
@@ -566,10 +609,6 @@ func (h *Handler) copyFile(w http.ResponseWriter, r *http.Request) {
 	if statErr == nil {
 		if !overwrite {
 			http.Error(w, "destination exists", http.StatusPreconditionFailed)
-			return
-		}
-		if target.Kind != "file" {
-			http.Error(w, "COPY cannot replace a collection in Phase A", http.StatusNotImplemented)
 			return
 		}
 	} else if statusFor(statErr) != http.StatusNotFound {
@@ -589,6 +628,14 @@ func (h *Handler) copyFile(w http.ResponseWriter, r *http.Request) {
 	if parentEntry.Kind != "directory" {
 		http.Error(w, "destination parent is not a collection", http.StatusConflict)
 		return
+	}
+	backupPath := ""
+	if destinationExists && target.Kind == "directory" {
+		backupPath = "/.nando-copy-old-" + uuid.NewString()
+		if err := h.client.Call(r.Context(), controlrpc.MethodMoveEntry, controlrpc.MoveEntryParams{EntryID: target.ID, Destination: backupPath}, nil); err != nil {
+			http.Error(w, err.Error(), preconditionStatus(err))
+			return
+		}
 	}
 	var read controlrpc.BeginReadResult
 	if err := h.client.Call(r.Context(), controlrpc.MethodBeginRead, controlrpc.BeginReadParams{Path: src, ResourceSchemes: []string{"file"}}, &read); err != nil {
@@ -633,6 +680,12 @@ func (h *Handler) copyFile(w http.ResponseWriter, r *http.Request) {
 	if err := h.client.Call(r.Context(), controlrpc.MethodCommit, map[string]string{"session_id": write.SessionID}, nil); err != nil {
 		http.Error(w, errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil)).Error(), preconditionStatus(err))
 		return
+	}
+	if backupPath != "" {
+		if err := h.removeEntryTree(context.Background(), backupPath, target); err != nil {
+			http.Error(w, fmt.Sprintf("COPY committed but old destination cleanup failed at %s: %v", backupPath, err), http.StatusInternalServerError)
+			return
+		}
 	}
 	if destinationExists {
 		w.WriteHeader(http.StatusNoContent)

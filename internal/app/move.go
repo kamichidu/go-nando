@@ -21,6 +21,10 @@ func (a *App) MoveEntry(ctx context.Context, id metadata.EntryID, destination st
 	return a.repo.MoveEntry(ctx, id, destination)
 }
 
+func (a *App) CopyEntry(ctx context.Context, id metadata.EntryID, sourcePath string, revision uint64, destination, depth string, overwrite bool) (bool, error) {
+	return a.repo.CopyEntry(ctx, id, sourcePath, revision, destination, depth, overwrite)
+}
+
 // Mkdir creates one explicit directory Entry.
 func (a *App) Mkdir(ctx context.Context, repositoryPath string, mode uint32) error {
 	return a.repo.Mkdir(ctx, repositoryPath, mode)

@@ -33,6 +33,7 @@ const (
 	MethodMkdir           = "repository.mkdir"
 	MethodMove            = "repository.move"
 	MethodMoveEntry       = "repository.moveEntry"
+	MethodCopyEntry       = "repository.copyEntry"
 	MethodRemove          = "repository.remove"
 	MethodRemoveEntry     = "repository.removeEntry"
 	MethodGC              = "repository.gc"
@@ -93,6 +94,19 @@ type ChmodEntryParams struct {
 type MoveEntryParams struct {
 	EntryID     string `json:"entry_id"`
 	Destination string `json:"destination"`
+}
+
+type CopyEntryParams struct {
+	EntryID     string `json:"entry_id"`
+	SourcePath  string `json:"source_path"`
+	Revision    uint64 `json:"revision"`
+	Destination string `json:"destination"`
+	Depth       string `json:"depth"`
+	Overwrite   bool   `json:"overwrite"`
+}
+
+type CopyEntryResult struct {
+	Replaced bool `json:"replaced"`
 }
 
 type RemoveEntryParams struct {

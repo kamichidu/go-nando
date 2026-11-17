@@ -27,7 +27,7 @@ The following method surface is implemented by the adapter. This is an explicit 
 | `MKCOL` | Creates a collection; a request body is unsupported. |
 | `DELETE` | Removes a resource through the repository namespace operation. The root cannot be deleted. |
 | `MOVE` | Moves a resource to an absent destination. Replacement is unsupported; an absolute destination with a different host is rejected. |
-| `COPY` | Copies a file to an absent destination. Directory COPY, destination replacement, and an absolute destination with a different host are unsupported. |
+| `COPY` | Copies files and collections. Collection COPY supports `Depth: 0` and `Depth: infinity`; `Overwrite: T` replaces an existing destination and `Overwrite: F` rejects it. An absolute destination with a different host is unsupported. |
 
 PUT supports `If-Match` and `If-None-Match` against the file state captured when the write begins. `If-Unmodified-Since` is also supported. The `If`, `If-Modified-Since`, and `If-Range` headers are rejected for PUT. A precondition conflict does not commit the request body.
 

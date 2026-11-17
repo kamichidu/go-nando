@@ -153,6 +153,9 @@ func (f *fakeRepositoryUseCases) Move(context.Context, app.MoveInput) error { re
 func (f *fakeRepositoryUseCases) MoveEntry(context.Context, metadata.EntryID, string) error {
 	return nil
 }
+func (f *fakeRepositoryUseCases) CopyEntry(context.Context, metadata.EntryID, string, uint64, string, string, bool) (bool, error) {
+	return false, nil
+}
 func (f *fakeRepositoryUseCases) Remove(context.Context, string) error { return nil }
 func (f *fakeRepositoryUseCases) RemoveEntry(_ context.Context, id metadata.EntryID) error {
 	f.mu.Lock()
