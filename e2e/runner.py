@@ -849,12 +849,18 @@ def g2_ack_crash() -> None:
         proxy_control("arm", method="POST")
         payload_path = ARTIFACTS / "ack-boundary.bin"
         payload_path.write_bytes(data)
+        # The transfer obligation becomes scheduler-eligible atomically with
+        # Put's metadata commit. Check for a pre-existing object before Put;
+        # after commit the scheduler may upload before the CLI returns.
+        content_id = "sha256-" + hashlib.sha256(data).hexdigest()
+        if gcs_object(content_id) is not None:
+            raise GateFailure("fault-injection object unexpectedly exists before Put eligibility")
         nando("put", str(payload_path), "/ack-boundary")
-        content_id = stat_hash("/ack-boundary")
+        committed_id = stat_hash("/ack-boundary")
+        if committed_id != content_id:
+            raise GateFailure(f"committed content ID {committed_id} differs from payload ID {content_id}")
         if cat_bytes("/ack-boundary") != data:
             raise GateFailure("local content was not committed before remote delivery")
-        if gcs_object(content_id) is not None:
-            raise GateFailure("fault-injection object unexpectedly exists before scheduler eligibility")
         wait_until("upstream object committed behind held upload response", lambda: gcs_object(content_id) is not None, timeout=30)
         proxy = wait_proxy_committed()
         if proxy["held_commits"] != 1:
