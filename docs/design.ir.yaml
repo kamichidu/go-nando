@@ -1079,7 +1079,7 @@ nodes:
     statement: Phase A delivers one WSL Linux daemon for single-user local-host operation with SQLite Metadata, Local durable commits, immediate single-daemon visibility, standard per-user Unix-domain-socket JSON-RPC 2.0 (private parent directory mode 0700 and socket mode 0600), daemon-owned Resource sessions, and local file:// Resource URIs. TCP support remains available only with TLS and bearer authentication but its bind/certificate/token operations are outside standard Phase A operation. CLI, FUSE, and WebDAV are client processes; FUSE and WebDAV are separate Go modules and executables. The phase includes read-write FUSE/WebDAV clients and idle-scheduled remote delivery using the GCS adapter with ADC or the S3-compatible adapter with optional runtime `[remote.s3]` endpoint and region plus AWS SDK v2 Default Credential Chain, but their complete implementations may be delivered incrementally. WebDAV is plain HTTP restricted to loopback and serves the same local OS user; external publication, client authentication, TLS termination, and multi-user authorization are deferred. WebDAV PUT supports If-Match and If-None-Match against the Begin-time Repository CAS snapshot; unsupported conditional headers are explicitly rejected. It does not implement Firestore, multiple daemons, globally published heads, remote Resource transfer, cross-platform runtime support, or Cloud Run deployment.
     attributes:
       roadmap_phase: A
-      phase_status: planned
+      phase_status: complete
       includes: [single-daemon, single-user-local-host, SQLite, Local-immediate-visibility, standard-JSON-RPC-UDS, daemon-owned-resource-sessions, file-Resource-URIs, separate-FUSE-module-and-process, separate-WebDAV-module-and-process, loopback-HTTP-WebDAV, Begin-CAS-conditional-PUT, idle-GCS-sync, ADC]
       excludes: [external-client-exposure, multi-user-authorization, WebDAV-client-authentication, WebDAV-TLS-termination, standard-TCP-operations, Firestore, multiple-daemons, Published-Head, remote-Resource-transfer, cross-platform, Cloud-Run]
       commit_boundary: [durable-Local-Object, atomic-Metadata-and-delivery-obligation]
@@ -1090,6 +1090,14 @@ nodes:
         - WebDAV If-Match and If-None-Match are evaluated against the Begin-time CAS snapshot and Commit conflict returns a precondition failure
         - unsupported WebDAV conditional headers are explicitly rejected rather than silently ignored
         - TCP listener remains unavailable unless TLS and bearer authentication are configured; TCP credential lifecycle is not a standard Phase A acceptance item
+      completion_basis:
+        decision: substantially-complete-with-nonblocking-follow-ups
+        evidence: docs/phase-a-completion-review.adoc
+        reviewed_branch: bench/fuse-webdav-baseline
+        reviewed_commit: 61797ee9bbc29ea5ffc61c9c537490898f8e40dd
+        evidence_scope: implemented Phase A contracts and recorded host/emulator verification; not full WebDAV interoperability or production GCS acceptance
+        non_blocking_open_items: [OPEN-GCS-SCHEDULER-DEFAULTS, OPEN-GCS-GENERATION-AND-BUCKET-POLICY, OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS, OPEN-READ-REVISION-CHANGE]
+        verification_limits: [Litmus compatibility groups with failures or unsupported operations, production GCS/ADC/IAM, experimental system-scope service runtime]
     provenance:
       origin: human-authored
   - id: DES-PHASE-B-PUBLISHED-HEAD
