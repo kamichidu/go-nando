@@ -1,0 +1,9 @@
+{
+  "target": "real host FUSE mount",
+  "mount_options": [],
+  "allow_other": false,
+  "iterations": 10000,
+  "file_size": "1MiB",
+  "uid": 736972916,
+  "gid": 736972916
+}

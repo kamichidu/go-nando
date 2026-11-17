@@ -1,0 +1,523 @@
+{
+  "schema_version": 1,
+  "suite": "litmus",
+  "tool": {
+    "name": "litmus",
+    "version": "0.13-4",
+    "source_revision": "Debian source package litmus 0.13-4",
+    "installation_notes": "Preinstalled Ubuntu/Debian package litmus 0.13-4; prepared separately, no runtime installation or update.",
+    "manifest": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline/results/pr14-litmus-g7-2026-11-17/tooling-litmus.json",
+    "manifest_sha256": "ae03fcab98081ae5409a17029c323d6c8261060cb14d70be5c7c9ecae84255dc",
+    "preconditions": {
+      "target": "real loopback WebDAV HTTP endpoint",
+      "auth": "none"
+    },
+    "executables": [
+      {
+        "name": "litmus",
+        "path": "/usr/bin/litmus",
+        "sha256": "c48fd902ddd4464605f2f5bda2f54ee8d634431886c7ed16c4681c5d3a0f2704"
+      },
+      {
+        "name": "dpkg-query",
+        "path": "/usr/bin/dpkg-query",
+        "sha256": "11b7055ec6ec739838f171182ced296ca75ec2da2d32e4331e9926021d6f8d08"
+      }
+    ],
+    "source_trees": [],
+    "version_check": {
+      "command": [
+        "dpkg-query",
+        "-W",
+        "-f=${Version}",
+        "litmus"
+      ],
+      "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline",
+      "exit_code": 0,
+      "stdout": "0.13-4",
+      "stdout_sha256": "50414a8fdc9ed0c1fc8f044289b73188edc757f66ce398a0d8ff9ab818d160bc",
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "target": "webdav",
+  "command": [
+    "litmus",
+    "--keep-going",
+    "http://127.0.0.1:40277/"
+  ],
+  "command_display": "litmus --keep-going http://127.0.0.1:40277/",
+  "started_at": "2026-11-17T23:51:21.536652+00:00",
+  "finished_at": "2026-11-17T23:51:25.789233+00:00",
+  "duration_seconds": 4.252549575059675,
+  "timeout_seconds": 600.0,
+  "status": "completed",
+  "failure_kind": null,
+  "failure_classification": "unclassified",
+  "preflight": {
+    "status": "passed",
+    "checks": {
+      "tooling_manifest_sha256": "ae03fcab98081ae5409a17029c323d6c8261060cb14d70be5c7c9ecae84255dc",
+      "tooling_manifest": "passed",
+      "conditions": "passed",
+      "executables": "passed",
+      "source_trees": [],
+      "version_check": "passed"
+    },
+    "version_check": {
+      "command": [
+        "dpkg-query",
+        "-W",
+        "-f=${Version}",
+        "litmus"
+      ],
+      "exit_code": 0,
+      "stdout": "0.13-4",
+      "stdout_sha256": "50414a8fdc9ed0c1fc8f044289b73188edc757f66ce398a0d8ff9ab818d160bc",
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "launch_error": null,
+  "timeout_error": null,
+  "exit_code": 0,
+  "conditions": {
+    "target": "real nando WebDAV loopback HTTP",
+    "url": "http://127.0.0.1:40277/",
+    "auth": "none",
+    "workload": "unmodified full Litmus default suite with --keep-going",
+    "repository": "/tmp/go-nando-e2e.1Lx9jz/state/litmus/repository",
+    "mount": "native daemon repository; no FUSE mount in WebDAV adapter path",
+    "isolation": "fresh Local repository; no concurrent workload"
+  },
+  "conditions_sha256": "6b618c7509b1ab9df5d43eda7bac4d3ad0852b5a35ed4183e93965eb08ed502f",
+  "tooling_manifest_sha256": "ae03fcab98081ae5409a17029c323d6c8261060cb14d70be5c7c9ecae84255dc",
+  "repository_sha": "cb5a88787505d6f68da766d12f4ab0bdccbfc63c",
+  "environment": {
+    "platform": "Linux-6.8.0-1070-gcp-x86_64-with-glibc2.35",
+    "python": "3.11.9",
+    "machine": "x86_64",
+    "kernel": "6.8.0-1070-gcp",
+    "cwd": "/tmp/go-nando-e2e.1Lx9jz/litmus-work"
+  },
+  "logs": {
+    "stdout": {
+      "path": "stdout.log",
+      "sha256": "e0b2db7f56e1f1e10ef41b3af43473a685adeb0e212699e775ee12b243e2ccd9"
+    },
+    "stderr": {
+      "path": "stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "preflight": {
+      "path": "preflight.log",
+      "sha256": "c1f1f57321bdb75d7385a3bf3c8af7c47da3d4c8592140cdd3727e4a3144c594"
+    },
+    "tooling_manifest_input": {
+      "path": "tooling-manifest.input.json",
+      "sha256": "ae03fcab98081ae5409a17029c323d6c8261060cb14d70be5c7c9ecae84255dc"
+    },
+    "conditions_input": {
+      "path": "conditions.input.json",
+      "sha256": "6b618c7509b1ab9df5d43eda7bac4d3ad0852b5a35ed4183e93965eb08ed502f"
+    },
+    "version_check_stdout": {
+      "path": "version-check.stdout.log",
+      "sha256": "50414a8fdc9ed0c1fc8f044289b73188edc757f66ce398a0d8ff9ab818d160bc"
+    },
+    "version_check_stderr": {
+      "path": "version-check.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "suite_analysis": {
+    "groups": [
+      {
+        "name": "basic",
+        "tests_run": 16,
+        "passed": 16,
+        "failed": 0,
+        "status": "PASS"
+      },
+      {
+        "name": "copymove",
+        "tests_run": 13,
+        "passed": 13,
+        "failed": 0,
+        "status": "PASS"
+      },
+      {
+        "name": "props",
+        "tests_run": 30,
+        "passed": 30,
+        "failed": 0,
+        "status": "PASS"
+      },
+      {
+        "name": "locks",
+        "tests_run": 3,
+        "passed": 3,
+        "failed": 0,
+        "status": "PASS"
+      },
+      {
+        "name": "http",
+        "tests_run": 4,
+        "passed": 4,
+        "failed": 0,
+        "status": "PASS"
+      }
+    ],
+    "groups_seen": 5,
+    "failed_groups": 0,
+    "missing_groups": [],
+    "causes": [
+      {
+        "classification": "PASS",
+        "scope": "collection DELETE",
+        "detail": "basic completed, including Litmus collection cleanup; G5 separately verifies descendant GET/PROPFIND returns 404 and the namespace can be reused."
+      },
+      {
+        "classification": "UNSUPPORTED",
+        "scope": "COPY/MOVE and properties",
+        "detail": "Cases explicitly rejected with HTTP 501 are recorded UNSUPPORTED; they remain outside this DELETE change."
+      },
+      {
+        "classification": "RFC4918_REVIEW",
+        "scope": "COPY/MOVE",
+        "detail": "Classify against RFC 4918 and docs/webdav-phase-a.adoc. Phase A supports file COPY with overwrite; collection COPY and MOVE replacement remain intentionally unsupported due missing atomic repository operations."
+      }
+    ],
+    "cases": [
+      {
+        "case": "init",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "begin",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "put_get",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "put_get_utf8_segment",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "mkcol_over_plain",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "delete",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "delete_null",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "delete_fragment",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "mkcol",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "mkcol_again",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "delete_coll",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "mkcol_with_body",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "finish",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "init",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "begin",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "copy_init",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "copy_simple",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "copy_overwrite",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "copy_nodestcoll",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "copy_cleanup",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "copy_coll",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "copy_shallow",
+        "status": "PASS",
+        "detail": "",
+        "relation": "DEPENDENT"
+      },
+      {
+        "case": "move",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "move_coll",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "move_cleanup",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "finish",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "init",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "begin",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propfind_invalid",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propfind_invalid2",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propfind_d0",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propinit",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propset",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propget",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propextended",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propmove",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propget",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propdeletes",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propget",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propreplace",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propget",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propnullns",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propget",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "prophighunicode",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propget",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propremoveset",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propget",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propsetremove",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propget",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propvalnspace",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propwformed",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propinit",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propmanyns",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propget",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "propcleanup",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "finish",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "init",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "begin",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "precond",
+        "status": "SKIP",
+        "detail": "locking tests skipped,"
+      },
+      {
+        "case": "init",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "begin",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "expect100",
+        "status": "PASS",
+        "detail": ""
+      },
+      {
+        "case": "finish",
+        "status": "PASS",
+        "detail": ""
+      }
+    ]
+  },
+  "derived_suite_status": "PASS",
+  "auxiliary_logs": {
+    "debug.log": {
+      "path": "debug.log",
+      "sha256": "9e8c9738f87a7d8f1773b96693d1bf563f411d92220c4f12ace900229d8bd946",
+      "bytes": 186979
+    },
+    "child.log": {
+      "path": "child.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  }
+}

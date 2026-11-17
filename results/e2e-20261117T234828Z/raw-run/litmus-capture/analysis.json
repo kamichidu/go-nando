@@ -1,0 +1,377 @@
+{
+  "groups": [
+    {
+      "name": "basic",
+      "tests_run": 16,
+      "passed": 16,
+      "failed": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "copymove",
+      "tests_run": 13,
+      "passed": 13,
+      "failed": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "props",
+      "tests_run": 30,
+      "passed": 30,
+      "failed": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "locks",
+      "tests_run": 3,
+      "passed": 3,
+      "failed": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "http",
+      "tests_run": 4,
+      "passed": 4,
+      "failed": 0,
+      "status": "PASS"
+    }
+  ],
+  "groups_seen": 5,
+  "failed_groups": 0,
+  "missing_groups": [],
+  "causes": [
+    {
+      "classification": "PASS",
+      "scope": "collection DELETE",
+      "detail": "basic completed, including Litmus collection cleanup; G5 separately verifies descendant GET/PROPFIND returns 404 and the namespace can be reused."
+    },
+    {
+      "classification": "UNSUPPORTED",
+      "scope": "COPY/MOVE and properties",
+      "detail": "Cases explicitly rejected with HTTP 501 are recorded UNSUPPORTED; they remain outside this DELETE change."
+    },
+    {
+      "classification": "RFC4918_REVIEW",
+      "scope": "COPY/MOVE",
+      "detail": "Classify against RFC 4918 and docs/webdav-phase-a.adoc. Phase A supports file COPY with overwrite; collection COPY and MOVE replacement remain intentionally unsupported due missing atomic repository operations."
+    }
+  ],
+  "cases": [
+    {
+      "case": "init",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "begin",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "put_get",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "put_get_utf8_segment",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "mkcol_over_plain",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "delete",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "delete_null",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "delete_fragment",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "mkcol",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "mkcol_again",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "delete_coll",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "mkcol_with_body",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "finish",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "init",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "begin",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "copy_init",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "copy_simple",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "copy_overwrite",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "copy_nodestcoll",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "copy_cleanup",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "copy_coll",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "copy_shallow",
+      "status": "PASS",
+      "detail": "",
+      "relation": "DEPENDENT"
+    },
+    {
+      "case": "move",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "move_coll",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "move_cleanup",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "finish",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "init",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "begin",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propfind_invalid",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propfind_invalid2",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propfind_d0",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propinit",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propset",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propextended",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propmove",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propdeletes",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propreplace",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propnullns",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "prophighunicode",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propremoveset",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propsetremove",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propvalnspace",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propwformed",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propinit",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propmanyns",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propget",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "propcleanup",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "finish",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "init",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "begin",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "precond",
+      "status": "SKIP",
+      "detail": "locking tests skipped,"
+    },
+    {
+      "case": "init",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "begin",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "expect100",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "case": "finish",
+      "status": "PASS",
+      "detail": ""
+    }
+  ]
+}

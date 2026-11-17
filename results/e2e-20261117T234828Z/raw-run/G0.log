@@ -1,0 +1,86 @@
+COMMAND G0: bash -c $'\n  set -Eeuo pipefail\n  compose=(docker compose --project-directory "$1" -f "$1/e2e/compose.yaml" -p "$2")\n  "${compose[@]}" up -d fake-gcs\n  exec bash "$1/e2e/static.sh" "$1" "$3"\n' _ /home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline go-nando-e2e-20261117234829-317238 /home/sekito_centsys_jp/workspaces/design-ir 
+ Network go-nando-e2e-20261117234829-317238_default  Creating
+ Network go-nando-e2e-20261117234829-317238_default  Created
+ Volume "go-nando-e2e-20261117234829-317238_fake-gcs-data"  Creating
+ Volume "go-nando-e2e-20261117234829-317238_fake-gcs-data"  Created
+ Container go-nando-e2e-20261117234829-317238-fake-gcs-1  Creating
+ Container go-nando-e2e-20261117234829-317238-fake-gcs-1  Created
+ Container go-nando-e2e-20261117234829-317238-fake-gcs-1  Starting
+ Container go-nando-e2e-20261117234829-317238-fake-gcs-1  Started
+$ test "$(go env GOWORK)" = "$ROOT/go.work"
+$ go test ./...
+?   	github.com/kamichidu/go-nando/cmd/nando	[no test files]
+ok  	github.com/kamichidu/go-nando/controlrpc	(cached)
+ok  	github.com/kamichidu/go-nando/internal/app	(cached)
+ok  	github.com/kamichidu/go-nando/internal/cli	0.048s
+ok  	github.com/kamichidu/go-nando/internal/cli/commands	(cached)
+ok  	github.com/kamichidu/go-nando/internal/config	(cached)
+ok  	github.com/kamichidu/go-nando/internal/content	(cached)
+?   	github.com/kamichidu/go-nando/internal/coordinator	[no test files]
+ok  	github.com/kamichidu/go-nando/internal/coordinator/sqlite	(cached)
+ok  	github.com/kamichidu/go-nando/internal/daemon	(cached)
+?   	github.com/kamichidu/go-nando/internal/gc	[no test files]
+ok  	github.com/kamichidu/go-nando/internal/metadata	(cached)
+ok  	github.com/kamichidu/go-nando/internal/metadata/sqlite	(cached)
+?   	github.com/kamichidu/go-nando/internal/objectstore	[no test files]
+ok  	github.com/kamichidu/go-nando/internal/objectstore/gcs	(cached)
+ok  	github.com/kamichidu/go-nando/internal/objectstore/local	(cached)
+ok  	github.com/kamichidu/go-nando/internal/objectstore/s3	(cached)
+ok  	github.com/kamichidu/go-nando/internal/paths	(cached)
+ok  	github.com/kamichidu/go-nando/internal/repository	(cached)
+ok  	github.com/kamichidu/go-nando/internal/repository/format	(cached)
+?   	github.com/kamichidu/go-nando/internal/sync	[no test files]
+ok  	github.com/kamichidu/go-nando/runtimeconfig	(cached)
+$ go test -race ./...
+?   	github.com/kamichidu/go-nando/cmd/nando	[no test files]
+ok  	github.com/kamichidu/go-nando/controlrpc	(cached)
+ok  	github.com/kamichidu/go-nando/internal/app	(cached)
+ok  	github.com/kamichidu/go-nando/internal/cli	1.114s
+ok  	github.com/kamichidu/go-nando/internal/cli/commands	(cached)
+ok  	github.com/kamichidu/go-nando/internal/config	(cached)
+ok  	github.com/kamichidu/go-nando/internal/content	(cached)
+?   	github.com/kamichidu/go-nando/internal/coordinator	[no test files]
+ok  	github.com/kamichidu/go-nando/internal/coordinator/sqlite	(cached)
+ok  	github.com/kamichidu/go-nando/internal/daemon	(cached)
+?   	github.com/kamichidu/go-nando/internal/gc	[no test files]
+ok  	github.com/kamichidu/go-nando/internal/metadata	(cached)
+ok  	github.com/kamichidu/go-nando/internal/metadata/sqlite	(cached)
+?   	github.com/kamichidu/go-nando/internal/objectstore	[no test files]
+ok  	github.com/kamichidu/go-nando/internal/objectstore/gcs	(cached)
+ok  	github.com/kamichidu/go-nando/internal/objectstore/local	(cached)
+ok  	github.com/kamichidu/go-nando/internal/objectstore/s3	(cached)
+ok  	github.com/kamichidu/go-nando/internal/paths	(cached)
+ok  	github.com/kamichidu/go-nando/internal/repository	(cached)
+ok  	github.com/kamichidu/go-nando/internal/repository/format	(cached)
+?   	github.com/kamichidu/go-nando/internal/sync	[no test files]
+ok  	github.com/kamichidu/go-nando/runtimeconfig	(cached)
+$ golangci-lint config verify
+$ golangci-lint run ./...
+0 issues.
+$ go build -o E2E_NANDO_BIN ./cmd/nando
+$ GOBIN=workspace-install go install ./...
+$ GOBIN=workspace-install go install ./cmd/nando
+$ GOBIN=workspace-install go install ./adapters/fuse/cmd/nando-fuse
+$ GOBIN=workspace-install go install ./adapters/webdav/cmd/nando-webdav
+$ go test ./... (fuse module)
+ok  	github.com/kamichidu/go-nando/adapters/fuse	(cached)
+ok  	github.com/kamichidu/go-nando/adapters/fuse/cmd/nando-fuse	(cached)
+$ go test -race ./... (fuse module)
+ok  	github.com/kamichidu/go-nando/adapters/fuse	(cached)
+ok  	github.com/kamichidu/go-nando/adapters/fuse/cmd/nando-fuse	(cached)
+$ go test ./... (WebDAV module)
+ok  	github.com/kamichidu/go-nando/adapters/webdav/cmd/nando-webdav	(cached)
+ok  	github.com/kamichidu/go-nando/adapters/webdav/internal/adapter	(cached)
+$ go test -race ./... (WebDAV module)
+ok  	github.com/kamichidu/go-nando/adapters/webdav/cmd/nando-webdav	(cached)
+ok  	github.com/kamichidu/go-nando/adapters/webdav/internal/adapter	(cached)
+$ golangci-lint config verify (fuse module)
+$ golangci-lint run ./... (fuse module)
+0 issues.
+$ go build -o E2E_FUSE_BIN ./cmd/nando-fuse (fuse module)
+$ golangci-lint config verify (WebDAV module)
+$ golangci-lint run ./... (WebDAV module)
+0 issues.
+$ go build -o E2E_WEBDAV_BIN ./cmd/nando-webdav (WebDAV module)
+$ tools/validate-design-ir.sh (pinned checkout)
+VALID

@@ -1,0 +1,15 @@
+COMMAND G5: bash -c $'\n  set -Eeuo pipefail\n  socket="$4/run/webdav.sock"\n  port=$(python3 -c "import socket; s=socket.socket(); s.bind((\\"127.0.0.1\\",0)); print(s.getsockname()[1]); s.close()")\n  address="127.0.0.1:$port"\n  setsid "$1" --repository "$2" --daemon-listen "unix://$socket" daemon >"$4/daemon-webdav.log" 2>&1 & daemon=$!\n  webdav=""\n  cleanup_webdav() {\n    if [[ -n "$webdav" ]]; then kill -TERM "$webdav" 2>/dev/null || true; wait "$webdav" 2>/dev/null || true; fi\n    kill -TERM "$daemon" 2>/dev/null || true; wait "$daemon" 2>/dev/null || true\n  }\n  trap cleanup_webdav EXIT\n  export E2E_SOCKET="$socket"\n  python3 "$5/e2e/runner.py" wait-daemon\n  setsid "$6" --daemon-listen "unix://$socket" --webdav-listen "$address" >"$4/webdav.log" 2>&1 & webdav=$!\n  export E2E_WEBDAV_URL="http://$address"\n  deadline=$((SECONDS+15))\n  until curl --silent --show-error --max-time 1 -X OPTIONS "$E2E_WEBDAV_URL/" >/dev/null 2>&1; do\n    if ((SECONDS >= deadline)); then cat "$4/webdav.log" >&2; exit 1; fi\n    sleep 0.1\n  done\n  "$5/e2e/webdav-http.sh"\n' _ /tmp/go-nando-e2e.1Lx9jz/bin/nando /tmp/go-nando-e2e.1Lx9jz/state/local/repository /tmp/go-nando-e2e.1Lx9jz/run/nando.sock /tmp/go-nando-e2e.1Lx9jz /home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline /tmp/go-nando-e2e.1Lx9jz/bin/nando-webdav 
+PASS daemon readiness: ping succeeded
+PASS WebDAV curl CRUD, metadata, move/copy, ETag preconditions, unsupported contract boundaries
+curl-basic	PASS	GET/HEAD/PUT/DELETE/MKCOL and repository bytes verified; empty and nested non-empty collection DELETE removes every descendant and clears namespace
+curl-http	PASS	OPTIONS, ETag and supported ETag conditions verified; unsupported DAV/HTTP PUT conditions explicitly rejected
+curl-propfind	PASS	allprop/propname omit supportedlock; explicit supportedlock is 404 at Depth 0/1; Depth 1 retains collections
+curl-copymove	PASS	file and collection COPY, Depth 0/infinity, Overwrite T/F, shared bytes, overlap rejection, and file MOVE verified
+curl-locks	SKIP	LOCK/UNLOCK are deliberately unsupported; a separate assertion confirmed 501
+curl-dead-properties	PASS	PROPPATCH is atomic; PROPFIND reads opaque dead properties; MOVE retains and COPY clones properties; protected live properties report 403/424
+litmus-basic	SKIP	Litmus available but full compliance run is outside the configured supported method surface
+litmus-copymove	SKIP	Litmus available but full compliance run is outside the configured supported method surface
+litmus-props	SKIP	Litmus available but full compliance run is outside the configured supported method surface
+litmus-locks	SKIP	Litmus available but full compliance run is outside the configured supported method surface
+litmus-http	SKIP	Litmus available but full compliance run is outside the configured supported method surface
+cadaver	SKIP	cadaver executable is not installed on this host

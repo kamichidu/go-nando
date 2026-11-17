@@ -1,0 +1,15 @@
+READY 127.0.0.1:4444 -> 127.0.0.1:4443
+"GET /__e2e/status HTTP/1.1" 200 -
+"POST /__e2e/arm HTTP/1.1" 200 -
+"GET /storage/v1/b/nando-e2e/o/objects%2Fsha256-45dd248366635579eeaa5b911812db6842b87af326b82257d20de74b67782b17?alt=json&prettyPrint=false&projection=full HTTP/1.1" 404 -
+"POST /upload/storage/v1/b/nando-e2e/o?alt=json&ifGenerationMatch=0&name=objects%2Fsha256-45dd248366635579eeaa5b911812db6842b87af326b82257d20de74b67782b17&prettyPrint=false&projection=full&uploadType=resumable HTTP/1.1" 200 -
+"POST /upload/storage/v1/b/nando-e2e/o?uploadType=resumable&name=objects%2Fsha256-45dd248366635579eeaa5b911812db6842b87af326b82257d20de74b67782b17&upload_id=1570bbff0b52212376629389da1e3b1b HTTP/1.1" 200 -
+"POST /upload/storage/v1/b/nando-e2e/o?uploadType=resumable&name=objects%2Fsha256-45dd248366635579eeaa5b911812db6842b87af326b82257d20de74b67782b17&upload_id=1570bbff0b52212376629389da1e3b1b HTTP/1.1" 200 -
+"GET /__e2e/status HTTP/1.1" 200 -
+"GET /__e2e/status HTTP/1.1" 200 -
+"POST /__e2e/release HTTP/1.1" 200 -
+"POST /upload/storage/v1/b/nando-e2e/o?uploadType=resumable&name=objects%2Fsha256-45dd248366635579eeaa5b911812db6842b87af326b82257d20de74b67782b17&upload_id=1570bbff0b52212376629389da1e3b1b HTTP/1.1" 200 -
+"GET /storage/v1/b/nando-e2e/o/objects%2Fsha256-45dd248366635579eeaa5b911812db6842b87af326b82257d20de74b67782b17?alt=json&prettyPrint=false&projection=full HTTP/1.1" 200 -
+"GET /__e2e/status HTTP/1.1" 200 -
+"GET /__e2e/status HTTP/1.1" 200 -
+"GET /__e2e/status HTTP/1.1" 200 -

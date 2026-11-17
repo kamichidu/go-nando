@@ -1,0 +1,12 @@
+COMMAND G3: bash -c $'\n  set -Eeuo pipefail\n  rm -rf "$2"\n  "$1" --repository "$2" init --delivery-mode local\n  setsid "$1" --repository "$2" --daemon-listen "unix://$3" daemon >"$4/daemon-g3.log" 2>&1 & daemon=$!\n  trap "kill -TERM \\$daemon 2>/dev/null || true; wait \\$daemon 2>/dev/null || true" EXIT\n  export E2E_REPOSITORY="$2" E2E_SOCKET="$3"\n  python3 "$5/e2e/runner.py" wait-daemon\n  python3 "$5/e2e/runner.py" g3-commit\n  kill -KILL "$daemon"; wait "$daemon" || true\n  rm -f "$3"\n  setsid "$1" --repository "$2" --daemon-listen "unix://$3" daemon >>"$4/daemon-g3.log" 2>&1 & daemon=$!\n  python3 "$5/e2e/runner.py" wait-daemon\n  python3 "$5/e2e/runner.py" g3-verify\n  python3 "$5/e2e/runner.py" g3-start-uncommitted\n  python3 "$5/e2e/runner.py" g3-crash-fuse\n  kill -KILL "$daemon"; wait "$daemon" || true\n  rm -f "$3"\n  setsid "$1" --repository "$2" --daemon-listen "unix://$3" daemon >>"$4/daemon-g3.log" 2>&1 & daemon=$!\n  python3 "$5/e2e/runner.py" wait-daemon\n  python3 "$5/e2e/runner.py" g3-verify-recovery\n' _ /tmp/go-nando-e2e.1Lx9jz/bin/nando /tmp/go-nando-e2e.1Lx9jz/state/local/repository /tmp/go-nando-e2e.1Lx9jz/run/nando.sock /tmp/go-nando-e2e.1Lx9jz /home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline 
+Initialized empty nando repository in /tmp/go-nando-e2e.1Lx9jz/state/local/repository
+PASS daemon readiness: ping succeeded
+PASS G3-01: FUSE fsync returned success; daemon cat confirms committed bytes
+_: line 10: 325076 Killed                  setsid "$1" --repository "$2" --daemon-listen "unix://$3" daemon > "$4/daemon-g3.log" 2>&1
+PASS daemon readiness: ping succeeded
+PASS G3-02: daemon restart and a fresh real mount both expose fsync-committed content
+PASS G3-03: FUSE pid=325322; open writer pid=325333; no Fsync issued
+PASS G3-04: FUSE process died; mountinfo no longer contains crash mount; holder exited
+_: line 17: 325181 Killed                  setsid "$1" --repository "$2" --daemon-listen "unix://$3" daemon >> "$4/daemon-g3.log" 2>&1
+PASS daemon readiness: ping succeeded
+PASS G3-05: manifest CAS and canonical observed Object ID matched SQLite; retry committed exact bytes and removed b75fe74f-eb6a-4a97-9130-f6cb1e458805; true stale revision conflict retained original Recovery bytes/expectation and preserved winner; SHA-256=7558a8b7302e0a5792c14b0a1245ab50bcba4db8cc3e8bc7cbe54e641daa3234

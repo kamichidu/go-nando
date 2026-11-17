@@ -1,0 +1,14 @@
+branch=bench/fuse-webdav-baseline
+head=cb5a88787505d6f68da766d12f4ab0bdccbfc63c
+started_utc=20261117T234828Z
+profile=canonical --stress (G0 through G7, including optional G4)
+host=Linux sekito-centsys-jp 6.8.0-1070-gcp #78~22.04.1-Ubuntu SMP Thu Sep 17 21:46:54 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+go=go version go1.25.1 linux/amd64
+docker_compose=Docker Compose version v2.35.1
+fusermount3=/usr/bin/fusermount3
+fuse_device=crw-rw-rw- root:root a:e5
+golangci_lint=golangci-lint has version 2.15.0 built with go1.27.0 from 25c5369a on 2026-10-16T11:03:09Z
+litmus=litmus 0.13
+fsx=/tmp/nando-validation-tools/xfstests/ltp/fsx: invalid option -- 'V'
+design_ir_repo=/home/sekito_centsys_jp/workspaces/design-ir
+design_ir_head=455ed318b7bc409d3e1da320620ef92d457042b9
