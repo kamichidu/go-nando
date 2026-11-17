@@ -220,14 +220,22 @@ func (s *Store) CheckMigrations(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil {
 		return fmt.Errorf("inspect SQLite schema tables: %w", err)
 	}
-	if tables != 4 {
-		return fmt.Errorf("%w: v1 schema has %d application tables, expected 4", ErrSchemaVersionUnsupported, tables)
+	if tables != 5 {
+		return fmt.Errorf("%w: v1 schema has %d application tables, expected 5", ErrSchemaVersionUnsupported, tables)
+	}
+	var objects int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(&objects); err != nil {
+		return fmt.Errorf("inspect SQLite schema objects: %w", err)
+	}
+	if objects != 5 {
+		return fmt.Errorf("%w: v1 schema has %d application schema objects, expected 5", ErrSchemaVersionUnsupported, objects)
 	}
 	for table, required := range map[string][]string{
 		"entries":           {"entry_id", "parent_id", "name", "kind", "object_id", "size", "mtime", "mode", "content_type", "revision", "created_at", "updated_at"},
 		"repository_format": {"singleton", "format_version", "content_algorithm", "content_id_format"},
 		"transfer_queue":    {"content_id", "enqueued_at"},
 		"content_metadata":  {"content_id", "md5"},
+		"dead_properties":   {"entry_id", "namespace_uri", "localname", "xml_value"},
 	} {
 		columns, err := s.tableColumns(ctx, table)
 		if err != nil {
@@ -238,8 +246,127 @@ func (s *Store) CheckMigrations(ctx context.Context) error {
 				return fmt.Errorf("%w: v1 table %s is missing column %s", ErrSchemaVersionUnsupported, table, column)
 			}
 		}
+		if table == "dead_properties" {
+			if len(columns) != len(required) {
+				return fmt.Errorf("%w: v1 dead_properties has unexpected columns", ErrSchemaVersionUnsupported)
+			}
+			var ddl string
+			if err := s.db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='dead_properties'").Scan(&ddl); err != nil {
+				return err
+			}
+			normalize := func(v string) string {
+				v = strings.Join(strings.Fields(strings.ToLower(v)), " ")
+				v = strings.ReplaceAll(v, "( ", "(")
+				v = strings.ReplaceAll(v, " )", ")")
+				v = strings.ReplaceAll(v, ", ", ",")
+				return v
+			}
+			expected := "CREATE TABLE dead_properties (entry_id TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE, namespace_uri TEXT NOT NULL, localname TEXT NOT NULL, xml_value TEXT NOT NULL, PRIMARY KEY(entry_id, namespace_uri, localname))"
+			if normalize(ddl) != normalize(expected) {
+				return fmt.Errorf("%w: dead_properties has an unknown definition", ErrSchemaVersionUnsupported)
+			}
+		}
 	}
 	return nil
+}
+
+// CompletePreReleaseV1 completes the exact former four-table pre-release v1 baseline.
+// Callers must first validate Repository Format and root metadata. Unknown schemas are rejected.
+func (s *Store) CompletePreReleaseV1(ctx context.Context) error {
+	var version, tables int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil {
+		return err
+	}
+	if version != 1 {
+		return fmt.Errorf("%w: completion requires v1", ErrSchemaVersionUnsupported)
+	}
+	if tables == 5 {
+		return s.CheckMigrations(ctx)
+	}
+	if tables != 4 {
+		return fmt.Errorf("%w: pre-release v1 has %d tables", ErrSchemaVersionUnsupported, tables)
+	}
+	var objects int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(&objects); err != nil {
+		return err
+	}
+	if objects != 4 {
+		return fmt.Errorf("%w: legacy v1 has extra schema objects", ErrSchemaVersionUnsupported)
+	}
+	format, found, err := s.RepositoryFormat(ctx)
+	if err != nil {
+		return err
+	}
+	if !found || format != repositoryformat.Current() {
+		return fmt.Errorf("%w: legacy Repository Format is invalid", ErrSchemaVersionUnsupported)
+	}
+	var roots int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM entries WHERE entry_id='root' AND parent_id IS NULL AND name='' AND kind='directory'`).Scan(&roots); err != nil || roots != 1 {
+		return fmt.Errorf("%w: legacy root entry is invalid", ErrSchemaVersionUnsupported)
+	}
+	expectedSQL := map[string]string{
+		"entries":           "CREATE TABLE entries (entry_id TEXT PRIMARY KEY, parent_id TEXT NULL, name TEXT NOT NULL, kind TEXT NOT NULL, object_id TEXT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, mode INTEGER NOT NULL, content_type TEXT NOT NULL, revision INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE (parent_id, name))",
+		"repository_format": "CREATE TABLE repository_format (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), format_version INTEGER NOT NULL, content_algorithm TEXT NOT NULL, content_id_format TEXT NOT NULL)",
+		"transfer_queue":    "CREATE TABLE transfer_queue (content_id TEXT PRIMARY KEY, enqueued_at INTEGER NOT NULL)",
+		"content_metadata":  "CREATE TABLE content_metadata (content_id TEXT PRIMARY KEY, md5 BLOB NOT NULL CHECK(length(md5) = 16))",
+	}
+	for name, expected := range expectedSQL {
+		var actual string
+		if err := s.db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&actual); err != nil {
+			return fmt.Errorf("%w: legacy table %s is missing", ErrSchemaVersionUnsupported, name)
+		}
+		normalize := func(v string) string {
+			v = strings.Join(strings.Fields(strings.ToLower(v)), " ")
+			v = strings.ReplaceAll(v, "( ", "(")
+			v = strings.ReplaceAll(v, " )", ")")
+			v = strings.ReplaceAll(v, ", ", ",")
+			return v
+		}
+		if normalize(actual) != normalize(expected) {
+			return fmt.Errorf("%w: legacy table %s has an unknown definition (%q != %q)", ErrSchemaVersionUnsupported, name, normalize(actual), normalize(expected))
+		}
+	}
+	for table, required := range map[string][]string{"entries": {"entry_id", "parent_id", "name", "kind", "object_id", "size", "mtime", "mode", "content_type", "revision", "created_at", "updated_at"}, "repository_format": {"singleton", "format_version", "content_algorithm", "content_id_format"}, "transfer_queue": {"content_id", "enqueued_at"}, "content_metadata": {"content_id", "md5"}} {
+		cols, err := s.tableColumns(ctx, table)
+		if err != nil {
+			return err
+		}
+		if len(cols) != len(required) {
+			return fmt.Errorf("%w: legacy table %s has unexpected columns", ErrSchemaVersionUnsupported, table)
+		}
+		for _, c := range required {
+			if !cols[c] {
+				return fmt.Errorf("%w: legacy table %s missing %s", ErrSchemaVersionUnsupported, table, c)
+			}
+		}
+	}
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE dead_properties (entry_id TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE, namespace_uri TEXT NOT NULL, localname TEXT NOT NULL, xml_value TEXT NOT NULL, PRIMARY KEY(entry_id, namespace_uri, localname))`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) IsPreReleaseV1Candidate(ctx context.Context) bool {
+	var version, tables int
+	if s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version) != nil || version != 1 {
+		return false
+	}
+	if s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables) != nil || tables != 4 {
+		return false
+	}
+	var objects int
+	if s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(&objects) != nil || objects != 4 {
+		return false
+	}
+	return true
 }
 
 func (s *Store) tableColumns(ctx context.Context, table string) (map[string]bool, error) {
@@ -357,6 +484,53 @@ func (s *Store) ContentMD5(ctx context.Context, id content.ID) ([]byte, error) {
 		return nil, fmt.Errorf("read Content ID MD5 metadata: %w", err)
 	}
 	return append([]byte(nil), sum...), nil
+}
+
+func (s *Store) GetDeadProperties(ctx context.Context, id metadata.EntryID) ([]metadata.DeadProperty, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT namespace_uri,localname,xml_value FROM dead_properties WHERE entry_id=? ORDER BY namespace_uri,localname`, id.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []metadata.DeadProperty
+	for rows.Next() {
+		var p metadata.DeadProperty
+		p.EntryID = id
+		if err := rows.Scan(&p.Namespace, &p.Name, &p.XML); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+func (s *Store) UpdateDeadProperties(ctx context.Context, id metadata.EntryID, changes []metadata.DeadPropertyChange) error {
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var exists int
+	if err := tx.QueryRowContext(ctx, "SELECT 1 FROM entries WHERE entry_id=?", id.String()).Scan(&exists); err != nil {
+		return metadata.ErrEntryNotFound
+	}
+	for _, change := range changes {
+		p := change.Property
+		if p.Name == "" || p.XML == "" {
+			if !change.Remove || p.Name == "" {
+				return fmt.Errorf("invalid property value")
+			}
+		}
+		if change.Remove {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM dead_properties WHERE entry_id=? AND namespace_uri=? AND localname=?", id.String(), p.Namespace, p.Name); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO dead_properties(entry_id,namespace_uri,localname,xml_value) VALUES(?,?,?,?) ON CONFLICT(entry_id,namespace_uri,localname) DO UPDATE SET xml_value=excluded.xml_value`, id.String(), p.Namespace, p.Name, p.XML); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // Root retrieves the root entry of the logical repository.

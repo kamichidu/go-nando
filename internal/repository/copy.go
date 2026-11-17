@@ -85,6 +85,9 @@ func (r *Repository) CopyEntry(ctx context.Context, id metadata.EntryID, sourceP
 		if err != nil {
 			return false, err
 		}
+		if err := r.cloneDeadProperties(ctx, snapshot.entry.ID, tmp.ID); err != nil {
+			return false, err
+		}
 		if depth == "infinity" {
 			if err := r.copySnapshotChildren(ctx, snapshot, tmp); err != nil {
 				return false, err
@@ -185,6 +188,9 @@ func (r *Repository) copySnapshotChildren(ctx context.Context, snapshot copySnap
 		if err != nil {
 			return err
 		}
+		if err := r.cloneDeadProperties(ctx, child.ID, created.ID); err != nil {
+			return err
+		}
 		if child.Kind == metadata.EntryKindDirectory {
 			if err := r.copySnapshotChildren(ctx, childSnapshot, created); err != nil {
 				return err
@@ -192,6 +198,21 @@ func (r *Repository) copySnapshotChildren(ctx context.Context, snapshot copySnap
 		}
 	}
 	return nil
+}
+
+func (r *Repository) cloneDeadProperties(ctx context.Context, source, target metadata.EntryID) error {
+	properties, err := r.metaStore.GetDeadProperties(ctx, source)
+	if err != nil {
+		return err
+	}
+	for i := range properties {
+		properties[i].EntryID = target
+	}
+	changes := make([]metadata.DeadPropertyChange, 0, len(properties))
+	for _, p := range properties {
+		changes = append(changes, metadata.DeadPropertyChange{Property: p})
+	}
+	return r.metaStore.UpdateDeadProperties(ctx, target, changes)
 }
 
 // verifyCopySnapshot rechecks membership and revisions after staging, catching

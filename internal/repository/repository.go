@@ -84,6 +84,13 @@ func (r *Repository) ResolvePath(ctx context.Context, repoPath string) (metadata
 	return current, nil
 }
 
+func (r *Repository) DeadProperties(ctx context.Context, id metadata.EntryID) ([]metadata.DeadProperty, error) {
+	return r.metaStore.GetDeadProperties(ctx, id)
+}
+func (r *Repository) SetDeadProperties(ctx context.Context, id metadata.EntryID, changes []metadata.DeadPropertyChange) error {
+	return r.metaStore.UpdateDeadProperties(ctx, id, changes)
+}
+
 // DeriveCanonicalPath reconstructs the logical path of an entry by walking up its ancestry.
 func (r *Repository) DeriveCanonicalPath(ctx context.Context, entry metadata.Entry) (string, error) {
 	if entry.ID == "root" {

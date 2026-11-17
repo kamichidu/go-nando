@@ -39,7 +39,7 @@ The executable defaults to `127.0.0.1:8080` and rejects addresses that resolve o
 |501 Not Implemented. The design does not select lock persistence, scope, or interaction with repository CAS.
 
 |PROPPATCH / dead properties
-|501 Not Implemented. The repository has no authoritative dead-property store or persistence contract.
+|Atomic batch PROPPATCH stores opaque XML keyed by Entry ID and expanded property name. PROPFIND returns dead properties and basic live properties. Protected live properties return 403 and dependent properties 424. MOVE retains properties, COPY clones them, DELETE removes them, and PUT preserves them.
 
 |MOVE overwrite / collection COPY
 |MOVE replacement and collection COPY are intentionally unsupported in Phase A. The repository has no atomic namespace replacement or subtree clone operation; composing Remove/Move or repeated MKCOL/PUT would expose partial state on failure.
@@ -141,4 +141,4 @@ link:https://www.rfc-editor.org/rfc/rfc4918.html#section-6.3[Section 6.3] makes 
 
 == Validation
 
-`e2e/run.sh` adds host-native G5 curl coverage for OPTIONS, GET/HEAD, PUT, ETags and conditional PUT, MKCOL/PROPFIND (allprop, propname, explicit supportedlock, Depth 0/1), MOVE, file COPY, DELETE, and explicit unsupported-method responses. G0 includes tests, race, lint, and build for the independent module. cadaver and Litmus are not declared passing by the curl gate; full WebDAV compliance remains unverified because Phase A intentionally lacks locks, dead properties, and replacement COPY semantics.
+`e2e/run.sh` adds host-native G5 curl coverage for OPTIONS, GET/HEAD, PUT, ETags and conditional PUT, MKCOL/PROPFIND, atomic PROPPATCH, dead-property lifecycle across MOVE/COPY/DELETE/PUT, MOVE, file COPY, DELETE, and explicit unsupported lock responses. G0 includes tests, race, lint, and build for the independent module. Litmus results are reported separately by G7; full WebDAV compliance remains unverified because locking and replacement semantics are not implemented.

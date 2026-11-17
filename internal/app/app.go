@@ -29,6 +29,13 @@ func (a *App) noteRepositoryWrite() {
 	}
 }
 
+func (a *App) DeadProperties(ctx context.Context, id metadata.EntryID) ([]metadata.DeadProperty, error) {
+	return a.repo.DeadProperties(ctx, id)
+}
+func (a *App) SetDeadProperties(ctx context.Context, id metadata.EntryID, changes []metadata.DeadPropertyChange) error {
+	return a.repo.SetDeadProperties(ctx, id, changes)
+}
+
 // DeriveCanonicalPath reconstructs the logical path of an entry by walking up its ancestry.
 func (a *App) DeriveCanonicalPath(ctx context.Context, entry metadata.Entry) (string, error) {
 	return a.repo.DeriveCanonicalPath(ctx, entry)

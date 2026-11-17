@@ -302,9 +302,15 @@ nodes:
     kind: compatibility-invariant
     statement: >-
       SQLite PRAGMA user_version MUST be the sole authority for SQLite schema
-      version, with initial schema version 1. Each schema change MUST increment
-      user_version by exactly one; schema version MUST be independent of
-      application semantic version. v1.0.0 starts compatibility guarantees.
+      version, with initial schema version 1. Before v1.0.0, the dead_properties
+      table is an amendment to the unreleased v1 baseline and MUST retain
+      user_version=1. Init MAY transactionally complete only the exact known
+      four-table pre-release v1 schema after validating its complete schema
+      shape, Repository Format, and root Entry. This narrow completion is not a
+      published migration and MUST end at first release. After v1.0.0, each
+      schema change MUST increment user_version by exactly one; schema version
+      MUST be independent of application semantic version. v1.0.0 starts
+      compatibility guarantees.
       Patch releases MUST contain compatible fixes; minor releases MAY add
       backward-compatible functionality; major releases MAY introduce breaking
       changes. Publishing or installing a binary is an explicit operator action;
@@ -328,9 +334,10 @@ nodes:
       migration entry point. Normal startup and initialization MUST validate the schema
       version and refuse mismatches without migration; initialization MAY
       complete a recognized interrupted repository provisioning state, but MUST
-      never migrate an existing database or modify an unsupported schema. A
+      never migrate a post-release existing database or modify an unsupported
+      schema. The exact pre-release completion above is the only exception. A
       valid existing v1 database MUST be validated and left unchanged. Unknown,
-      older, newer, and legacy schema/data states MUST be
+      extra, malformed, older, newer, and legacy schema/data states MUST be
       refused without mutation. A migration MUST apply schema changes and the
       new user_version in one transaction and roll back both on failure.
       Downgrade is unsupported. Operators MUST apply each required persisted
@@ -355,7 +362,9 @@ nodes:
       historical_migration_chain: unsupported
       migration_entry_point: nando-admin-migrate
       normal_startup_migration: prohibited
-      init_existing_database: validate-only-v1-and-resume-empty-schema
+      init_existing_database: validate-v1;pre-release-exact-four-table-v1-completion-only
+      pre_release_dead_properties: amend-v1-baseline;user_version-unchanged;completion-transactional-and-exact
+      post_release_schema_policy: adjacent-version-explicit-migration
       completed_init_rerun: idempotent-no-op
       unsupported_state_mutation: prohibited
       migration_atomicity: schema-and-user_version-same-transaction
@@ -574,14 +583,15 @@ nodes:
       fuse_access: read-write
       webdav_access: read-write
       webdav_process_and_module: separate-peer-of-daemon
-      webdav_http_methods: [GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, file-COPY]
+      webdav_http_methods: [GET, HEAD, OPTIONS, PROPFIND, PROPPATCH, PUT, DELETE, MKCOL, MOVE, file-COPY]
       webdav_put_commit_boundary: daemon-Commit-before-success-response
       webdav_etag: stable-Entry-ID-and-committed-revision
       webdav_conditional_put: If-Match-and-If-None-Match-against-Begin-CAS-snapshot
       webdav_phase_a_listener: loopback-only-HTTP; no-client-authentication; no-TLS; external-exposure-deferred
       webdav_phase_a_clients: same-local-user-only
       webdav_conditional_write_policy: If-Match-and-If-None-Match-against-Begin-CAS-snapshot; reject-unsupported-conditions
-      webdav_unsupported_until-contract-defined: [LOCK, UNLOCK, PROPPATCH, dead-properties, directory-COPY, COPY-overwrite, MOVE-overwrite]
+      webdav_unsupported_until-contract-defined: [LOCK, UNLOCK, directory-COPY, COPY-overwrite, MOVE-overwrite]
+      webdav_dead_properties: EntryID-namespaceURI-localname-opaque-XML; atomic-batch-update; COPY-clones; MOVE-retains; DELETE-cleans; PUT-preserves
       fuse_fsync: durable-Local-Object-and-atomic-Metadata-plus-delivery-obligation
       fuse_release_is_commit_boundary: true
       fuse_release_order: Commit-dirty-staging-before-Resource-Release
@@ -1228,7 +1238,7 @@ nodes:
   - id: IMP-SQLITE-SCHEMA-LIFECYCLE-GAP
     level: implementation
     kind: observed-implementation
-    statement: The current implementation uses PRAGMA user_version as the sole SQLite schema version authority and creates baseline version 1 transactionally with the v1 tables, root entry, and Repository Format. Application init validates existing v1 metadata and resumes only recognized provisioning components; an empty uninitialized database may receive the transactional baseline, while unknown or malformed databases are refused without mutation. Completed init is idempotent and preserves repository settings. Normal composition validates schema version and v1 table presence without migration. nando admin migrate opens only an existing database, validates schema and Repository Format, and reports a no-op for valid v1. Nonempty user_version=0 databases, including former schema_migrations databases, malformed/missing v1 tables, and unknown older/newer versions are refused without mutation. No v0-to-v1 migration exists. The generic future N-1-to-N transition is NOT implemented because v1 is the initial baseline and there is no predecessor schema to migrate; future schema-changing releases must implement only their immediate predecessor transition with transactional DDL and user_version update.
+    statement: The current pre-release implementation uses PRAGMA user_version as the sole SQLite schema version authority and creates baseline version 1 transactionally with entries, repository_format, transfer_queue, content_metadata, and dead_properties, root entry, and Repository Format. Before first release, init may transactionally complete only the exact known four-table v1 baseline after validating its shape, Repository Format, and root; it retains user_version=1. This is an unreleased baseline amendment, not a migration. Unknown, extra, or malformed schemas remain refused without mutation. After release, schema changes require the strict adjacent-version migration policy. Completed init is idempotent and preserves repository settings. Normal composition validates schema version and v1 table presence without migration. nando admin migrate opens only an existing database, validates schema and Repository Format, and reports a no-op for valid v1. Nonempty user_version=0 databases, including former schema_migrations databases, malformed/missing v1 tables, and unknown older/newer versions are refused without mutation. No v0-to-v1 migration exists. The generic future N-1-to-N transition is NOT implemented because v1 is the initial baseline and there is no predecessor schema to migrate; future schema-changing releases must implement only their immediate predecessor transition with transactional DDL and user_version update.
     provenance:
       origin: observed
     artifact_refs:

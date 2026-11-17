@@ -36,4 +36,6 @@ type MetadataStore interface {
 	ReferencedObjectIDs(ctx context.Context) ([]content.ID, error)
 	ContentMD5(ctx context.Context, id content.ID) ([]byte, error)
 	ListAll(ctx context.Context) ([]Entry, error)
+	GetDeadProperties(ctx context.Context, id EntryID) ([]DeadProperty, error)
+	UpdateDeadProperties(ctx context.Context, id EntryID, changes []DeadPropertyChange) error
 }

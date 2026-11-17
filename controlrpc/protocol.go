@@ -25,33 +25,35 @@ const (
 )
 
 const (
-	MethodPing            = "daemon.ping"
-	MethodStat            = "repository.stat"
-	MethodResolveEntry    = "repository.resolveEntry"
-	MethodChmodEntry      = "repository.chmodEntry"
-	MethodList            = "repository.list"
-	MethodMkdir           = "repository.mkdir"
-	MethodMove            = "repository.move"
-	MethodMoveEntry       = "repository.moveEntry"
-	MethodCopyEntry       = "repository.copyEntry"
-	MethodRemove          = "repository.remove"
-	MethodRemoveEntry     = "repository.removeEntry"
-	MethodGC              = "repository.gc"
-	MethodMaintenance     = "repository.maintenanceOnce"
-	MethodDoctor          = "repository.doctor"
-	MethodSync            = "repository.sync"
-	MethodBeginRead       = "resource.beginRead"
-	MethodBeginWrite      = "resource.beginWrite"
-	MethodSetMode         = "resource.setMode"
-	MethodCommit          = "resource.commit"
-	MethodAbort           = "resource.abort"
-	MethodMarkUnlinked    = "resource.markUnlinked"
-	MethodRelease         = "resource.release"
-	MethodRenew           = "resource.renew"
-	MethodRevoke          = "resource.revoke"
-	MethodRecoveryList    = "resource.recovery.list"
-	MethodRecoveryRetry   = "resource.recovery.retry"
-	MethodRecoveryDiscard = "resource.recovery.discard"
+	MethodPing                 = "daemon.ping"
+	MethodStat                 = "repository.stat"
+	MethodResolveEntry         = "repository.resolveEntry"
+	MethodChmodEntry           = "repository.chmodEntry"
+	MethodList                 = "repository.list"
+	MethodMkdir                = "repository.mkdir"
+	MethodMove                 = "repository.move"
+	MethodMoveEntry            = "repository.moveEntry"
+	MethodCopyEntry            = "repository.copyEntry"
+	MethodDeadProperties       = "repository.deadProperties"
+	MethodUpdateDeadProperties = "repository.updateDeadProperties"
+	MethodRemove               = "repository.remove"
+	MethodRemoveEntry          = "repository.removeEntry"
+	MethodGC                   = "repository.gc"
+	MethodMaintenance          = "repository.maintenanceOnce"
+	MethodDoctor               = "repository.doctor"
+	MethodSync                 = "repository.sync"
+	MethodBeginRead            = "resource.beginRead"
+	MethodBeginWrite           = "resource.beginWrite"
+	MethodSetMode              = "resource.setMode"
+	MethodCommit               = "resource.commit"
+	MethodAbort                = "resource.abort"
+	MethodMarkUnlinked         = "resource.markUnlinked"
+	MethodRelease              = "resource.release"
+	MethodRenew                = "resource.renew"
+	MethodRevoke               = "resource.revoke"
+	MethodRecoveryList         = "resource.recovery.list"
+	MethodRecoveryRetry        = "resource.recovery.retry"
+	MethodRecoveryDiscard      = "resource.recovery.discard"
 )
 
 type BeginWriteResult struct {
@@ -84,6 +86,21 @@ type BeginReadParams struct {
 
 type ResolveEntryParams struct {
 	EntryID string `json:"entry_id"`
+}
+
+type DeadProperty struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	XML       string `json:"xml"`
+}
+
+type DeadPropertyChange struct {
+	Property DeadProperty `json:"property"`
+	Remove   bool         `json:"remove,omitempty"`
+}
+type DeadPropertiesParams struct {
+	EntryID string               `json:"entry_id"`
+	Changes []DeadPropertyChange `json:"changes,omitempty"`
 }
 
 type ChmodEntryParams struct {

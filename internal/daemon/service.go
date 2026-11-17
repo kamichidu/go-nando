@@ -72,6 +72,40 @@ func newService(application repositoryUseCases, sessions *sessionManager) *servi
 
 func (s *service) Call(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	switch method {
+	case controlrpc.MethodDeadProperties, controlrpc.MethodUpdateDeadProperties:
+		propertyApp, ok := s.app.(interface {
+			DeadProperties(context.Context, metadata.EntryID) ([]metadata.DeadProperty, error)
+			SetDeadProperties(context.Context, metadata.EntryID, []metadata.DeadPropertyChange) error
+		})
+		if !ok {
+			return nil, errors.New("dead properties unavailable")
+		}
+		var p controlrpc.DeadPropertiesParams
+		if err := decodeParams(raw, &p); err != nil || p.EntryID == "" {
+			return nil, &methodError{Code: jsonRPCInvalidParams, Err: errors.New("entry_id is required")}
+		}
+		if method == controlrpc.MethodDeadProperties {
+			values, err := propertyApp.DeadProperties(ctx, metadata.EntryID(p.EntryID))
+			if err != nil {
+				return nil, mapMethodError(err)
+			}
+			out := make([]controlrpc.DeadProperty, 0, len(values))
+			for _, v := range values {
+				out = append(out, controlrpc.DeadProperty{Namespace: v.Namespace, Name: v.Name, XML: v.XML})
+			}
+			return out, nil
+		}
+		convert := func(in []controlrpc.DeadPropertyChange) []metadata.DeadPropertyChange {
+			out := make([]metadata.DeadPropertyChange, 0, len(in))
+			for _, v := range in {
+				out = append(out, metadata.DeadPropertyChange{Property: metadata.DeadProperty{EntryID: metadata.EntryID(p.EntryID), Namespace: v.Property.Namespace, Name: v.Property.Name, XML: v.Property.XML}, Remove: v.Remove})
+			}
+			return out
+		}
+		if err := propertyApp.SetDeadProperties(ctx, metadata.EntryID(p.EntryID), convert(p.Changes)); err != nil {
+			return nil, mapMethodError(err)
+		}
+		return struct{}{}, nil
 	case controlrpc.MethodPing:
 		return struct {
 			Version string `json:"version"`

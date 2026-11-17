@@ -2623,6 +2623,60 @@ func TestSQLiteStore(t *testing.T) {
 	})
 }
 
+func TestDeadPropertiesAndPreReleaseV1Completion(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, "DROP TABLE dead_properties"); err != nil {
+		t.Fatal(err)
+	}
+	if !store.IsPreReleaseV1Candidate(ctx) {
+		t.Fatal("exact four-table baseline was not recognized")
+	}
+	if err := store.CompletePreReleaseV1(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompletePreReleaseV1(ctx); err != nil {
+		t.Fatalf("completion is not idempotent: %v", err)
+	}
+	var version int
+	if err := store.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 1 {
+		t.Fatalf("user_version=%d err=%v", version, err)
+	}
+	entry := metadata.Entry{ID: "props", ParentID: ptrID("root"), Name: "props", Kind: metadata.EntryKindFile, Revision: 1, CreatedAt: 1, UpdatedAt: 1}
+	if _, err := store.Create(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+	a := metadata.DeadProperty{EntryID: entry.ID, Namespace: "urn:test", Name: "color", XML: `<x:color xmlns:x="urn:test">blue</x:color>`}
+	if err := store.UpdateDeadProperties(ctx, entry.ID, []metadata.DeadPropertyChange{{Property: a}}); err != nil {
+		t.Fatal(err)
+	}
+	b := a
+	b.XML = `<x:color xmlns:x="urn:test">green</x:color>`
+	if err := store.UpdateDeadProperties(ctx, entry.ID, []metadata.DeadPropertyChange{{Property: b}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetDeadProperties(ctx, entry.ID)
+	if err != nil || len(got) != 1 || got[0].XML != b.XML {
+		t.Fatalf("dead property=%+v err=%v", got, err)
+	}
+	if err := store.Delete(ctx, entry.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.GetDeadProperties(ctx, entry.ID)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("deleted entry retained properties: %+v err=%v", got, err)
+	}
+}
+
+func ptrID(id metadata.EntryID) *metadata.EntryID { return &id }
+
 func TestCommitPutTransferQueue(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))

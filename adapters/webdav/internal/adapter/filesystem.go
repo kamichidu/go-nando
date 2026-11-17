@@ -40,7 +40,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.propfind(w, r)
 	case http.MethodOptions:
 		w.Header().Set("DAV", "1")
-		w.Header().Set("Allow", "GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY")
+		w.Header().Set("Allow", "GET, HEAD, OPTIONS, PROPFIND, PROPPATCH, PUT, DELETE, MKCOL, MOVE, COPY")
 		w.WriteHeader(http.StatusOK)
 	case http.MethodPut:
 		h.put(w, r)
@@ -52,8 +52,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.move(w, r)
 	case "COPY":
 		h.copyFile(w, r)
-	case "LOCK", "UNLOCK", "PROPPATCH":
-		w.Header().Set("Allow", "GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY")
+	case "PROPPATCH":
+		h.proppatch(w, r)
+	case "LOCK", "UNLOCK":
+		w.Header().Set("Allow", "GET, HEAD, OPTIONS, PROPFIND, PROPPATCH, PUT, DELETE, MKCOL, MOVE, COPY")
 		http.Error(w, "method not supported by Phase A repository contract", http.StatusNotImplemented)
 	default:
 		h.dav.ServeHTTP(w, r)
@@ -680,6 +682,26 @@ func (h *Handler) copyFile(w http.ResponseWriter, r *http.Request) {
 	if err := h.client.Call(r.Context(), controlrpc.MethodCommit, map[string]string{"session_id": write.SessionID}, nil); err != nil {
 		http.Error(w, errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil)).Error(), preconditionStatus(err))
 		return
+	}
+	var copied controlrpc.Entry
+	if err := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": dst}, &copied); err != nil {
+		http.Error(w, "COPY committed but destination metadata read failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var properties []controlrpc.DeadProperty
+	if err := h.client.Call(r.Context(), controlrpc.MethodDeadProperties, map[string]string{"entry_id": info.ID}, &properties); err != nil {
+		http.Error(w, "COPY committed but source properties could not be read: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(properties) > 0 {
+		changes := make([]controlrpc.DeadPropertyChange, 0, len(properties))
+		for _, property := range properties {
+			changes = append(changes, controlrpc.DeadPropertyChange{Property: property})
+		}
+		if err := h.client.Call(r.Context(), controlrpc.MethodUpdateDeadProperties, controlrpc.DeadPropertiesParams{EntryID: copied.ID, Changes: changes}, nil); err != nil {
+			http.Error(w, "COPY committed but destination properties could not be stored: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if backupPath != "" {
 		if err := h.removeEntryTree(context.Background(), backupPath, target); err != nil {

@@ -23,6 +23,13 @@ func NewValidatingStore(next MetadataStore) *ValidatingStore {
 // Ensure ValidatingStore implements MetadataStore
 var _ MetadataStore = (*ValidatingStore)(nil)
 
+func (s *ValidatingStore) GetDeadProperties(ctx context.Context, id EntryID) ([]DeadProperty, error) {
+	return s.next.GetDeadProperties(ctx, id)
+}
+func (s *ValidatingStore) UpdateDeadProperties(ctx context.Context, id EntryID, changes []DeadPropertyChange) error {
+	return s.next.UpdateDeadProperties(ctx, id, changes)
+}
+
 // Root delegates to the next store.
 func (s *ValidatingStore) Root(ctx context.Context) (Entry, error) {
 	return s.next.Root(ctx)
