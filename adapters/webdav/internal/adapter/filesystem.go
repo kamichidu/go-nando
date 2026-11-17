@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/net/webdav"
 
+	"github.com/google/uuid"
 	"github.com/kamichidu/go-nando/controlrpc"
 )
 
@@ -448,9 +449,30 @@ func (h *Handler) move(w http.ResponseWriter, r *http.Request) {
 	if err := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": dst}, &exists); err == nil {
 		if !overwrite {
 			http.Error(w, "destination exists", http.StatusPreconditionFailed)
-		} else {
-			http.Error(w, "MOVE replacement is outside the Phase A repository contract", http.StatusNotImplemented)
+			return
 		}
+		backup := "/.nando-move-" + uuid.NewString()
+		if err := h.client.Call(r.Context(), controlrpc.MethodMoveEntry, controlrpc.MoveEntryParams{EntryID: exists.ID, Destination: backup}, nil); err != nil {
+			http.Error(w, err.Error(), preconditionStatus(err))
+			return
+		}
+		if err := h.client.Call(r.Context(), controlrpc.MethodMoveEntry, controlrpc.MoveEntryParams{EntryID: source.ID, Destination: dst}, nil); err != nil {
+			// Restore only if the destination is still absent. Otherwise leave the
+			// displaced entry reachable at its root-level recovery name.
+			var current controlrpc.Entry
+			if statErr := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": dst}, &current); statusFor(statErr) == http.StatusNotFound {
+				_ = h.client.Call(r.Context(), controlrpc.MethodMoveEntry, controlrpc.MoveEntryParams{EntryID: exists.ID, Destination: dst}, nil)
+			}
+			http.Error(w, err.Error(), preconditionStatus(err))
+			return
+		}
+		// Remove by the exact displaced Entry ID. A partial recursive removal
+		// leaves the remaining subtree reachable under backup.
+		if err := h.removeEntryTree(r.Context(), backup, exists); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 		return
 	} else if statusFor(err) != http.StatusNotFound {
 		http.Error(w, err.Error(), statusFor(err))
@@ -461,6 +483,30 @@ func (h *Handler) move(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
+}
+
+func (h *Handler) removeEntryTree(ctx context.Context, entryPath string, entry controlrpc.Entry) error {
+	// Ensure the stable Entry still occupies the path we inspected before
+	// traversing or deleting it. This avoids following a concurrent rename.
+	var current controlrpc.ResolveEntryResult
+	if err := h.client.Call(ctx, controlrpc.MethodResolveEntry, controlrpc.ResolveEntryParams{EntryID: entry.ID}, &current); err != nil {
+		return err
+	}
+	if current.Path != entryPath {
+		return fmt.Errorf("entry %s moved from %q to %q during cleanup", entry.ID, entryPath, current.Path)
+	}
+	if entry.Kind == "directory" {
+		var children []controlrpc.Entry
+		if err := h.client.Call(ctx, controlrpc.MethodList, map[string]string{"path": entryPath}, &children); err != nil {
+			return err
+		}
+		for _, child := range children {
+			if err := h.removeEntryTree(ctx, path.Join(entryPath, child.Name), child); err != nil {
+				return err
+			}
+		}
+	}
+	return h.client.Call(ctx, controlrpc.MethodRemoveEntry, controlrpc.RemoveEntryParams{EntryID: entry.ID}, nil)
 }
 
 func (h *Handler) copyFile(w http.ResponseWriter, r *http.Request) {
