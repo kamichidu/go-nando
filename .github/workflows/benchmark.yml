@@ -103,11 +103,15 @@ jobs:
               python3 tools/interface_benchmark.py --interface "$interface" --output "$raw" --iterations 100 --payload-bytes 4096 --run-conditions "$CONDITIONS" "$@" >"$ART/${interface}.stdout" 2>"$ART/${interface}.stderr" || { echo "$interface measured run failed" | tee -a "$ART/failure.txt"; fail=1; }
               python3 - "$raw" "$interface" "$ART/manifest.json" <<'PY'
           import json, pathlib, sys
-          raw, interface, manifest = map(pathlib.Path, sys.argv[1:])
+          raw = pathlib.Path(sys.argv[1])
+          interface = sys.argv[2]
+          manifest = pathlib.Path(sys.argv[3])
           data = json.loads(raw.read_text()) if raw.exists() else {"status": "launch_failed", "errors": []}
           m = json.loads(manifest.read_text())
           m["interfaces"][interface] = {"status": data.get("status", "missing"), "completed": data.get("completed", 0), "failed": data.get("failed", 0), "json": raw.name}
           manifest.write_text(json.dumps(m, indent=2) + "\n")
+          serialized = json.loads(manifest.read_text())
+          assert interface in serialized["interfaces"]
           PY
             }
             run_one rpc --rpc-endpoint "unix://$SOCK"
