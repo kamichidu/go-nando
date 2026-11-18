@@ -9,6 +9,7 @@ import (
 
 // MetadataStore defines the interface for managing repository metadata.
 type MetadataStore interface {
+	InternalBufferStore
 	Root(ctx context.Context) (Entry, error)
 	GetByID(ctx context.Context, id EntryID) (Entry, error)
 	GetChild(ctx context.Context, parentID EntryID, name string) (Entry, error)
@@ -38,4 +39,18 @@ type MetadataStore interface {
 	ListAll(ctx context.Context) ([]Entry, error)
 	GetDeadProperties(ctx context.Context, id EntryID) ([]DeadProperty, error)
 	UpdateDeadProperties(ctx context.Context, id EntryID, changes []DeadPropertyChange) error
+}
+
+// InternalBufferStore provides operations for detached trees that are never
+// part of the public repository namespace. Each metadata operation is atomic;
+// reclaiming a complete tree is resumable but not one global transaction.
+type InternalBufferStore interface {
+	CreateDetachedRoot(context.Context, Entry) (DetachedBuffer, error)
+	CreateDetachedEntry(context.Context, BufferID, Entry) (Entry, error)
+	SetDetachedDeadProperties(context.Context, BufferID, EntryID, []DeadPropertyChange) error
+	PublishDetachedRoot(context.Context, BufferID, EntryID, string) (Entry, error)
+	DetachTree(context.Context, EntryID, uint64, EntryID) (DetachedBuffer, error)
+	DetachedBuffers(context.Context) ([]DetachedBuffer, error)
+	ListDetachedChildren(context.Context, BufferID, EntryID) ([]Entry, error)
+	DeleteDetachedEntry(context.Context, BufferID, EntryID) error
 }

@@ -422,9 +422,15 @@ nodes:
   - id: REQ-SUBTREE-MUTATIONS
     level: system_requirement
     kind: namespace-invariant
-    statement: Move and Remove MUST enforce conflicts across the affected subtree and MUST reject moving an Entry into its own descendant subtree.
+    statement: Move and Remove MUST enforce conflicts across the affected subtree and MUST reject moving an Entry into its own descendant subtree. Recursive Remove MUST atomically detach the selected root from the public namespace in one Metadata transaction before reclaiming descendants in separate resumable per-Entry Metadata operations. Detach MUST compare the selected Entry's observed parent and revision so a concurrent Move that linearizes first is not deleted at its new location. Detached roots MUST be inaccessible through ordinary path, Entry-ID, property, and listing APIs; object-reference enumeration MUST retain their objects until reclamation deletes them. Reclamation failure MUST leave a registered buffer for retry and MUST NOT block unrelated object GC or public namespace operations. The number of independent buffers MUST be unbounded by schema shape, and each buffer MUST be independently reclaimable.
     provenance:
-      origin: imported
+      origin: human-authored
+  - id: REQ-WEBDAV-COPY-MOVE-BOUNDARIES
+    level: system_requirement
+    kind: protocol-invariant
+    statement: WebDAV MUST support file and collection COPY, COPY overwrite, and MOVE overwrite as implemented by the Phase A adapter. Each Metadata transaction and each individual namespace Move is atomic. Multi-step replacement, dead-property propagation, and displaced-tree reclamation are not globally atomic; on error the adapter MUST report whether content or namespace changes committed and MUST keep displaced or staged data reachable either in the public namespace or a registered internal buffer for recovery/reclamation. No requirement implies global rollback of a multi-step operation.
+    provenance:
+      origin: human-authored
   - id: REQ-GET-ATOMIC-DESTINATION
     level: system_requirement
     kind: export-invariant
@@ -583,15 +589,18 @@ nodes:
       fuse_access: read-write
       webdav_access: read-write
       webdav_process_and_module: separate-peer-of-daemon
-      webdav_http_methods: [GET, HEAD, OPTIONS, PROPFIND, PROPPATCH, PUT, DELETE, MKCOL, MOVE, file-COPY]
+      webdav_http_methods: [GET, HEAD, OPTIONS, PROPFIND, PROPPATCH, PUT, DELETE, MKCOL, MOVE, file-COPY, collection-COPY]
       webdav_put_commit_boundary: daemon-Commit-before-success-response
       webdav_etag: stable-Entry-ID-and-committed-revision
       webdav_conditional_put: If-Match-and-If-None-Match-against-Begin-CAS-snapshot
       webdav_phase_a_listener: loopback-only-HTTP; no-client-authentication; no-TLS; external-exposure-deferred
       webdav_phase_a_clients: same-local-user-only
       webdav_conditional_write_policy: If-Match-and-If-None-Match-against-Begin-CAS-snapshot; reject-unsupported-conditions
-      webdav_unsupported_until-contract-defined: [LOCK, UNLOCK, directory-COPY, COPY-overwrite, MOVE-overwrite]
+      webdav_unsupported_until-contract-defined: [LOCK, UNLOCK]
       webdav_dead_properties: EntryID-namespaceURI-localname-opaque-XML; atomic-batch-update; COPY-clones; MOVE-retains; DELETE-cleans; PUT-preserves
+      webdav_copy_move_atomicity: each-Metadata-operation-and-individual-namespace-Move-is-atomic; multi-step-COPY-MOVE-replacement-property-update-and-old-tree-reclamation-are-not-globally-atomic; errors-identify-committed-or-recoverable-partial-state
+      metadata_internal_buffers: SQLite-only-dynamic-independent-buffers; atomically-detach-public-subtree-root; invisible-through-public-path-and-EntryID-APIs; retain-object-references-until-resumable-bottom-up-reclaim; retry-after-failure-and-daemon-restart
+      metadata_detach_handle_lifetime: open-read-Resource-and-content-RLock-live-through-Release; open-write-session-remains-private; FUSE-unlink-durably-marks-discard-before-detach; detached-write-CAS-cannot-recreate-public-Entry
       fuse_fsync: durable-Local-Object-and-atomic-Metadata-plus-delivery-obligation
       fuse_release_is_commit_boundary: true
       fuse_release_order: Commit-dirty-staging-before-Resource-Release

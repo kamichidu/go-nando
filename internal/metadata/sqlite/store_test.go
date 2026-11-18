@@ -2636,6 +2636,9 @@ func TestDeadPropertiesAndPreReleaseV1Completion(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, "DROP TABLE dead_properties"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.db.ExecContext(ctx, "DROP TABLE internal_buffers"); err != nil {
+		t.Fatal(err)
+	}
 	if !store.IsPreReleaseV1Candidate(ctx) {
 		t.Fatal("exact four-table baseline was not recognized")
 	}
@@ -2670,8 +2673,120 @@ func TestDeadPropertiesAndPreReleaseV1Completion(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = store.GetDeadProperties(ctx, entry.ID)
-	if err != nil || len(got) != 0 {
-		t.Fatalf("deleted entry retained properties: %+v err=%v", got, err)
+	if !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("deleted entry remains accessible through properties: %+v err=%v", got, err)
+	}
+}
+
+func TestDetachedBuffersArePrivateAndResumable(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "metadata.sqlite")
+	store, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
+		t.Fatal(err)
+	}
+	now := metadata.TimestampFromTime(time.Now().UTC())
+	root := metadata.EntryID("root")
+	if _, err := store.Create(ctx, metadata.Entry{ID: "tree", ParentID: &root, Name: "tree", Kind: metadata.EntryKindDirectory, Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(ctx, metadata.Entry{ID: "other", ParentID: &root, Name: "other", Kind: metadata.EntryKindDirectory, Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	tree := metadata.EntryID("tree")
+	oid, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(ctx, metadata.Entry{ID: "leaf", ParentID: &tree, Name: "leaf", Kind: metadata.EntryKindFile, ObjectID: &oid, Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	other := metadata.EntryID("other")
+	if _, err := store.Move(ctx, metadata.Entry{ID: tree, ParentID: &other, Name: "tree", Revision: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DetachTree(ctx, tree, 1, root); !errors.Is(err, metadata.ErrEntryConflict) {
+		t.Fatalf("stale path detach after concurrent move=%v, want conflict", err)
+	}
+	current, err := store.GetByID(ctx, tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer, err := store.DetachTree(ctx, tree, current.Revision, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBuffer, err := store.DetachTree(ctx, other, 1, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetByID(ctx, tree); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("detached root visible by ID: %v", err)
+	}
+	if _, err := store.GetByID(ctx, "leaf"); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("detached child visible by ID: %v", err)
+	}
+	if children, err := store.ListChildren(ctx, root); err != nil || len(children) != 0 {
+		t.Fatalf("public root children=%v err=%v", children, err)
+	}
+	if refs, err := store.ReferencedObjectIDs(ctx); err != nil || len(refs) != 1 || refs[0] != oid {
+		t.Fatalf("detached object reference not protected: refs=%v err=%v", refs, err)
+	}
+	if buffers, err := store.DetachedBuffers(ctx); err != nil || len(buffers) != 2 {
+		t.Fatalf("buffer registry=%+v err=%v", buffers, err)
+	}
+	if err := store.DeleteDetachedEntry(ctx, buffer.ID, "leaf"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = NewExistingStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffers, err := store.DetachedBuffers(ctx)
+	if err != nil || len(buffers) != 2 {
+		t.Fatalf("detached buffer not durable after restart: buffers=%+v err=%v", buffers, err)
+	}
+	if err := store.DeleteDetachedEntry(ctx, buffer.ID, tree); err != nil {
+		t.Fatalf("resume root reclamation: %v", err)
+	}
+	if err := store.DeleteDetachedEntry(ctx, secondBuffer.ID, other); err != nil {
+		t.Fatalf("reclaim second independent buffer: %v", err)
+	}
+	buffers, err = store.DetachedBuffers(ctx)
+	if err != nil || len(buffers) != 0 {
+		t.Fatalf("completed buffer remains registered: buffers=%+v err=%v", buffers, err)
+	}
+}
+
+func TestPreReleaseV1CompletionAddsMissingInternalBufferRegistry(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "metadata.sqlite")
+	store, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `DROP TABLE internal_buffers`); err != nil {
+		t.Fatal(err)
+	}
+	if !store.IsPreReleaseV1Candidate(ctx) {
+		t.Fatal("pre-buffer v1 schema was not recognized")
+	}
+	if err := store.CompletePreReleaseV1(ctx); err != nil {
+		t.Fatalf("complete pre-release schema: %v", err)
+	}
+	if err := store.CheckMigrations(ctx); err != nil {
+		t.Fatalf("completed schema is invalid: %v", err)
 	}
 }
 

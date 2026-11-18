@@ -35,7 +35,7 @@ Evidence checked:
 * Source and tests under `internal/`, `controlrpc/`, `adapters/fuse/`, `adapters/webdav/`, `cmd/`, `e2e/`, and the repository documentation.
 * Tracked host evidence: `results/pr14-litmus-g7-2026-11-17/` and `results/pr14-fuse-revalidation-2026-11-17/`, plus earlier `results/` evidence referenced in the E2E records. Historical `/tmp` evidence paths are not treated as current reproducible artifacts.
 * A separate native HTTP PROPFIND request against a temporary Local repository confirmed a WebDAV live-property inconsistency described below. The response included `DAV:supportedlock` although the adapter returns 501 for LOCK/UNLOCK.
-* PR #14 adds a tracked Litmus 0.13-4 run: `basic` 16/16, `locks` 3/3, and `http` 4/4 passed; `copymove` and `props` have failures/unsupported operations. The follow-up COPY/MOVE capture documents remaining unsupported collection COPY/replacement semantics. No full WebDAV compliance claim is made.
+* PR #14 adds a tracked Litmus 0.13-4 run: `basic` 16/16, `locks` 3/3, and `http` 4/4 passed; `copymove` and `props` have failures/unsupported operations. Follow-up commits add collection COPY, COPY overwrite, and MOVE overwrite; the recorded Litmus capture predates those capabilities and is not evidence for them. No full WebDAV compliance claim is made.
 
 == Requirement traceability
 
@@ -151,9 +151,9 @@ G1 exercised a real host kernel FUSE mount for CRUD, commit durability, multiple
 
 === WebDAV adapter and protocol-suite scope
 
-Phase A's IR says read-write WebDAV and requires a separate peer process using the public daemon/Resource contract. It does not enumerate RFC methods, require WebDAV class 2 locks, define dead-property storage, specify COPY replacement behavior, or require Litmus. Therefore:
+Phase A's IR requires a separate WebDAV peer process using the public daemon/Resource contract. The current approved method surface supports dead properties, file and collection COPY, COPY overwrite, and MOVE overwrite, while class 2 locks remain unsupported. Multi-step replacement is not globally atomic; internal detached buffers contain removed or unpublished trees until resumable reclamation completes.
 
-* `LOCK`/`UNLOCK`, `PROPPATCH`/dead properties, directory COPY, and overwrite semantics are *not independently mandated Phase A features* by the current IR. Their absence is an explicit partial protocol surface, not by itself a Phase A blocker. `DAV:1` is advertised; the adapter refuses LOCK/UNLOCK/PROPPATCH with 501 and omits the unsupported `DAV:supportedlock` capability from allprop/propname; an explicit request returns a 404 propstat. COPY supports only files to absent destinations; MOVE supports non-replacing namespace moves. Full Litmus `copymove`, `props`, and `locks` compliance cannot be claimed.
+* `LOCK`/`UNLOCK` remain unsupported; `PROPPATCH` and dead properties are implemented. Collection COPY and COPY/MOVE overwrite are supported with bounded per-metadata-operation atomicity and recoverable multi-step partial states. `DAV:1` is advertised; the adapter refuses LOCK/UNLOCK with 501 and omits the unsupported `DAV:supportedlock` capability from allprop/propname; an explicit request returns a 404 propstat. Full Litmus `copymove`, `props`, and `locks` compliance cannot be claimed.
 * `nando-webdav` is a separate module/process using controlrpc and daemon file resources. PUT commits before 201/204 and uses Begin-time Entry/revision/absence as its CAS snapshot for conditional PUT. GET/HEAD/PROPFIND and tested namespace methods use daemon state. G5 curl covered the tested operations.
 * The approved Phase A boundary is loopback-only unauthenticated HTTP and same-user local operation. WebDAV PUT enforces `If-Match`/`If-None-Match` against the Begin-time CAS snapshot and rejects unsupported conditions. External exposure, client auth, TLS termination, multi-user authorization, and TCP operations are deferred; these are not Phase A acceptance requirements.
 * PR #14 records Litmus 0.13-4 results with mixed PASS/FAIL/unsupported groups. Full RFC compliance is not a Phase A acceptance item; broader interoperability remains unverified.
@@ -176,10 +176,10 @@ Other unverified WebDAV behavior includes conditions on methods beyond PUT, conc
 
 |curl file MOVE/COPY
 |*PASS* — `curl-file-copymove`
-|PR #14 records fixes for file COPY overwrite and destination handling. Collection COPY and MOVE replacement remain unsupported; this is not full `copymove` compliance.
+|The recorded capture predates the follow-up collection COPY and MOVE replacement implementations. It is not a compliance result for those later capabilities.
 
 |locks, dead properties
-|*SKIP* — deliberately unsupported; the 501 boundary response itself was asserted by curl
+|*SKIP* — Litmus result predates dead-property follow-up coverage; LOCK/UNLOCK remain deliberately unsupported and the 501 boundary response was asserted by curl
 |Unsupported features are not counted as compliance PASS.
 
 |Litmus 0.13-4 `basic`, `copymove`, `props`, `locks`, `http`
@@ -278,8 +278,8 @@ G0–G5 PASS demonstrates that the recorded scenarios passed, including schedule
 |Conditional production readiness; not a fake-GCS test failure
 
 |PA-08 — *P3 verification limit*
-|G5 is targeted curl smoke. PR #14's Litmus run reaches all groups but `copymove`/`props` have failures and unsupported operations, showing interoperability gaps beyond the narrower IR contract.
-|Retain category-level outcomes and classify failures against the intended WebDAV subset before making broad client-compatibility claims.
+|G5 is targeted curl smoke. The recorded Litmus `copymove`/`props` run predates the collection COPY, overwrite, and dead-property follow-up implementations; it does not verify those changes. Full Litmus compatibility remains unverified.
+|Run the relevant Litmus categories against the current implementation and classify failures against the approved bounded partial-success contract before making broad client-compatibility claims.
 |Non-blocker for current IR scope; no full compatibility claim
 
 |PA-09 — *P3 unresolved semantics*
@@ -303,12 +303,12 @@ G0–G5 PASS demonstrates that the recorded scenarios passed, including schedule
 |Intentional partial surface; PA-04 resolved
 
 |PROPPATCH/dead properties
-|No authoritative dead-property store/persistence contract exists in Metadata or Repository design.
-|Intentionally deferred; not a Phase A blocker
+|Properties are persisted by Entry ID; PROPPATCH batch is atomic. COPY cloning/overwrite propagation is a later bounded step and can leave committed content with incomplete property propagation.
+|Implemented with observable partial-success behavior; not globally atomic with COPY content
 
 |COPY/MOVE constraints
-|IR does not define full RFC 4918 COPY/MOVE compatibility, recursive collection COPY, or replacement semantics. PR #14 Litmus results include overwrite and missing-parent failures plus unsupported collection/replacement cases; follow-up changes fix several file cases while collection/replacement features remain unsupported.
-|Partial protocol surface and known compatibility findings; not a core Phase A blocker
+|The approved IR supports recursive collection COPY and COPY/MOVE overwrite. It defines per-metadata-operation atomicity and resumable internal buffers, not global rollback for multi-step replacement. Litmus evidence in this report predates the later implementation.
+|Implemented with bounded partial-success semantics; full RFC compliance remains unverified
 
 |WebDAV auth/TLS
 |The approved Phase A boundary excludes external exposure, WebDAV client authentication, TLS termination, and multi-user authorization. `OPEN-ADAPTER-AUTHORIZATION` tracks future expansion only. TCP TLS+bearer remains available but its operating lifecycle is not standard Phase A acceptance.

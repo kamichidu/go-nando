@@ -30,10 +30,10 @@ The executable defaults to `127.0.0.1:8080` and rejects addresses that resolve o
 |Daemon-owned namespace remove/create operations.
 
 |MOVE
-|Daemon-owned path move; `Overwrite: F` rejects an occupied destination with 412. Replacement remains unsupported.
+|Daemon-owned path move; `Overwrite: F` rejects an occupied destination with 412. Replacement is supported through per-operation metadata moves and best-effort displaced-tree reclamation.
 
 |COPY
-|File copy with `Overwrite: T` by default or `F` explicitly, using read and CAS write Resource sessions. Existing file replacement returns 204; creation returns 201. Directory copy is unsupported.
+|File and collection copy with `Overwrite: T` by default or `F` explicitly. Collection COPY accepts `Depth: 0` and `Depth: infinity` (default). Existing destinations return 204; creation returns 201. Collection construction and replacement use multiple bounded metadata operations and can leave recoverable partial state on failure.
 
 |LOCK, UNLOCK
 |501 Not Implemented. The design does not select lock persistence, scope, or interaction with repository CAS.
@@ -41,13 +41,13 @@ The executable defaults to `127.0.0.1:8080` and rejects addresses that resolve o
 |PROPPATCH / dead properties
 |Atomic batch PROPPATCH stores opaque XML keyed by Entry ID and expanded property name. PROPFIND returns dead properties and basic live properties. Protected live properties return 403 and dependent properties 424. MOVE retains properties, COPY clones them, DELETE removes them, and PUT preserves them.
 
-|MOVE overwrite / collection COPY
-|MOVE replacement and collection COPY are intentionally unsupported in Phase A. The repository has no atomic namespace replacement or subtree clone operation; composing Remove/Move or repeated MKCOL/PUT would expose partial state on failure.
+|COPY/MOVE failure boundary
+|Collection COPY, COPY overwrite, and MOVE overwrite are supported. Each metadata transaction and individual namespace Move is atomic. Multi-step replacement, dead-property propagation, and displaced-tree reclamation are not globally atomic. Errors report committed changes or recovery paths; detached cleanup roots are hidden internal buffers reclaimed resumably.
 |===
 
 == COPY/MOVE semantics decision table
 
-The HTTP outcomes below follow RFC 4918 Sections 9.6.1, 9.6.2, 9.8, and 9.9.1; repository safety constraints may narrow the supported operation set as recorded above. `Destination` must be same-origin and a valid repository path. `Overwrite` accepts only `T` or `F`; omission means `T`.
+The HTTP outcomes below follow RFC 4918 Sections 9.6.1, 9.6.2, 9.8, and 9.9.1. `Destination` must be same-origin and a valid repository path. `Overwrite` accepts only `T` or `F`; omission means `T`. Multi-step replacement is not globally atomic.
 
 [cols="2,2,2,2,2"]
 |===
@@ -73,7 +73,7 @@ The HTTP outcomes below follow RFC 4918 Sections 9.6.1, 9.6.2, 9.8, and 9.9.1; r
 
 |Destination absent; parent collection exists
 |201 Created
-|201 for file; collection source returns 501 (unsupported)
+|201 for file or collection
 |201 for successful move
 |Commit is the only point that publishes a copied file
 
@@ -86,14 +86,14 @@ The HTTP outcomes below follow RFC 4918 Sections 9.6.1, 9.6.2, 9.8, and 9.9.1; r
 |Destination exists, `Overwrite` omitted or `T`, file to file
 |Replace and return 204 (9.6.1)
 |204; Begin-time Entry ID/revision CAS protects concurrent replacement
-|501 (replacement outside Phase A)
+|Supported; replacement and cleanup are separate metadata operations
 |Source unchanged; destination changes only at successful Commit
 
 |Destination exists, `Overwrite: T`, incompatible type / collection replacement
 |RFC operation-specific constraints apply; 403/409 may result (9.8.4, 9.9.1)
-|Collection replacement 501
-|501
-|No destructive pre-delete
+|Supported; displaced destination is retained under a recovery name until replacement succeeds, then reclaimed
+|Supported; displaced destination is retained under a recovery name until replacement succeeds, then reclaimed
+|Each namespace Move is atomic; a later failure may leave a recoverable displaced tree
 
 |Source equals Destination
 |COPY: 403; MOVE: 403 (9.8.4, 9.9.1)
@@ -103,21 +103,21 @@ The HTTP outcomes below follow RFC 4918 Sections 9.6.1, 9.6.2, 9.8, and 9.9.1; r
 
 |Destination is an ancestor/descendant of a collection source
 |COPY depth infinity: 403; MOVE into own subtree: 403 (9.8.4, 9.9.1)
-|Collection COPY 501 before mutation
+|403 before mutation
 |Repository rejects unsafe subtree moves; 403/409 mapping
 |No partial subtree publication
 
 |Collection COPY, `Depth: 0`
 |Copy collection resource only; omit members (9.8.3)
-|501 (Phase A subset)
+|201 or 204 according to destination state
 |N/A
-|No destination collection is created
+|Creates an empty collection copy
 
 |Collection COPY, `Depth: infinity` or omitted
 |Recursive collection copy (9.8.3); infinity is default
-|501 (Phase A subset)
+|201 or 204 according to destination state
 |N/A
-|No partial tree or unreachable staged children
+|Staged/partial trees remain reachable in registered internal buffers and are reclaimed after failure or restart
 
 |MOVE with `Depth` other than infinity
 |400 Bad Request (9.9.1)
@@ -133,7 +133,15 @@ The HTTP outcomes below follow RFC 4918 Sections 9.6.1, 9.6.2, 9.8, and 9.9.1; r
 
 |===
 
-For file COPY, source and destination are resolved before allocating a write Resource. Any failure after BeginWrite attempts daemon `Abort`; it never treats Release alone as successful cleanup. A Commit CAS failure leaves the previous destination visible. This is not a claim of multi-entry transactionality or crash-atomic subtree replacement.
+For file COPY, any failure after BeginWrite attempts daemon `Abort`; it never treats Release alone as successful cleanup. A Commit CAS failure leaves the prior file content authoritative. Collection COPY builds a detached internal tree before publishing its root. Existing collection replacement and MOVE replacement use atomic individual namespace moves, then cleanup. Failures between those steps may leave a backup name or internal buffer; the response identifies partial completion and the recovery path. No multi-entry transactionality or crash-atomic subtree replacement is claimed.
+
+== Internal detached metadata buffers
+
+SQLite maintains a dynamically sized registry of independent private buffers. Each buffer identifies one detached subtree root whose `parent_id` is unset. Ordinary path traversal, Entry-ID lookup, property access, and listings cannot expose that root or its descendants. Object-reference enumeration continues to count buffered files until reclamation deletes their metadata, so object GC cannot remove content while cleanup is pending.
+
+Recursive `DELETE` linearizes when one SQLite transaction verifies the selected root's observed parent and revision, removes it from the public namespace, and registers its buffer. A concurrent `MOVE` that commits first changes the observed revision or parent and makes the stale detach fail. After detach, public moves cannot take descendants out of the buffer. Cleanup walks bottom-up and deletes one Entry per transaction. A failure or daemon crash leaves the buffer registered; the daemon retries immediately on startup and periodically while running. Buffer cleanup is independent of object GC and does not block unrelated namespace operations.
+
+FUSE read handles keep their already-open immutable Resource and renewable content RLock until Release. Open write handles retain their daemon staging session and file descriptor; FUSE unlink records durable discard intent before namespace removal, and detached writes cannot Commit. Collection COPY uses a private buffer for construction and publishes the copied root in one metadata operation. MOVE and COPY replacement may still expose recoverable intermediate namespace state because the complete protocol operation spans multiple transactions.
 
 The adapter evaluates WebDAV entity-tag conditions against the same Begin-time CAS snapshot used by Commit, avoiding a Stat/Begin race. A concurrent update after Begin therefore fails repository CAS rather than overwriting newer content. Entry conflicts map to HTTP 412; absent resources map to 404; namespace collisions map to 412 or 405 according to the operation surface. `OPTIONS` advertises `DAV: 1`; it does not advertise class 2 locking, consistent with LOCK/UNLOCK returning 501.
 
@@ -141,4 +149,4 @@ link:https://www.rfc-editor.org/rfc/rfc4918.html#section-6.3[Section 6.3] makes 
 
 == Validation
 
-`e2e/run.sh` adds host-native G5 curl coverage for OPTIONS, GET/HEAD, PUT, ETags and conditional PUT, MKCOL/PROPFIND, atomic PROPPATCH, dead-property lifecycle across MOVE/COPY/DELETE/PUT, MOVE, file COPY, DELETE, and explicit unsupported lock responses. G0 includes tests, race, lint, and build for the independent module. Litmus results are reported separately by G7; full WebDAV compliance remains unverified because locking and replacement semantics are not implemented.
+`e2e/run.sh` adds host-native G5 curl coverage for OPTIONS, GET/HEAD, PUT, ETags and conditional PUT, MKCOL/PROPFIND, atomic PROPPATCH, dead-property lifecycle across MOVE/COPY/DELETE/PUT, MOVE, file COPY, DELETE, and explicit unsupported lock responses. G0 includes tests, race, lint, and build for the independent module. G7 Litmus results remain separate; full WebDAV compliance remains unverified because locking is not implemented and multi-step replacement has limited atomicity.

@@ -491,27 +491,16 @@ func (h *Handler) move(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) removeEntryTree(ctx context.Context, entryPath string, entry controlrpc.Entry) error {
-	// Ensure the stable Entry still occupies the path we inspected before
-	// traversing or deleting it. This avoids following a concurrent rename.
-	var current controlrpc.ResolveEntryResult
-	if err := h.client.Call(ctx, controlrpc.MethodResolveEntry, controlrpc.ResolveEntryParams{EntryID: entry.ID}, &current); err != nil {
-		return err
-	}
-	if current.Path != entryPath {
-		return fmt.Errorf("entry %s moved from %q to %q during cleanup", entry.ID, entryPath, current.Path)
-	}
-	if entry.Kind == "directory" {
-		var children []controlrpc.Entry
-		if err := h.client.Call(ctx, controlrpc.MethodList, map[string]string{"path": entryPath}, &children); err != nil {
-			return err
-		}
-		for _, child := range children {
-			if err := h.removeEntryTree(ctx, path.Join(entryPath, child.Name), child); err != nil {
-				return err
-			}
-		}
-	}
+	// RemoveEntry detaches the exact parked root atomically; metadata reclamation
+	// proceeds through the daemon's durable internal buffer.
 	return h.client.Call(ctx, controlrpc.MethodRemoveEntry, controlrpc.RemoveEntryParams{EntryID: entry.ID}, nil)
+}
+
+func copyFailure(err error, backupPath string) string {
+	if backupPath == "" {
+		return err.Error()
+	}
+	return fmt.Sprintf("%v; old destination remains at %s", err, backupPath)
 }
 
 func (h *Handler) copyFile(w http.ResponseWriter, r *http.Request) {
@@ -641,33 +630,33 @@ func (h *Handler) copyFile(w http.ResponseWriter, r *http.Request) {
 	}
 	var read controlrpc.BeginReadResult
 	if err := h.client.Call(r.Context(), controlrpc.MethodBeginRead, controlrpc.BeginReadParams{Path: src, ResourceSchemes: []string{"file"}}, &read); err != nil {
-		http.Error(w, err.Error(), statusFor(err))
+		http.Error(w, copyFailure(err, backupPath), statusFor(err))
 		return
 	}
 	sourcePath, err := localPath(read.ResourceURI)
 	if err != nil {
-		http.Error(w, errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)).Error(), http.StatusInternalServerError)
+		http.Error(w, copyFailure(errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)), backupPath), http.StatusInternalServerError)
 		return
 	}
 	source, err := os.Open(sourcePath)
 	if err != nil {
-		http.Error(w, errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)).Error(), http.StatusInternalServerError)
+		http.Error(w, copyFailure(errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)), backupPath), http.StatusInternalServerError)
 		return
 	}
 	var write controlrpc.BeginWriteResult
 	mode := info.Mode
 	if err := h.client.Call(r.Context(), controlrpc.MethodBeginWrite, controlrpc.BeginWriteParams{Path: dst, ResourceSchemes: []string{"file"}, LogicalMode: &mode}, &write); err != nil {
-		http.Error(w, errors.Join(err, source.Close(), h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)).Error(), preconditionStatus(err))
+		http.Error(w, copyFailure(errors.Join(err, source.Close(), h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)), backupPath), preconditionStatus(err))
 		return
 	}
 	stage, err := localPath(write.ResourceURI)
 	if err != nil {
-		http.Error(w, errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil), source.Close(), h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)).Error(), http.StatusInternalServerError)
+		http.Error(w, copyFailure(errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil), source.Close(), h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)), backupPath), http.StatusInternalServerError)
 		return
 	}
 	dest, err := os.OpenFile(stage, os.O_WRONLY|os.O_TRUNC, 0)
 	if err != nil {
-		http.Error(w, errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil), source.Close(), h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)).Error(), http.StatusInternalServerError)
+		http.Error(w, copyFailure(errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil), source.Close(), h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)), backupPath), http.StatusInternalServerError)
 		return
 	}
 	_, copyErr := copyWithRenew(r.Context(), h.client, write.SessionID, dest, source)
@@ -676,11 +665,11 @@ func (h *Handler) copyFile(w http.ResponseWriter, r *http.Request) {
 	sourceCloseErr := source.Close()
 	readReleaseErr := h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)
 	if err := errors.Join(copyErr, syncErr, closeErr, sourceCloseErr, readReleaseErr); err != nil {
-		http.Error(w, errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil)).Error(), http.StatusInternalServerError)
+		http.Error(w, copyFailure(errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil)), backupPath), http.StatusInternalServerError)
 		return
 	}
 	if err := h.client.Call(r.Context(), controlrpc.MethodCommit, map[string]string{"session_id": write.SessionID}, nil); err != nil {
-		http.Error(w, errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil)).Error(), preconditionStatus(err))
+		http.Error(w, copyFailure(errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil)), backupPath), preconditionStatus(err))
 		return
 	}
 	var copied controlrpc.Entry
@@ -693,8 +682,16 @@ func (h *Handler) copyFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "COPY committed but source properties could not be read: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if len(properties) > 0 {
-		changes := make([]controlrpc.DeadPropertyChange, 0, len(properties))
+	var oldProperties []controlrpc.DeadProperty
+	if err := h.client.Call(r.Context(), controlrpc.MethodDeadProperties, map[string]string{"entry_id": copied.ID}, &oldProperties); err != nil {
+		http.Error(w, "COPY committed but destination properties could not be read: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(properties) > 0 || len(oldProperties) > 0 {
+		changes := make([]controlrpc.DeadPropertyChange, 0, len(properties)+len(oldProperties))
+		for _, property := range oldProperties {
+			changes = append(changes, controlrpc.DeadPropertyChange{Property: property, Remove: true})
+		}
 		for _, property := range properties {
 			changes = append(changes, controlrpc.DeadPropertyChange{Property: property})
 		}

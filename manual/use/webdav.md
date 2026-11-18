@@ -26,12 +26,12 @@ The following method surface is implemented by the adapter. This is an explicit 
 | `PUT` | Creates or replaces a file and commits the complete request body before returning success. New files return `201`; replacement returns `204`. |
 | `MKCOL` | Creates a collection; a request body is unsupported. |
 | `DELETE` | Removes a resource through the repository namespace operation. The root cannot be deleted. |
-| `MOVE` | Moves a resource to an absent destination. Replacement is unsupported; an absolute destination with a different host is rejected. |
+| `MOVE` | Moves a resource and supports `Overwrite: T` replacement; an absolute destination with a different host is rejected. Multi-step replacement cleanup can report recoverable partial state. |
 | `COPY` | Copies files and collections. Collection COPY supports `Depth: 0` and `Depth: infinity`; `Overwrite: T` replaces an existing destination and `Overwrite: F` rejects it. An absolute destination with a different host is unsupported. |
 
 PUT supports `If-Match` and `If-None-Match` against the file state captured when the write begins. `If-Unmodified-Since` is also supported. The `If`, `If-Modified-Since`, and `If-Range` headers are rejected for PUT. A precondition conflict does not commit the request body.
 
-`LOCK`, `UNLOCK`, and `PROPPATCH` return `501 Not Implemented`. Locking and dead-property updates are unavailable; PROPFIND does not advertise the unsupported lock property. A WebDAV client that requires these features or replacement semantics may not work with this adapter. The supported methods are a subset and do not imply full WebDAV compliance or broad client compatibility.
+`LOCK` and `UNLOCK` return `501 Not Implemented`. `PROPPATCH` stores dead properties. COPY supports files and collections, including overwrite. Each metadata operation and individual namespace move is atomic; multi-step replacement, property propagation, and old-tree cleanup are not globally atomic. Errors identify committed changes or recoverable partial state. The supported methods are a subset and do not imply full WebDAV compliance or broad client compatibility.
 
 For a simple file transfer and collection listing using curl:
 

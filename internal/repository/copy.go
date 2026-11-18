@@ -22,8 +22,7 @@ type copySnapshot struct {
 }
 
 // CopyEntry clones a metadata subtree while sharing immutable content objects.
-// Staging and parked destinations remain ordinary root-reachable namespace
-// entries if any step fails, so callers can recover them with normal DELETE.
+// Staging remains in a private registered buffer until one atomic publish.
 func (r *Repository) CopyEntry(ctx context.Context, id metadata.EntryID, sourcePath string, revision uint64, destination, depth string, overwrite bool) (bool, error) {
 	source, err := r.metaStore.GetByID(ctx, id)
 	if err != nil {
@@ -76,48 +75,65 @@ func (r *Repository) CopyEntry(ctx context.Context, id metadata.EntryID, sourceP
 		if exists && !overwrite {
 			return false, fmt.Errorf("destination exists: %w", metadata.ErrEntryConflict)
 		}
-		root, err := r.metaStore.Root(ctx)
-		if err != nil {
-			return false, err
-		}
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		tmp, err := r.metaStore.Create(ctx, metadata.Entry{ID: metadata.EntryID(uuid.NewString()), ParentID: &root.ID, Name: ".nando-copy-" + uuid.NewString(), Kind: metadata.EntryKindDirectory, Mode: 0o700, Revision: 1, CreatedAt: now, UpdatedAt: now})
+		tmp, err := r.bufferStore.CreateDetachedRoot(ctx, metadata.Entry{ID: metadata.EntryID(uuid.NewString()), Kind: metadata.EntryKindDirectory, Mtime: snapshot.entry.Mtime, Mode: snapshot.entry.Mode, Revision: 1, CreatedAt: now, UpdatedAt: now})
 		if err != nil {
 			return false, err
 		}
-		if err := r.cloneDeadProperties(ctx, snapshot.entry.ID, tmp.ID); err != nil {
-			return false, err
-		}
-		if depth == "infinity" {
-			if err := r.copySnapshotChildren(ctx, snapshot, tmp); err != nil {
+		published := false
+		return r.withBufferedCopyCleanup(tmp, &published, func() (bool, error) {
+			if err := r.cloneDeadProperties(ctx, tmp.ID, snapshot.entry.ID, tmp.RootID); err != nil {
 				return false, err
 			}
-		}
-		if err := r.verifyCopySnapshot(ctx, snapshot); err != nil {
-			return false, err
-		}
-		currentParent, err := r.ResolvePath(ctx, path.Dir(dst))
-		if err != nil || currentParent.ID != parent.ID || currentParent.Kind != metadata.EntryKindDirectory {
-			return false, fmt.Errorf("COPY destination parent changed: %w", metadata.ErrEntryConflict)
-		}
-		// Move the old destination to a collision-resistant sibling. The metadata
-		// store atomically checks its revision and the unique destination name.
-		if exists {
-			backupName := ".nando-copy-old-" + uuid.NewString()
-			if _, err := r.metaStore.Move(ctx, metadata.Entry{ID: existing.ID, ParentID: &parent.ID, Name: backupName, Revision: existing.Revision}); err != nil {
+			if depth == "infinity" {
+				if err := r.copySnapshotChildren(ctx, tmp.ID, snapshot, metadata.Entry{ID: tmp.RootID}); err != nil {
+					return false, err
+				}
+			}
+			if err := r.verifyCopySnapshot(ctx, snapshot); err != nil {
 				return false, err
 			}
-		}
-		// The final Move atomically refuses any concurrent occupant. On failure,
-		// both trees remain reachable (the old one under its backup name).
-		if _, err := r.metaStore.Move(ctx, metadata.Entry{ID: tmp.ID, ParentID: &parent.ID, Name: name, Revision: tmp.Revision}); err != nil {
-			return false, err
-		}
-		if exists {
-			return true, r.removeTreeEntry(ctx, existing)
-		}
-		return false, nil
+			currentParent, err := r.ResolvePath(ctx, path.Dir(dst))
+			if err != nil || currentParent.ID != parent.ID || currentParent.Kind != metadata.EntryKindDirectory {
+				return false, fmt.Errorf("COPY destination parent changed: %w", metadata.ErrEntryConflict)
+			}
+			backupPath := ""
+			if exists {
+				backupPath = "/.nando-copy-old-" + uuid.NewString()
+				if err := r.MoveEntry(ctx, existing.ID, backupPath); err != nil {
+					return false, err
+				}
+			}
+			if _, err := r.bufferStore.PublishDetachedRoot(ctx, tmp.ID, parent.ID, name); err != nil {
+				if backupPath != "" {
+					return false, errors.Join(err, fmt.Errorf("displaced destination remains at %s", backupPath))
+				}
+				return false, err
+			}
+			published = true
+			if exists {
+				if err := r.removeTreeEntry(ctx, existing); err != nil {
+					return true, fmt.Errorf("COPY committed; old destination cleanup failed at %s: %w", backupPath, err)
+				}
+				return true, nil
+			}
+			return false, nil
+		})
 	})
+}
+
+func (r *Repository) withBufferedCopyCleanup(buffer metadata.DetachedBuffer, published *bool, operation func() (bool, error)) (replaced bool, retErr error) {
+	defer func() {
+		if *published {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), putCleanupTimeout)
+		defer cancel()
+		if err := r.reclaimDetachedBuffer(cleanupCtx, buffer); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("COPY staging remains in internal buffer %s for retry: %w", buffer.ID, err))
+		}
+	}()
+	return operation()
 }
 
 func (r *Repository) withCopySnapshotLeases(ctx context.Context, snapshot copySnapshot, operation func(context.Context) (bool, error)) (bool, error) {
@@ -175,7 +191,7 @@ func (r *Repository) captureCopySnapshot(ctx context.Context, entry metadata.Ent
 	return snapshot, nil
 }
 
-func (r *Repository) copySnapshotChildren(ctx context.Context, snapshot copySnapshot, target metadata.Entry) error {
+func (r *Repository) copySnapshotChildren(ctx context.Context, buffer metadata.BufferID, snapshot copySnapshot, target metadata.Entry) error {
 	for _, childSnapshot := range snapshot.children {
 		child := childSnapshot.entry
 		copyEntry := child
@@ -184,15 +200,15 @@ func (r *Repository) copySnapshotChildren(ctx context.Context, snapshot copySnap
 		copyEntry.Revision = 1
 		copyEntry.CreatedAt = metadata.TimestampFromTime(time.Now().UTC())
 		copyEntry.UpdatedAt = copyEntry.CreatedAt
-		created, err := r.metaStore.Create(ctx, copyEntry)
+		created, err := r.bufferStore.CreateDetachedEntry(ctx, buffer, copyEntry)
 		if err != nil {
 			return err
 		}
-		if err := r.cloneDeadProperties(ctx, child.ID, created.ID); err != nil {
+		if err := r.cloneDeadProperties(ctx, buffer, child.ID, created.ID); err != nil {
 			return err
 		}
 		if child.Kind == metadata.EntryKindDirectory {
-			if err := r.copySnapshotChildren(ctx, childSnapshot, created); err != nil {
+			if err := r.copySnapshotChildren(ctx, buffer, childSnapshot, created); err != nil {
 				return err
 			}
 		}
@@ -200,7 +216,7 @@ func (r *Repository) copySnapshotChildren(ctx context.Context, snapshot copySnap
 	return nil
 }
 
-func (r *Repository) cloneDeadProperties(ctx context.Context, source, target metadata.EntryID) error {
+func (r *Repository) cloneDeadProperties(ctx context.Context, buffer metadata.BufferID, source, target metadata.EntryID) error {
 	properties, err := r.metaStore.GetDeadProperties(ctx, source)
 	if err != nil {
 		return err
@@ -212,7 +228,7 @@ func (r *Repository) cloneDeadProperties(ctx context.Context, source, target met
 	for _, p := range properties {
 		changes = append(changes, metadata.DeadPropertyChange{Property: p})
 	}
-	return r.metaStore.UpdateDeadProperties(ctx, target, changes)
+	return r.bufferStore.SetDetachedDeadProperties(ctx, buffer, target, changes)
 }
 
 // verifyCopySnapshot rechecks membership and revisions after staging, catching

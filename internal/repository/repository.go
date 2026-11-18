@@ -22,6 +22,7 @@ import (
 // Repository coordinates the interactions between MetadataStore and ObjectStore.
 type Repository struct {
 	metaStore   metadata.MetadataStore
+	bufferStore metadata.InternalBufferStore
 	objectStore objectstore.ObjectStore
 	remoteStore objectstore.RemoteObjectStore
 	hasher      content.Hasher
@@ -42,8 +43,10 @@ func NewRepositoryWithSettings(metaStore metadata.MetadataStore, objStore object
 
 // NewRepositoryWithRemoteObjectStore installs the repository's selected remote backend.
 func NewRepositoryWithRemoteObjectStore(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, remote objectstore.RemoteObjectStore, hasher content.Hasher, coordinator Coordinator, settings Settings) *Repository {
+	bufferStore, _ := metaStore.(metadata.InternalBufferStore)
 	return &Repository{
 		metaStore:   metaStore,
+		bufferStore: bufferStore,
 		objectStore: objStore,
 		remoteStore: remote,
 		hasher:      hasher,
@@ -316,11 +319,57 @@ func (r *Repository) cat(ctx context.Context, repoPath string, w io.Writer) erro
 
 // GC deletes unreferenced objects from the object store.
 func (r *Repository) GC(ctx context.Context) (int, error) {
+	bufferErr := r.ReclaimDetached(ctx)
 	if err := r.cleanupExpiredStaging(ctx); err != nil {
 		return 0, fmt.Errorf("clean expired Put staging before GC: %w", err)
 	}
 	deletedCount, err := r.gc(ctx)
-	return deletedCount, err
+	return deletedCount, errors.Join(bufferErr, err)
+}
+
+// ReclaimDetached resumes deletion of internal namespace buffers. Each entry
+// deletion is one transaction; interrupted trees remain registered for retry.
+func (r *Repository) ReclaimDetached(ctx context.Context) error {
+	if r.bufferStore == nil {
+		return errors.New("metadata store does not support internal buffers")
+	}
+	buffers, err := r.bufferStore.DetachedBuffers(ctx)
+	if err != nil {
+		return err
+	}
+	var failures []error
+	for _, buffer := range buffers {
+		if err := r.reclaimDetachedBuffer(ctx, buffer); err != nil && !errors.Is(err, metadata.ErrEntryNotFound) {
+			failures = append(failures, fmt.Errorf("reclaim detached buffer %s: %w", buffer.ID, err))
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func (r *Repository) reclaimDetachedBuffer(ctx context.Context, buffer metadata.DetachedBuffer) error {
+	children, err := r.bufferStore.ListDetachedChildren(ctx, buffer.ID, buffer.RootID)
+	if err != nil {
+		return err
+	}
+	for _, child := range children {
+		if err := r.reclaimDetachedBranch(ctx, buffer, child.ID); err != nil {
+			return err
+		}
+	}
+	return r.bufferStore.DeleteDetachedEntry(ctx, buffer.ID, buffer.RootID)
+}
+
+func (r *Repository) reclaimDetachedBranch(ctx context.Context, buffer metadata.DetachedBuffer, id metadata.EntryID) error {
+	children, err := r.bufferStore.ListDetachedChildren(ctx, buffer.ID, id)
+	if err != nil {
+		return err
+	}
+	for _, child := range children {
+		if err := r.reclaimDetachedBranch(ctx, buffer, child.ID); err != nil {
+			return err
+		}
+	}
+	return r.bufferStore.DeleteDetachedEntry(ctx, buffer.ID, id)
 }
 
 // RestoreRemoteOrphans recreates Metadata Entries for remote objects whose

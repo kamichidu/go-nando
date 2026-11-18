@@ -37,7 +37,8 @@ type failDeleteMetadataStore struct {
 
 type failNamedCreateMetadataStore struct {
 	metadata.MetadataStore
-	name string
+	name   string
+	failID metadata.EntryID
 }
 
 func (s *failNamedCreateMetadataStore) Create(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
@@ -45,6 +46,25 @@ func (s *failNamedCreateMetadataStore) Create(ctx context.Context, entry metadat
 		return metadata.Entry{}, errors.New("injected COPY staging create failure")
 	}
 	return s.MetadataStore.Create(ctx, entry)
+}
+
+func (s *failNamedCreateMetadataStore) CreateDetachedEntry(ctx context.Context, buffer metadata.BufferID, entry metadata.Entry) (metadata.Entry, error) {
+	created, err := s.MetadataStore.CreateDetachedEntry(ctx, buffer, entry)
+	if err != nil {
+		return metadata.Entry{}, err
+	}
+	if entry.Name == s.name {
+		s.failID = created.ID
+		return created, errors.New("injected detached COPY create failure after persistence")
+	}
+	return created, nil
+}
+
+func (s *failNamedCreateMetadataStore) DeleteDetachedEntry(ctx context.Context, buffer metadata.BufferID, id metadata.EntryID) error {
+	if id == s.failID {
+		return errors.New("injected detached COPY reclaim failure")
+	}
+	return s.MetadataStore.DeleteDetachedEntry(ctx, buffer, id)
 }
 
 func (s *failDeleteMetadataStore) ListChildren(ctx context.Context, id metadata.EntryID) ([]metadata.Entry, error) {
@@ -58,6 +78,13 @@ func (s *failDeleteMetadataStore) Delete(ctx context.Context, id metadata.EntryI
 		return errors.New("injected metadata delete failure")
 	}
 	return s.MetadataStore.Delete(ctx, id)
+}
+
+func (s *failDeleteMetadataStore) DeleteDetachedEntry(ctx context.Context, buffer metadata.BufferID, id metadata.EntryID) error {
+	if id == s.failID {
+		return errors.New("injected metadata delete failure")
+	}
+	return s.MetadataStore.DeleteDetachedEntry(ctx, buffer, id)
 }
 
 type fakeRemoteObjectStore struct {
@@ -1771,6 +1798,10 @@ func TestCollectionCopySharesObjectsAndSupportsDepthAndOverwrite(t *testing.T) {
 	if copyFile.ObjectID == nil || source.ObjectID == nil || *copyFile.ObjectID != *source.ObjectID {
 		t.Fatalf("COPY did not share Content ID: source=%v copy=%v", source.ObjectID, copyFile.ObjectID)
 	}
+	copiedRoot, err := repo.Stat(ctx, "/deep")
+	if err != nil || copiedRoot.Mode != sourceDir.Mode {
+		t.Fatalf("collection COPY root mode=%o err=%v, want source mode %o", copiedRoot.Mode, err, sourceDir.Mode)
+	}
 	if _, err := repo.CopyEntry(ctx, sourceDir.ID, "/source", sourceDir.Revision, "/deep", "infinity", false); !errors.Is(err, metadata.ErrEntryConflict) {
 		t.Fatalf("Overwrite F error=%v, want conflict", err)
 	}
@@ -1787,7 +1818,7 @@ func TestCollectionCopySharesObjectsAndSupportsDepthAndOverwrite(t *testing.T) {
 	}
 }
 
-func TestCollectionCopyFailureLeavesReachableRecoveryTree(t *testing.T) {
+func TestCollectionCopyFailureKeepsPrivateBufferForRestartReclaim(t *testing.T) {
 	ctx := context.Background()
 	tempDir := t.TempDir()
 	hasher := content.NewHasher()
@@ -1815,28 +1846,28 @@ func TestCollectionCopyFailureLeavesReachableRecoveryTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var staging string
 	for _, entry := range rootEntries {
 		if strings.HasPrefix(entry.Name, ".nando-copy-") {
-			staging = "/" + entry.Name
+			t.Fatalf("COPY staging leaked into public root: %q", entry.Name)
 		}
 	}
-	if staging == "" {
-		t.Fatal("partial staging tree is not reachable from root")
+	buffers, err := metaStore.DetachedBuffers(ctx)
+	if err != nil || len(buffers) != 1 {
+		t.Fatalf("failed COPY buffer registry=%+v err=%v", buffers, err)
+	}
+	if _, err := metaStore.GetByID(ctx, buffers[0].RootID); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("staging buffer root visible by public Entry ID: %v", err)
 	}
 	if err := metaStore.Close(); err != nil {
 		t.Fatal(err)
 	}
 	reopened := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
 	reopenedRepo := openRepositoryInstance(t, tempDir, reopened, objects, hasher)
-	if _, err := reopenedRepo.Stat(ctx, staging); err != nil {
-		t.Fatalf("staging tree did not survive reopen: %v", err)
+	if err := reopenedRepo.ReclaimDetached(ctx); err != nil {
+		t.Fatalf("restart did not reclaim failed COPY staging: %v", err)
 	}
-	if err := reopenedRepo.Remove(ctx, staging); err != nil {
-		t.Fatalf("ordinary DELETE did not recover staging tree: %v", err)
-	}
-	if _, err := reopenedRepo.Stat(ctx, staging); !errors.Is(err, metadata.ErrEntryNotFound) {
-		t.Fatalf("staging tree remains after DELETE: %v", err)
+	if buffers, err := reopened.DetachedBuffers(ctx); err != nil || len(buffers) != 0 {
+		t.Fatalf("detached buffers remain after restart cleanup: %+v err=%v", buffers, err)
 	}
 }
 
@@ -1914,15 +1945,15 @@ func TestRemoveCollectionReportsPartialFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	failingMeta.failID = blocked.ID
-	if err := repo.Remove(ctx, "/tree"); err == nil || !strings.Contains(err.Error(), "injected metadata delete failure") {
-		t.Fatalf("Remove error=%v, want injected partial failure", err)
+	if err := repo.Remove(ctx, "/tree"); err != nil {
+		t.Fatalf("atomic namespace detach: %v", err)
 	}
-	if _, err := repo.Stat(ctx, "/tree/a.txt"); !errors.Is(err, metadata.ErrEntryNotFound) {
-		t.Errorf("earlier descendant should have been removed: %v", err)
+	if err := repo.ReclaimDetached(ctx); err == nil || !strings.Contains(err.Error(), "injected metadata delete failure") {
+		t.Fatalf("reclaim error=%v, want injected failure after detach", err)
 	}
-	for _, path := range []string{"/tree", "/tree/z.txt"} {
-		if _, err := repo.Stat(ctx, path); err != nil {
-			t.Errorf("unprocessed namespace %s should remain: %v", path, err)
+	for _, path := range []string{"/tree", "/tree/a.txt", "/tree/z.txt"} {
+		if _, err := repo.Stat(ctx, path); !errors.Is(err, metadata.ErrEntryNotFound) {
+			t.Errorf("detached namespace %s remains public: %v", path, err)
 		}
 	}
 	// Reopen Metadata to model a process restart after the partial failure.
@@ -1939,15 +1970,13 @@ func TestRemoveCollectionReportsPartialFailure(t *testing.T) {
 		}
 	})
 	restarted := openRepositoryInstance(t, tempDir, reopened, objects, hasher)
-	for _, path := range []string{"/tree", "/tree/z.txt"} {
-		if _, err := restarted.Stat(ctx, path); err != nil {
-			t.Errorf("namespace %s is not reachable after restart: %v", path, err)
-		}
+	if err := restarted.ReclaimDetached(ctx); err != nil {
+		t.Fatalf("resume detached-tree reclamation after restart: %v", err)
 	}
-	if entries, err := restarted.List(ctx, "/tree"); err != nil || len(entries) != 1 || entries[0].Name != "z.txt" {
-		t.Errorf("remaining subtree after restart: entries=%+v err=%v", entries, err)
+	if buffers, err := reopened.DetachedBuffers(ctx); err != nil || len(buffers) != 0 {
+		t.Fatalf("detached buffers after restart recovery: %+v err=%v", buffers, err)
 	}
-	if deleted, err := restarted.GC(ctx); err != nil || deleted != 1 {
-		t.Errorf("GC after partial recursive DELETE: deleted=%d err=%v, want one orphan blob reclaimed", deleted, err)
+	if deleted, err := restarted.GC(ctx); err != nil || deleted != 2 {
+		t.Errorf("GC after detached recursive DELETE: deleted=%d err=%v, want both orphan blobs reclaimed", deleted, err)
 	}
 }

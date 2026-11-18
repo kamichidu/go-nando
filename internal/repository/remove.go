@@ -7,9 +7,8 @@ import (
 	"github.com/kamichidu/go-nando/internal/metadata"
 )
 
-// Remove removes a file or collection from the logical repository. Collections
-// are removed bottom-up so their descendants cannot remain reachable after a
-// successful return.
+// Remove atomically detaches a file or collection from the public namespace.
+// Detached metadata is reclaimed asynchronously in resumable per-entry steps.
 func (r *Repository) Remove(ctx context.Context, repoPath string) error {
 	// 1. Resolve logical entry
 	entry, err := r.ResolvePath(ctx, repoPath)
@@ -20,28 +19,35 @@ func (r *Repository) Remove(ctx context.Context, repoPath string) error {
 	if entry.ID == "root" {
 		return fmt.Errorf("cannot remove the root directory")
 	}
-
-	return r.removeTreeEntry(ctx, entry)
+	if entry.ParentID == nil {
+		return fmt.Errorf("cannot remove an entry without a public parent")
+	}
+	return r.detachAndReclaim(ctx, entry, entry.Revision, *entry.ParentID)
 }
 
-// removeTreeEntry removes descendants before the entry. MetadataStore.Delete
-// is atomic for one entry and rejects non-empty directories, but the store
-// contract does not expose a multi-entry transaction; an error can therefore
-// leave already deleted descendants removed while the collection remains.
+// removeTreeEntry detaches the current stable Entry ID, used by ID-based adapter
+// operations such as MOVE replacement cleanup.
 func (r *Repository) removeTreeEntry(ctx context.Context, entry metadata.Entry) error {
-	if entry.Kind == metadata.EntryKindDirectory {
-		children, err := r.metaStore.ListChildren(ctx, entry.ID)
-		if err != nil {
-			return fmt.Errorf("failed to list children of %q: %w", entry.Name, err)
-		}
-		for _, child := range children {
-			if err := r.removeTreeEntry(ctx, child); err != nil {
-				return fmt.Errorf("failed to remove descendant %q: %w", child.Name, err)
-			}
-		}
+	if r.bufferStore == nil {
+		return fmt.Errorf("metadata store does not support internal deletion buffers")
 	}
-	if err := r.metaStore.Delete(ctx, entry.ID); err != nil {
-		return fmt.Errorf("failed to delete entry %q: %w", entry.Name, err)
+	current, err := r.metaStore.GetByID(ctx, entry.ID)
+	if err != nil {
+		return err
+	}
+	if current.ParentID == nil {
+		return fmt.Errorf("cannot detach root entry %q", entry.ID)
+	}
+	return r.detachAndReclaim(ctx, current, current.Revision, *current.ParentID)
+}
+
+func (r *Repository) detachAndReclaim(ctx context.Context, current metadata.Entry, expectedRevision uint64, expectedParent metadata.EntryID) error {
+	if r.bufferStore == nil {
+		return fmt.Errorf("metadata store does not support internal deletion buffers")
+	}
+	_, err := r.bufferStore.DetachTree(ctx, current.ID, expectedRevision, expectedParent)
+	if err != nil {
+		return fmt.Errorf("detach entry %q from the public namespace: %w", current.Name, err)
 	}
 	return nil
 }
@@ -55,17 +61,5 @@ func (r *Repository) RemoveEntry(ctx context.Context, id metadata.EntryID) error
 	if entry.ID == "root" {
 		return fmt.Errorf("cannot remove the root directory")
 	}
-	if entry.Kind == metadata.EntryKindDirectory {
-		children, err := r.metaStore.ListChildren(ctx, entry.ID)
-		if err != nil {
-			return fmt.Errorf("failed to check child entries: %w", err)
-		}
-		if len(children) > 0 {
-			return fmt.Errorf("cannot remove non-empty directory: %w", metadata.ErrEntryConflict)
-		}
-	}
-	if err := r.metaStore.Delete(ctx, entry.ID); err != nil {
-		return fmt.Errorf("failed to delete entry %s: %w", id, err)
-	}
-	return nil
+	return r.removeTreeEntry(ctx, entry)
 }

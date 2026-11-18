@@ -38,6 +38,10 @@ CREATE TABLE dead_properties (
     xml_value TEXT NOT NULL,
     PRIMARY KEY(entry_id, namespace_uri, localname)
 );
+CREATE TABLE internal_buffers (
+    buffer_id TEXT PRIMARY KEY,
+    root_entry_id TEXT NOT NULL UNIQUE REFERENCES entries(entry_id) ON DELETE CASCADE
+);
 `
 
 const CurrentSchemaVersion = 1

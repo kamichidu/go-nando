@@ -65,6 +65,27 @@ func ServeWithScheduler(ctx context.Context, application *app.App, repoDir strin
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
+	reclaimCtx, cancelReclaimer := context.WithCancel(ctx)
+	reclaimerDone := make(chan struct{})
+	go func() {
+		defer close(reclaimerDone)
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			if err := application.ReclaimDetached(reclaimCtx); err != nil && reclaimCtx.Err() == nil {
+				log.Printf("[maintenance:detached buffers] %v", err)
+			}
+			select {
+			case <-reclaimCtx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	defer func() {
+		cancelReclaimer()
+		<-reclaimerDone
+	}()
 	if scheduler != nil {
 		schedulerCtx, cancelScheduler := context.WithCancel(ctx)
 		schedulerDone := make(chan error, 1)
