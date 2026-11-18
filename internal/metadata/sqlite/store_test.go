@@ -2739,8 +2739,8 @@ func TestDetachedBuffersArePrivateAndResumable(t *testing.T) {
 	if buffers, err := store.DetachedBuffers(ctx); err != nil || len(buffers) != 2 {
 		t.Fatalf("buffer registry=%+v err=%v", buffers, err)
 	}
-	claimed, err := store.ClaimExpiredDetachedBuffer(ctx, buffer.ID, metadata.TimestampFromTime(time.Now().Add(25*time.Hour)), time.Minute)
-	if err != nil || !claimed.Claimed || claimed.Fencing == buffer.Fencing {
+	claimed, err := store.ClaimExpiredDetachedBuffer(ctx, buffer.ID, metadata.TimestampFromTime(time.Now().Add(25*time.Hour)))
+	if err != nil || !claimed.Claimed || claimed.Fencing == buffer.Fencing || claimed.ExpiresAt != 0 {
 		t.Fatalf("expired claim=%+v err=%v", claimed, err)
 	}
 	if _, err := store.RenewDetachedBuffer(ctx, buffer.ID, buffer.Fencing, time.Minute); !errors.Is(err, metadata.ErrEntryConflict) {
@@ -2766,7 +2766,7 @@ func TestDetachedBuffersArePrivateAndResumable(t *testing.T) {
 	if err := store.DeleteDetachedEntry(ctx, buffer.ID, claimed.Fencing, tree); err != nil {
 		t.Fatalf("resume root reclamation: %v", err)
 	}
-	secondClaim, err := store.ClaimExpiredDetachedBuffer(ctx, secondBuffer.ID, metadata.TimestampFromTime(time.Now().Add(25*time.Hour)), time.Minute)
+	secondClaim, err := store.ClaimExpiredDetachedBuffer(ctx, secondBuffer.ID, metadata.TimestampFromTime(time.Now().Add(25*time.Hour)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2794,15 +2794,15 @@ func TestActiveDetachedCopyLeaseBlocksClaimAndFencesAfterExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ClaimExpiredDetachedBuffer(ctx, buffer.ID, now, time.Minute); !errors.Is(err, metadata.ErrEntryConflict) {
+	if _, err := store.ClaimExpiredDetachedBuffer(ctx, buffer.ID, now); !errors.Is(err, metadata.ErrEntryConflict) {
 		t.Fatalf("claim active copy=%v", err)
 	}
 	renewed, err := store.RenewDetachedBuffer(ctx, buffer.ID, buffer.Fencing, time.Minute)
 	if err != nil || renewed.Fencing != buffer.Fencing {
 		t.Fatalf("renew=%+v err=%v", renewed, err)
 	}
-	claimed, err := store.ClaimExpiredDetachedBuffer(ctx, buffer.ID, metadata.TimestampFromTime(time.Now().Add(2*time.Minute)), time.Minute)
-	if err != nil || !claimed.Claimed || claimed.Fencing == buffer.Fencing {
+	claimed, err := store.ClaimExpiredDetachedBuffer(ctx, buffer.ID, metadata.TimestampFromTime(time.Now().Add(2*time.Minute)))
+	if err != nil || !claimed.Claimed || claimed.Fencing == buffer.Fencing || claimed.ExpiresAt != 0 {
 		t.Fatalf("claim expired copy=%+v err=%v", claimed, err)
 	}
 	if _, err := store.RenewDetachedBuffer(ctx, buffer.ID, buffer.Fencing, time.Minute); !errors.Is(err, metadata.ErrEntryConflict) {
@@ -2886,7 +2886,7 @@ func TestCommitPutTransferQueue(t *testing.T) {
 	parentID := metadata.EntryID("root")
 	now := metadata.TimestampFromTime(time.Now().UTC())
 	entry := metadata.Entry{ID: "queued-file", ParentID: &parentID, Name: "file.txt", Kind: metadata.EntryKindFile, ObjectID: &objectID, Revision: 1, CreatedAt: now, UpdatedAt: now}
-	if _, err := store.CommitPut(ctx, entry, true); err != nil {
+	if _, err := store.CommitPut(ctx, entry, true, false); err != nil {
 		t.Fatal(err)
 	}
 	ids, err := store.PendingTransfers(ctx)
@@ -2894,7 +2894,7 @@ func TestCommitPutTransferQueue(t *testing.T) {
 		t.Fatalf("pending transfers = %v, err %v", ids, err)
 	}
 	entry.Name = "renamed.txt"
-	updated, err := store.CommitPut(ctx, entry, true)
+	updated, err := store.CommitPut(ctx, entry, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2919,7 +2919,7 @@ func TestCommitPutTransferQueue(t *testing.T) {
 	invalid.ParentID = &badParent
 	invalid.Name = "invalid.txt"
 	invalid.Revision = 1
-	if _, err := store.CommitPut(ctx, invalid, true); !errors.Is(err, metadata.ErrEntryConflict) {
+	if _, err := store.CommitPut(ctx, invalid, true, false); !errors.Is(err, metadata.ErrEntryConflict) {
 		t.Fatalf("expected invalid Put to fail before enqueue, got %v", err)
 	}
 	ids, err = store.PendingTransfers(ctx)
@@ -2945,14 +2945,22 @@ func TestCommitPutCannotResurrectDetachedExpectedEntry(t *testing.T) {
 	root := metadata.EntryID("root")
 	now := metadata.TimestampFromTime(time.Now())
 	entry := metadata.Entry{ID: "expected", ParentID: &root, Name: "file", Kind: metadata.EntryKindFile, ObjectID: &objectID, Revision: 1, CreatedAt: now, UpdatedAt: now}
-	if _, err := store.CommitPut(ctx, entry, false); err != nil {
+	if _, err := store.CommitPut(ctx, entry, false, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DetachTree(ctx, entry.ID, 1, root); err != nil {
+	buffer, err := store.DetachTree(ctx, entry.ID, 1, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimExpiredDetachedBuffer(ctx, buffer.ID, metadata.TimestampFromTime(time.Now().Add(time.Minute)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteDetachedEntry(ctx, buffer.ID, claimed.Fencing, entry.ID); err != nil {
 		t.Fatal(err)
 	}
 	entry.Revision = 1
-	if _, err := store.CommitPut(ctx, entry, false); !errors.Is(err, metadata.ErrEntryNotFound) {
+	if _, err := store.CommitPut(ctx, entry, false, true); !errors.Is(err, metadata.ErrEntryNotFound) {
 		t.Fatalf("CommitPut resurrected detached Entry: %v", err)
 	}
 }

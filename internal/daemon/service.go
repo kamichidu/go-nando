@@ -444,8 +444,10 @@ func decodeParams(raw json.RawMessage, target any) error {
 
 func mapMethodError(err error) error {
 	switch {
-	case errors.Is(err, metadata.ErrEntryNotFound), errors.Is(err, errSessionNotFound):
+	case errors.Is(err, metadata.ErrEntryNotFound):
 		return &methodError{Code: jsonRPCEntryNotFound, Err: err}
+	case errors.Is(err, errSessionNotFound):
+		return &methodError{Code: controlrpc.CodeResourceSessionMissing, Err: err}
 	case errors.Is(err, errSessionExpired):
 		return &methodError{Code: controlrpc.CodeResourceSessionExpired, Err: err}
 	case errors.Is(err, metadata.ErrEntryConflict), errors.Is(err, errSessionBusy), errors.Is(err, errSessionClosed):

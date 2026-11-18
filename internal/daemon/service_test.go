@@ -294,6 +294,16 @@ func (f *fakeRepositoryUseCases) PutExpectedWithMode(ctx context.Context, input 
 }
 
 func (f *fakeRepositoryUseCases) PutExpectedEntryIDWithMode(ctx context.Context, input app.PutInput, observed metadata.Entry, mode *uint32) error {
+	f.mu.Lock()
+	if f.entry == nil || f.entry.ID != observed.ID {
+		f.mu.Unlock()
+		return metadata.ErrEntryNotFound
+	}
+	if f.entry.Revision != observed.Revision {
+		f.mu.Unlock()
+		return metadata.ErrEntryConflict
+	}
+	f.mu.Unlock()
 	return f.PutExpectedWithMode(ctx, input, repository.PutExpectation{EntryID: observed.ID, Revision: observed.Revision}, mode)
 }
 
@@ -1152,6 +1162,86 @@ func TestRecoveryPreservationFailuresKeepBeginManifestAndStaging(t *testing.T) {
 				t.Fatalf("Begin manifest did not reconstruct recovery: %+v", records)
 			}
 		})
+	}
+}
+
+func TestStableEntryCommitDiscardsOnlyAuthoritativeNotFound(t *testing.T) {
+	ctx := context.Background()
+	fake := &fakeRepositoryUseCases{entry: &metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 4}}
+	sessions, err := newSessionManagerWithTTL(fake, t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sessions.close(); err != nil {
+			t.Errorf("close sessions: %v", err)
+		}
+	}()
+
+	conflicted, err := sessions.beginWrite(ctx, "/file", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictStage := resourcePathFromURI(t, conflicted.ResourceURI)
+	if err := os.WriteFile(conflictStage, []byte("keep concurrent edit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	fake.entry.Revision++ // another adapter commits a newer revision while this fd is open
+	fake.content = []byte("winner")
+	fake.mu.Unlock()
+	if err := sessions.commit(ctx, conflicted.SessionID); !errors.Is(err, metadata.ErrEntryConflict) {
+		t.Fatalf("Commit conflict=%v, want recoverable CAS conflict", err)
+	}
+	if records := sessions.listRecoveries(); len(records) != 1 || records[0].SessionID != conflicted.SessionID {
+		t.Fatalf("concurrent update did not retain staged write in Recovery: %+v", records)
+	}
+	if data, err := os.ReadFile(conflictStage); err != nil || string(data) != "keep concurrent edit" {
+		t.Fatalf("conflict staging=%q err=%v", data, err)
+	}
+
+	detached, err := sessions.beginWrite(ctx, "/file", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detachedStage := resourcePathFromURI(t, detached.ResourceURI)
+	if err := os.WriteFile(detachedStage, []byte("discard detached edit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	fake.entry = nil // external recursive DELETE detached the stable Entry
+	fake.mu.Unlock()
+	if err := sessions.commit(ctx, detached.SessionID); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("detached Commit=%v, want not-found", err)
+	}
+	if _, err := os.Stat(detachedStage); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("detached staging was not discarded: %v", err)
+	}
+	if records := sessions.listRecoveries(); len(records) != 1 || records[0].SessionID != conflicted.SessionID {
+		t.Fatalf("detached write entered Recovery or conflict Recovery disappeared: %+v", records)
+	}
+
+	fake.mu.Lock()
+	fake.entry = &metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 8}
+	fake.mu.Unlock()
+	transient, err := sessions.beginWrite(ctx, "/file", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transientStage := resourcePathFromURI(t, transient.ResourceURI)
+	if err := os.WriteFile(transientStage, []byte("keep ambiguous edit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	transportErr := errors.New("metadata read unavailable")
+	fake.putErr = transportErr
+	if err := sessions.commit(ctx, transient.SessionID); !errors.Is(err, transportErr) {
+		t.Fatalf("ambiguous Commit=%v, want transport error", err)
+	}
+	if records := sessions.listRecoveries(); len(records) != 2 {
+		t.Fatalf("ambiguous failure was not retained alongside CAS Recovery: %+v", records)
+	}
+	if data, err := os.ReadFile(transientStage); err != nil || string(data) != "keep ambiguous edit" {
+		t.Fatalf("ambiguous staging=%q err=%v", data, err)
 	}
 }
 

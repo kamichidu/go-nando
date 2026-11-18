@@ -122,12 +122,6 @@ func (r *Repository) putWithMode(ctx context.Context, localPath string, repoPath
 	if localStat.IsDir() {
 		return fmt.Errorf("local path %q is a directory, directories cannot be put", localPath)
 	}
-	if expected != nil && !expected.MustBeAbsent && expected.EntryID != "" {
-		if _, err := r.metaStore.GetByID(ctx, expected.EntryID); err != nil {
-			return fmt.Errorf("expected Put Entry is no longer public: %w", metadata.ErrEntryConflict)
-		}
-	}
-
 	if err := r.cleanupExpiredStaging(ctx); err != nil {
 		return fmt.Errorf("clean expired Put staging: %w", err)
 	}
@@ -231,7 +225,18 @@ func (r *Repository) putWithMode(ctx context.Context, localPath string, repoPath
 			putEntry = existing
 		} else if errors.Is(err, metadata.ErrEntryNotFound) {
 			if expected != nil && !expected.MustBeAbsent {
-				return fmt.Errorf("Put target disappeared since Resource session began: %w", metadata.ErrEntryConflict)
+				// A path lookup can miss because the stable target was detached
+				// or because the path changed independently. Only the former is
+				// terminal unlink cleanup; metadata GetByID is authoritative for
+				// current public visibility, while transient errors stay errors.
+				_, stableErr := r.metaStore.GetByID(leaseCtx, expected.EntryID)
+				if errors.Is(stableErr, metadata.ErrEntryNotFound) {
+					return fmt.Errorf("Put stable Entry was detached: %w", metadata.ErrEntryNotFound)
+				}
+				if stableErr != nil {
+					return fmt.Errorf("verify stable Put Entry after missing path: %w", stableErr)
+				}
+				return fmt.Errorf("Put target path changed since Resource session began: %w", metadata.ErrEntryConflict)
 			}
 			createdEntry = true
 			putEntry = metadata.Entry{
@@ -259,7 +264,7 @@ func (r *Repository) putWithMode(ctx context.Context, localPath string, repoPath
 			putEntry.Mode = *mode & 0o7777
 		}
 		if r.settings.DeliveryMode == DeliveryModeRemote {
-			if _, err := r.metaStore.CommitPut(leaseCtx, putEntry, true); err != nil {
+			if _, err := r.metaStore.CommitPut(leaseCtx, putEntry, true, !createdEntry); err != nil {
 				return fmt.Errorf("failed to atomically commit remote-mode Put metadata and delivery obligation: %w", err)
 			}
 		} else if createdEntry {

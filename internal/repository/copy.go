@@ -138,7 +138,7 @@ func (r *Repository) withBufferedCopyCleanup(buffer metadata.DetachedBuffer, pub
 			retErr = errors.Join(retErr, fmt.Errorf("expire COPY lease for cleanup: %w", err))
 			return
 		}
-		claimed, err := r.bufferStore.ClaimExpiredDetachedBuffer(cleanupCtx, buffer.ID, metadata.TimestampFromTime(time.Now()), internalBufferLeaseTTL)
+		claimed, err := r.bufferStore.ClaimExpiredDetachedBuffer(cleanupCtx, buffer.ID, metadata.TimestampFromTime(time.Now()))
 		if err == nil {
 			err = r.reclaimDetachedBuffer(cleanupCtx, claimed)
 		}

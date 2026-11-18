@@ -22,6 +22,7 @@ const (
 	CodeEntryExists            = -32012
 	CodeDirectoryNotEmpty      = -32013
 	CodePermissionDenied       = -32014
+	CodeResourceSessionMissing = -32015
 )
 
 const (

@@ -37,19 +37,12 @@ func (s *ValidatingStore) RenewDetachedBuffer(ctx context.Context, id BufferID, 
 	}
 	return bufferStore.RenewDetachedBuffer(ctx, id, fence, ttl)
 }
-func (s *ValidatingStore) ClaimExpiredDetachedBuffer(ctx context.Context, id BufferID, now Timestamp, ttl time.Duration) (DetachedBuffer, error) {
+func (s *ValidatingStore) ClaimExpiredDetachedBuffer(ctx context.Context, id BufferID, now Timestamp) (DetachedBuffer, error) {
 	bufferStore, ok := s.next.(InternalBufferStore)
 	if !ok {
 		return DetachedBuffer{}, fmt.Errorf("metadata store does not support internal buffers")
 	}
-	return bufferStore.ClaimExpiredDetachedBuffer(ctx, id, now, ttl)
-}
-func (s *ValidatingStore) ReleaseDetachedBuffer(ctx context.Context, id BufferID, fence uint64) error {
-	bufferStore, ok := s.next.(InternalBufferStore)
-	if !ok {
-		return fmt.Errorf("metadata store does not support internal buffers")
-	}
-	return bufferStore.ReleaseDetachedBuffer(ctx, id, fence)
+	return bufferStore.ClaimExpiredDetachedBuffer(ctx, id, now)
 }
 func (s *ValidatingStore) ExpireDetachedBuffersAfterRestart(ctx context.Context, now Timestamp) error {
 	bufferStore, ok := s.next.(InternalBufferStore)
@@ -205,14 +198,14 @@ func (s *ValidatingStore) Delete(ctx context.Context, id EntryID) error {
 }
 
 // CommitPut validates a Put Entry and delegates its atomic persistence.
-func (s *ValidatingStore) CommitPut(ctx context.Context, entry Entry, enqueueTransfer bool) (Entry, error) {
+func (s *ValidatingStore) CommitPut(ctx context.Context, entry Entry, enqueueTransfer bool, requireExisting bool) (Entry, error) {
 	if err := runEntryValidators(entry, mustHaveEntryIDInEntry, mustNotBeRootInEntry, mustHaveValidKind, mustHaveValidRevision, mustHaveValidParentID, mustHaveNonEmptyName, mustHaveValidObjectIDForKind); err != nil {
 		return Entry{}, err
 	}
 	if entry.Kind != EntryKindFile {
 		return Entry{}, fmt.Errorf("%w: Put commit requires a file Entry", ErrEntryConflict)
 	}
-	return s.next.CommitPut(ctx, entry, enqueueTransfer)
+	return s.next.CommitPut(ctx, entry, enqueueTransfer, requireExisting)
 }
 
 // PendingTransfers delegates transfer queue listing.

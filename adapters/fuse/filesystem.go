@@ -138,6 +138,19 @@ func (f *FileSystem) call(ctx context.Context, method string, params, result any
 	return 0
 }
 
+// commitSession reports whether ENOENT came specifically from stable Entry
+// visibility. A missing/expired Resource session is distinct and must not be
+// mistaken for namespace deletion.
+func (f *FileSystem) commitSession(ctx context.Context, id string) (syscall.Errno, bool) {
+	err := f.client.Call(ctx, controlrpc.MethodCommit, map[string]string{"session_id": id}, nil)
+	if err == nil {
+		return 0, false
+	}
+	var remote *controlrpc.RemoteError
+	entryDetached := errors.As(err, &remote) && remote.Code == controlrpc.CodeEntryNotFound
+	return errnoFor(err), entryDetached
+}
+
 func (f *FileSystem) cleanupSession(ctx context.Context, id string, primary syscall.Errno) syscall.Errno {
 	if cleanup := f.call(ctx, controlrpc.MethodRelease, map[string]string{"session_id": id}, nil); cleanup != 0 {
 		return cleanup
@@ -177,6 +190,8 @@ func errnoFor(err error) syscall.Errno {
 			return syscall.EINVAL
 		case controlrpc.CodeResourceSessionExpired:
 			return syscall.ESTALE
+		case controlrpc.CodeResourceSessionMissing:
+			return syscall.ENOENT
 		case -32010:
 			return syscall.EOPNOTSUPP
 		}
@@ -646,8 +661,8 @@ func (h *fileHandle) Fsync(ctx context.Context, _ uint32) syscall.Errno {
 	if err := state.lease.failure(); err != nil {
 		return errnoFor(err)
 	}
-	if errno := state.node.owner.call(ctx, controlrpc.MethodCommit, map[string]string{"session_id": state.sessionID}, nil); errno != 0 {
-		if errno == syscall.ENOENT || (errno == syscall.EAGAIN && h.entryDetached(ctx)) {
+	if errno, entryDetached := state.node.owner.commitSession(ctx, state.sessionID); errno != 0 {
+		if entryDetached {
 			state.unlinked, state.dirty = true, false
 			state.sessionID, state.recoveryID = "", ""
 			if state.lease != nil {
@@ -684,12 +699,6 @@ func (h *fileHandle) Fsync(ctx context.Context, _ uint32) syscall.Errno {
 	return 0
 }
 
-func (h *fileHandle) entryDetached(ctx context.Context) bool {
-	var result controlrpc.ResolveEntryResult
-	err := h.node.owner.client.Call(ctx, controlrpc.MethodResolveEntry, controlrpc.ResolveEntryParams{EntryID: h.node.entryID()}, &result)
-	return errnoFor(err) == syscall.ENOENT
-}
-
 func (h *fileHandle) Flush(context.Context) syscall.Errno { return 0 }
 
 func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
@@ -709,10 +718,12 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 						result = errnoFor(err)
 						log.Printf("final-close lease check failed for Entry %s session %s: %v", state.node.entryID(), state.sessionID, result)
 					} else {
-						result = state.node.owner.call(ctx, controlrpc.MethodCommit, map[string]string{"session_id": state.sessionID}, nil)
+						commitErrno, entryDetached := state.node.owner.commitSession(ctx, state.sessionID)
+						result = commitErrno
 						if result != 0 {
 							state.lastErr = result
-							if result == syscall.ENOENT {
+							if entryDetached {
+								result = 0
 								state.unlinked = true
 								state.dirty = false
 								state.sessionID = ""
@@ -723,19 +734,8 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 									h.modeState.mu.Unlock()
 								}
 							} else {
-								if result == syscall.EAGAIN && h.entryDetached(ctx) {
-									state.unlinked = true
-									state.dirty = false
-									state.sessionID, state.recoveryID = "", ""
-									if h.modeState != nil {
-										h.modeState.mu.Lock()
-										h.modeState.deleted = true
-										h.modeState.mu.Unlock()
-									}
-								} else {
-									state.recoveryID = state.sessionID
-									log.Printf("final-close Commit failed for Entry %s session %s: %v", state.node.entryID(), state.sessionID, result)
-								}
+								state.recoveryID = state.sessionID
+								log.Printf("final-close Commit failed for Entry %s session %s: %v", state.node.entryID(), state.sessionID, result)
 							}
 						}
 					}

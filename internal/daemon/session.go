@@ -390,7 +390,11 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 		commitErr = m.putSessionContent(ctx, input, session.recoveryRecord)
 	}
 	if commitErr != nil {
-		if session.FollowEntryID && (errors.Is(commitErr, metadata.ErrEntryNotFound) || errors.Is(commitErr, metadata.ErrEntryConflict)) {
+		// ErrEntryNotFound is returned by the repository only when the stable
+		// Entry is no longer public at its metadata visibility/CAS boundary.
+		// ErrEntryConflict (including a concurrent revision update) remains
+		// recoverable; probing after that error could race and discard user data.
+		if session.FollowEntryID && errors.Is(commitErr, metadata.ErrEntryNotFound) {
 			if err := m.markDiscarding(&session.recoveryRecord, "stable FUSE Entry was detached before Commit"); err != nil {
 				m.mu.Lock()
 				session.inFlight = false

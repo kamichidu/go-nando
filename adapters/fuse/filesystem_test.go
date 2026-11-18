@@ -169,7 +169,7 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 			if !d.exists || d.entry.ID != "entry-1" {
 				_ = os.Remove(s.file)
 				delete(d.sessions, id)
-				return &controlrpc.RemoteError{Code: controlrpc.CodeEntryConflict, Message: "identity changed"}
+				return &controlrpc.RemoteError{Code: controlrpc.CodeEntryNotFound, Message: "stable Entry detached"}
 			}
 			s.path = d.path
 		} else if s.path != d.path {
@@ -715,6 +715,55 @@ func TestOpenHandlesSurviveExternalRecursiveDeleteWithoutWriteResurrection(t *te
 	}
 }
 
+func TestExternalDeleteFinalReleaseAndConcurrentConflictClassification(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name       string
+		deleted    bool
+		commitErr  error
+		wantErrno  syscall.Errno
+		wantRetain bool
+	}{
+		{name: "release after external delete discards", deleted: true, wantErrno: 0},
+		{name: "conflict racing with delete remains recoverable", deleted: true, commitErr: &controlrpc.RemoteError{Code: controlrpc.CodeEntryConflict, Message: "CAS conflict"}, wantErrno: syscall.EAGAIN, wantRetain: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			daemon := newStub(t, []byte("old"))
+			adapter := New(daemon)
+			node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+			state, errno := adapter.startWrite(ctx, node, false)
+			if errno != 0 {
+				t.Fatal(errno)
+			}
+			state.handles = 1
+			adapter.writes[node.entryID()] = state
+			handle := &fileHandle{node: node, write: state, writable: true}
+			if _, errno := handle.Write(ctx, []byte("staged update"), 0); errno != 0 {
+				t.Fatal(errno)
+			}
+			daemon.mu.Lock()
+			daemon.exists = !tc.deleted
+			daemon.commitErr = tc.commitErr
+			daemon.mu.Unlock()
+			if errno := handle.Release(ctx); errno != tc.wantErrno {
+				t.Fatalf("Release errno=%v want=%v", errno, tc.wantErrno)
+			}
+			daemon.mu.Lock()
+			defer daemon.mu.Unlock()
+			if tc.wantRetain {
+				if state.recoveryID == "" || daemon.sessions[state.recoveryID] == nil {
+					t.Fatalf("concurrent conflict lost recovery staging: state=%+v sessions=%+v", state, daemon.sessions)
+				}
+			} else if len(daemon.sessions) != 0 || state.recoveryID != "" {
+				t.Fatalf("detached close left staging session: state=%+v sessions=%+v", state, daemon.sessions)
+			}
+			if daemon.commits != 0 {
+				t.Fatalf("external delete published stale bytes; commits=%d", daemon.commits)
+			}
+		})
+	}
+}
+
 func TestSetattrResponseReflectsUncommittedSession(t *testing.T) {
 	ctx := context.Background()
 	daemon := newStub(t, []byte("content"))
@@ -1175,11 +1224,41 @@ func TestErrnoMapsRevisionConflictAndMissingEntry(t *testing.T) {
 	if got := errnoFor(&controlrpc.RemoteError{Code: controlrpc.CodeEntryNotFound}); got != syscall.ENOENT {
 		t.Fatalf("not-found errno=%v, want ENOENT", got)
 	}
+	if got := errnoFor(&controlrpc.RemoteError{Code: controlrpc.CodeResourceSessionMissing}); got != syscall.ENOENT {
+		t.Fatalf("missing-session errno=%v, want ENOENT", got)
+	}
 	if got := errnoFor(&controlrpc.RemoteError{Code: controlrpc.CodeEntryExists}); got != syscall.EEXIST {
 		t.Fatalf("entry exists errno=%v", got)
 	}
 	if got := errnoFor(&controlrpc.RemoteError{Code: controlrpc.CodeDirectoryNotEmpty}); got != syscall.ENOTEMPTY {
 		t.Fatalf("directory-not-empty errno=%v", got)
+	}
+}
+
+func TestMissingWriteSessionIsNotClassifiedAsEntryDeletion(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("old"))
+	adapter := New(daemon)
+	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	state, errno := adapter.startWrite(ctx, node, false)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	state.handles = 1
+	adapter.writes[node.entryID()] = state
+	handle := &fileHandle{node: node, write: state, writable: true}
+	if _, errno := handle.Write(ctx, []byte("bytes"), 0); errno != 0 {
+		t.Fatal(errno)
+	}
+	daemon.commitErr = &controlrpc.RemoteError{Code: controlrpc.CodeResourceSessionMissing, Message: "session missing"}
+	if errno := handle.Fsync(ctx, 0); errno != syscall.ENOENT {
+		t.Fatalf("Fsync errno=%v, want ENOENT", errno)
+	}
+	if state.unlinked || state.recoveryID == "" {
+		t.Fatalf("missing Resource session was misclassified as detached Entry: %+v", state)
+	}
+	if errno := handle.Release(ctx); errno != 0 {
+		t.Fatalf("Release: %v", errno)
 	}
 }
 
@@ -1199,6 +1278,10 @@ func TestCASFailureMakesSharedWriterTerminal(t *testing.T) {
 		t.Fatal(errno)
 	}
 	daemon.commitErr = &controlrpc.RemoteError{Code: controlrpc.CodeEntryConflict, Message: "revision changed"}
+	// The namespace can be detached immediately after a concurrent revision
+	// conflict. The conflict remains recoverable; a follow-up visibility probe
+	// must not turn it into discard.
+	daemon.exists = false
 	if errno := handle.Fsync(ctx, 0); errno != syscall.EAGAIN {
 		t.Fatalf("CAS failure errno=%v", errno)
 	}

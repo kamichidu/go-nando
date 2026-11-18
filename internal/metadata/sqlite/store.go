@@ -1005,7 +1005,7 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 // CommitPut atomically creates or updates a file Entry and optionally enqueues
 // its content ID for asynchronous delivery. It is intentionally one semantic
 // MetadataStore operation so backends can preserve the same atomic boundary.
-func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTransfer bool) (metadata.Entry, error) {
+func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTransfer bool, requireExisting bool) (metadata.Entry, error) {
 	if entry.Kind != metadata.EntryKindFile || entry.ObjectID == nil {
 		return metadata.Entry{}, fmt.Errorf("%w: Put commit requires a file with content ID", metadata.ErrEntryConflict)
 	}
@@ -1020,6 +1020,9 @@ func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTran
 
 	existing, getErr := s.getByID(ctx, tx, entry.ID)
 	if errors.Is(getErr, metadata.ErrEntryNotFound) {
+		if requireExisting {
+			return metadata.Entry{}, metadata.ErrEntryNotFound
+		}
 		if entry.ID != "" {
 			var exists int
 			if err := tx.QueryRowContext(ctx, `SELECT 1 FROM entries WHERE entry_id=?`, entry.ID.String()).Scan(&exists); err == nil {
@@ -1721,13 +1724,15 @@ func (s *Store) RenewDetachedBuffer(ctx context.Context, id metadata.BufferID, f
 	return b, nil
 }
 
-func (s *Store) ClaimExpiredDetachedBuffer(ctx context.Context, id metadata.BufferID, now metadata.Timestamp, ttl time.Duration) (metadata.DetachedBuffer, error) {
+func (s *Store) ClaimExpiredDetachedBuffer(ctx context.Context, id metadata.BufferID, now metadata.Timestamp) (metadata.DetachedBuffer, error) {
 	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return metadata.DetachedBuffer{}, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE internal_buffers SET claimed=1,fencing=fencing+1,expires_at=? WHERE buffer_id=? AND claimed=0 AND expires_at<=?`, int64(now)+int64(ttl), string(id), int64(now))
+	// Claim is durable GC ownership, not another time lease. The daemon holds
+	// the repository process lock, so only restart recovery may clear claimed.
+	res, err := tx.ExecContext(ctx, `UPDATE internal_buffers SET claimed=1,fencing=fencing+1,expires_at=0 WHERE buffer_id=? AND claimed=0 AND expires_at<=?`, string(id), int64(now))
 	if err != nil {
 		return metadata.DetachedBuffer{}, err
 	}
@@ -1745,22 +1750,6 @@ func (s *Store) ClaimExpiredDetachedBuffer(ctx context.Context, id metadata.Buff
 		return metadata.DetachedBuffer{}, err
 	}
 	return b, nil
-}
-
-func (s *Store) ReleaseDetachedBuffer(ctx context.Context, id metadata.BufferID, fence uint64) error {
-	tx, err := s.beginTx(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE internal_buffers SET claimed=0,expires_at=? WHERE buffer_id=? AND fencing=? AND claimed=1`, int64(metadata.TimestampFromTime(time.Now().Add(24*time.Hour))), string(id), fence)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return metadata.ErrEntryConflict
-	}
-	return tx.Commit()
 }
 
 func (s *Store) ExpireDetachedBuffersAfterRestart(ctx context.Context, now metadata.Timestamp) error {

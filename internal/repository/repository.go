@@ -348,7 +348,7 @@ func (r *Repository) ReclaimDetached(ctx context.Context) error {
 		claimed := buffer
 		if !buffer.Claimed {
 			var err error
-			claimed, err = r.bufferStore.ClaimExpiredDetachedBuffer(ctx, buffer.ID, metadata.TimestampFromTime(time.Now()), internalBufferLeaseTTL)
+			claimed, err = r.bufferStore.ClaimExpiredDetachedBuffer(ctx, buffer.ID, metadata.TimestampFromTime(time.Now()))
 			if errors.Is(err, metadata.ErrEntryConflict) {
 				continue
 			}
