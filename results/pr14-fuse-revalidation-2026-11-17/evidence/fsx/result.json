@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "suite": "fsx",
+  "tool": {
+    "name": "fsx",
+    "version": "d07dca72d2455f4ba8c660ad4c008541ccccb707",
+    "source_revision": "d07dca72d2455f4ba8c660ad4c008541ccccb707",
+    "installation_notes": "Separate preparation: pinned xfstests-dev source checkout; ./configure then make -C lib -j2 and make -C ltp -j2 fsx; required xfs, acl, attr development headers installed from Ubuntu 22.04 packages.",
+    "manifest": "/tmp/go-nando-e2e.muU2PX/fsx-validation/tooling-fsx.json",
+    "manifest_sha256": "83db55e7b8a9f1893a6a8cb507aa21f6b5e0b7e17d28df7640e5b087d06408f6",
+    "preconditions": {
+      "target": "real nando FUSE mount",
+      "iterations": "10000",
+      "file_size": "1MiB"
+    },
+    "executables": [
+      {
+        "name": "/tmp/nando-validation-tools/xfstests/ltp/fsx",
+        "path": "/tmp/nando-validation-tools/xfstests/ltp/fsx",
+        "sha256": "e49c3ebc31795123e3f2d92bfe033f1b7fed77533940b6698e0ef1d255dd79dc"
+      },
+      {
+        "name": "/usr/bin/git",
+        "path": "/usr/bin/git",
+        "sha256": "07997209f4513fdee3e1eb151b1c37d56cfe37f9915d331ec37d688c6b9d3ce9"
+      }
+    ],
+    "source_trees": [
+      {
+        "path": "/tmp/nando-validation-tools/xfstests/ltp",
+        "sha256": "4b0d701c8d452840bf0ea8439c5f6e1771f9aaca47e906b48dd181b5af4302ec"
+      }
+    ],
+    "version_check": {
+      "command": [
+        "git",
+        "-C",
+        "/tmp/nando-validation-tools/xfstests",
+        "rev-parse",
+        "HEAD"
+      ],
+      "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline",
+      "exit_code": 0,
+      "stdout": "d07dca72d2455f4ba8c660ad4c008541ccccb707\n",
+      "stdout_sha256": "8d6df621f2c243389a13b449cbd5669a73273a3dbd69186c391afc5054f72bc1",
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "target": "real host FUSE mount",
+  "command": [
+    "/tmp/nando-validation-tools/xfstests/ltp/fsx",
+    "-N",
+    "10000",
+    "-l",
+    "1048576",
+    "/tmp/go-nando-e2e.muU2PX/mount-fsx-validation-3186687/fsx.data"
+  ],
+  "command_display": "/tmp/nando-validation-tools/xfstests/ltp/fsx -N 10000 -l 1048576 /tmp/go-nando-e2e.muU2PX/mount-fsx-validation-3186687/fsx.data",
+  "started_at": "2026-11-16T15:41:00.633402+00:00",
+  "finished_at": "2026-11-16T15:42:28.534843+00:00",
+  "duration_seconds": 87.90138777298853,
+  "timeout_seconds": 900.0,
+  "status": "completed",
+  "failure_kind": null,
+  "failure_classification": "unclassified",
+  "preflight": {
+    "status": "passed",
+    "checks": {
+      "tooling_manifest_sha256": "83db55e7b8a9f1893a6a8cb507aa21f6b5e0b7e17d28df7640e5b087d06408f6",
+      "tooling_manifest": "passed",
+      "conditions": "passed",
+      "executables": "passed",
+      "source_trees": [
+        {
+          "path": "/tmp/nando-validation-tools/xfstests/ltp",
+          "expected_sha256": "4b0d701c8d452840bf0ea8439c5f6e1771f9aaca47e906b48dd181b5af4302ec",
+          "actual_sha256": "4b0d701c8d452840bf0ea8439c5f6e1771f9aaca47e906b48dd181b5af4302ec"
+        }
+      ],
+      "version_check": "passed"
+    },
+    "version_check": {
+      "command": [
+        "git",
+        "-C",
+        "/tmp/nando-validation-tools/xfstests",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exit_code": 0,
+      "stdout": "d07dca72d2455f4ba8c660ad4c008541ccccb707\n",
+      "stdout_sha256": "8d6df621f2c243389a13b449cbd5669a73273a3dbd69186c391afc5054f72bc1",
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "launch_error": null,
+  "timeout_error": null,
+  "exit_code": 0,
+  "conditions": {
+    "target": "real host FUSE mount",
+    "mount_options": [],
+    "allow_other": false,
+    "iterations": 10000,
+    "file_size": "1MiB",
+    "uid": 736972916,
+    "gid": 736972916
+  },
+  "conditions_sha256": "93a8e8adcee4a7adb9447c73a61bb7f3debc443f9e7e90d5741a48b1ec964020",
+  "tooling_manifest_sha256": "83db55e7b8a9f1893a6a8cb507aa21f6b5e0b7e17d28df7640e5b087d06408f6",
+  "repository_sha": "55259881880991254d7a11a24507c3c595979071",
+  "environment": {
+    "platform": "Linux-6.8.0-1070-gcp-x86_64-with-glibc2.35",
+    "python": "3.11.9",
+    "machine": "x86_64",
+    "kernel": "6.8.0-1070-gcp",
+    "cwd": "/tmp/go-nando-e2e.muU2PX/mount-fsx-validation-3186687"
+  },
+  "logs": {
+    "stdout": {
+      "path": "stdout.log",
+      "sha256": "cc0b66b28fffbe5038ace6b7701f463d9a9559f89af0bb8cba2a05986ce5cd65"
+    },
+    "stderr": {
+      "path": "stderr.log",
+      "sha256": "9437149912134ee5a6c0c449a475ac0b756524383f76bcc86afc5f534e925034"
+    },
+    "preflight": {
+      "path": "preflight.log",
+      "sha256": "56be9c5501464892fcd42041a2a7fea7f4ecb37766a72f4857c5fa5cd521c92e"
+    },
+    "tooling_manifest_input": {
+      "path": "tooling-manifest.input.json",
+      "sha256": "83db55e7b8a9f1893a6a8cb507aa21f6b5e0b7e17d28df7640e5b087d06408f6"
+    },
+    "conditions_input": {
+      "path": "conditions.input.json",
+      "sha256": "93a8e8adcee4a7adb9447c73a61bb7f3debc443f9e7e90d5741a48b1ec964020"
+    },
+    "version_check_stdout": {
+      "path": "version-check.stdout.log",
+      "sha256": "8d6df621f2c243389a13b449cbd5669a73273a3dbd69186c391afc5054f72bc1"
+    },
+    "version_check_stderr": {
+      "path": "version-check.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+}

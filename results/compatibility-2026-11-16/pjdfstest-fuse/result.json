@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "suite": "pjdfstest",
+  "tool": {
+    "name": "pjdfstest",
+    "version": "85a8aea9e685999ef0540392fd80535f873d7ff7",
+    "source_revision": "85a8aea9e685999ef0540392fd80535f873d7ff7",
+    "installation_notes": "Separate preparation: pinned Git checkout at source_revision; autoreconf -ifs && ./configure && make -j2 pjdfstest; dependencies installed from Ubuntu 22.04 packages. Tests run via upstream prove runner as root.",
+    "manifest": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline/results/compatibility-2026-11-16/tooling-pjdfstest.json",
+    "manifest_sha256": "aa1d79fbd3b9d7edd5ad6f5a70059819d88ab2a78cb182d56c65bb9b9a8c32eb",
+    "preconditions": {
+      "target": "real nando FUSE mount",
+      "privileges": "root",
+      "mount_options": "allow_other"
+    },
+    "executables": [
+      {
+        "name": "/tmp/nando-validation-tools/pjdfstest/pjdfstest",
+        "path": "/tmp/nando-validation-tools/pjdfstest/pjdfstest",
+        "sha256": "b1acd7727de7084c410c737086b7b2d58c6dc77af08a5c133b94f6f5315ba34c"
+      },
+      {
+        "name": "/usr/bin/prove",
+        "path": "/usr/bin/prove",
+        "sha256": "616af4c61030f3282766a6c0651d0c117e6bf42587c81061c28c1a8dbca2021c"
+      },
+      {
+        "name": "/usr/bin/git",
+        "path": "/usr/bin/git",
+        "sha256": "07997209f4513fdee3e1eb151b1c37d56cfe37f9915d331ec37d688c6b9d3ce9"
+      },
+      {
+        "name": "/usr/bin/perl",
+        "path": "/usr/bin/perl",
+        "sha256": "a8d9d50fc3ac99c51c87350d599846ccba57f5ca0c838cfeab2c0a334186029e"
+      }
+    ],
+    "source_trees": [
+      {
+        "path": "/tmp/nando-validation-tools/pjdfstest/tests",
+        "sha256": "2d399b61cdd439b3932d7c4d82fb25f706741f687d8e6e70925083ae9f33164f"
+      }
+    ],
+    "version_check": {
+      "command": [
+        "git",
+        "-C",
+        "/tmp/nando-validation-tools/pjdfstest",
+        "rev-parse",
+        "HEAD"
+      ],
+      "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline",
+      "exit_code": 0,
+      "stdout": "85a8aea9e685999ef0540392fd80535f873d7ff7\n",
+      "stdout_sha256": "7c1a3e0fd6d9544e8927614c40fb61a4d3dee3baa88516a96f99de06d67058c5",
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "target": "fuse",
+  "command": [
+    "prove",
+    "-rv",
+    "/tmp/nando-validation-tools/pjdfstest/tests"
+  ],
+  "command_display": "prove -rv /tmp/nando-validation-tools/pjdfstest/tests",
+  "started_at": "2026-11-16T13:45:37.222661+00:00",
+  "finished_at": "2026-11-16T14:13:14.564166+00:00",
+  "duration_seconds": 1657.3413637799677,
+  "timeout_seconds": 1800.0,
+  "status": "command_failed",
+  "failure_kind": "exit_code",
+  "failure_classification": "unclassified",
+  "preflight": {
+    "status": "passed",
+    "checks": {
+      "tooling_manifest_sha256": "aa1d79fbd3b9d7edd5ad6f5a70059819d88ab2a78cb182d56c65bb9b9a8c32eb",
+      "tooling_manifest": "passed",
+      "conditions": "passed",
+      "executables": "passed",
+      "source_trees": [
+        {
+          "path": "/tmp/nando-validation-tools/pjdfstest/tests",
+          "expected_sha256": "2d399b61cdd439b3932d7c4d82fb25f706741f687d8e6e70925083ae9f33164f",
+          "actual_sha256": "2d399b61cdd439b3932d7c4d82fb25f706741f687d8e6e70925083ae9f33164f"
+        }
+      ],
+      "version_check": "passed"
+    },
+    "version_check": {
+      "command": [
+        "git",
+        "-C",
+        "/tmp/nando-validation-tools/pjdfstest",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exit_code": 0,
+      "stdout": "85a8aea9e685999ef0540392fd80535f873d7ff7\n",
+      "stdout_sha256": "7c1a3e0fd6d9544e8927614c40fb61a4d3dee3baa88516a96f99de06d67058c5",
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "launch_error": null,
+  "timeout_error": null,
+  "exit_code": 1,
+  "conditions": {
+    "target": "FUSE",
+    "mountpoint": "/tmp/nando-validation-tools/run/mount",
+    "mount_options": [
+      "allow_other"
+    ],
+    "workload": "unmodified upstream tests tree via prove -rv",
+    "privilege": "root (required by upstream suite)",
+    "repository": "isolated local repository on XFS",
+    "other_workload": "idle except nando daemon and adapters"
+  },
+  "conditions_sha256": "66e6d66872f92e04062f24b06a3112b5b568d27f73c2fd5118d0e72dc41fb771",
+  "tooling_manifest_sha256": "aa1d79fbd3b9d7edd5ad6f5a70059819d88ab2a78cb182d56c65bb9b9a8c32eb",
+  "repository_sha": "bd12fbe8654fb3165ff359048e44ae64b74fd80b",
+  "environment": {
+    "platform": "Linux-6.8.0-1070-gcp-x86_64-with-glibc2.35",
+    "python": "3.10.12",
+    "machine": "x86_64",
+    "kernel": "6.8.0-1070-gcp",
+    "cwd": "/tmp/nando-validation-tools/run/mount"
+  },
+  "logs": {
+    "stdout": {
+      "path": "stdout.log",
+      "sha256": "d3cd5fec600d52be87dcebdc6c28928927bab602d5047adbb1bd8d15d02633db"
+    },
+    "stderr": {
+      "path": "stderr.log",
+      "sha256": "88eee6b4a9f79e32a97aa064cd768970af7a034422f87c0e5c8b7acb667253d4"
+    },
+    "preflight": {
+      "path": "preflight.log",
+      "sha256": "88679496615380f55f1d1eb75f9b0f50144426b928fa9023b3be7bb450abb776"
+    },
+    "tooling_manifest_input": {
+      "path": "tooling-manifest.input.json",
+      "sha256": "aa1d79fbd3b9d7edd5ad6f5a70059819d88ab2a78cb182d56c65bb9b9a8c32eb"
+    },
+    "conditions_input": {
+      "path": "conditions.input.json",
+      "sha256": "66e6d66872f92e04062f24b06a3112b5b568d27f73c2fd5118d0e72dc41fb771"
+    },
+    "version_check_stdout": {
+      "path": "version-check.stdout.log",
+      "sha256": "7c1a3e0fd6d9544e8927614c40fb61a4d3dee3baa88516a96f99de06d67058c5"
+    },
+    "version_check_stderr": {
+      "path": "version-check.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "harness_sources_sha256": {
+    "tools/interface_benchmark.py": "1d6b8075997a1b55d8c29422b067ba0742076a069adf55af3fd5ceb3484b7bd4",
+    "tools/validation_capture.py": "76409607b16b0d7356524a549238cbc250d9f55e0d256a02d32884f554467ee6",
+    "tools/validation_tooling.py": "9326a6a6637c6b0affcdb6b1bec2a45eb3511daa23063df5995ae95cc39fcc19"
+  },
+  "working_tree_modified_during_run": true
+}

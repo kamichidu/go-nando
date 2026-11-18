@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "tool_name": "fsx",
+  "version": "d07dca72d2455f4ba8c660ad4c008541ccccb707",
+  "version_check": {
+    "command": [
+      "git",
+      "-C",
+      "/tmp/nando-validation-tools/xfstests",
+      "rev-parse",
+      "HEAD"
+    ],
+    "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline",
+    "exit_code": 0,
+    "stdout": "d07dca72d2455f4ba8c660ad4c008541ccccb707\n",
+    "stdout_sha256": "8d6df621f2c243389a13b449cbd5669a73273a3dbd69186c391afc5054f72bc1",
+    "stderr": "",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "source_revision": "d07dca72d2455f4ba8c660ad4c008541ccccb707",
+  "installation_notes": "Separate preparation: pinned xfstests-dev source checkout; ./configure then make -C lib -j2 and make -C ltp -j2 fsx; required xfs, acl, attr development headers installed from Ubuntu 22.04 packages.",
+  "prepared_at": "2026-11-16T13:45:04.519065+00:00",
+  "preconditions": {
+    "target": "real nando FUSE mount",
+    "iterations": "10000",
+    "file_size": "1MiB"
+  },
+  "executables": [
+    {
+      "name": "/tmp/nando-validation-tools/xfstests/ltp/fsx",
+      "path": "/tmp/nando-validation-tools/xfstests/ltp/fsx",
+      "sha256": "e49c3ebc31795123e3f2d92bfe033f1b7fed77533940b6698e0ef1d255dd79dc"
+    },
+    {
+      "name": "/usr/bin/git",
+      "path": "/usr/bin/git",
+      "sha256": "07997209f4513fdee3e1eb151b1c37d56cfe37f9915d331ec37d688c6b9d3ce9"
+    }
+  ],
+  "source_trees": [
+    {
+      "path": "/tmp/nando-validation-tools/xfstests/ltp",
+      "sha256": "4b0d701c8d452840bf0ea8439c5f6e1771f9aaca47e906b48dd181b5af4302ec"
+    }
+  ],
+  "environment": {
+    "platform": "Linux-6.8.0-1070-gcp-x86_64-with-glibc2.35",
+    "kernel": "6.8.0-1070-gcp",
+    "machine": "x86_64",
+    "python": "3.11.9",
+    "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline"
+  }
+}

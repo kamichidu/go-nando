@@ -1,0 +1,31 @@
+{
+  "status": "passed",
+  "checks": {
+    "tooling_manifest_sha256": "83db55e7b8a9f1893a6a8cb507aa21f6b5e0b7e17d28df7640e5b087d06408f6",
+    "tooling_manifest": "passed",
+    "conditions": "passed",
+    "executables": "passed",
+    "source_trees": [
+      {
+        "path": "/tmp/nando-validation-tools/xfstests/ltp",
+        "expected_sha256": "4b0d701c8d452840bf0ea8439c5f6e1771f9aaca47e906b48dd181b5af4302ec",
+        "actual_sha256": "4b0d701c8d452840bf0ea8439c5f6e1771f9aaca47e906b48dd181b5af4302ec"
+      }
+    ],
+    "version_check": "passed"
+  },
+  "version_check": {
+    "command": [
+      "git",
+      "-C",
+      "/tmp/nando-validation-tools/xfstests",
+      "rev-parse",
+      "HEAD"
+    ],
+    "exit_code": 0,
+    "stdout": "d07dca72d2455f4ba8c660ad4c008541ccccb707\n",
+    "stdout_sha256": "8d6df621f2c243389a13b449cbd5669a73273a3dbd69186c391afc5054f72bc1",
+    "stderr": "",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

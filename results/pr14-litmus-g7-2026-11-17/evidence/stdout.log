@@ -1,0 +1,86 @@
+-> running `basic':
+ 0. init..................  0. init.................. pass
+ 1. begin.................  1. begin................. pass
+ 2. options............... WARNING: server does not claim Class 2 compliance
+    ...................... pass (with 1 warning)
+    ......................  3. put_get............... pass
+ 4. put_get_utf8_segment..  4. put_get_utf8_segment.. pass
+ 5. put_no_parent......... WARNING: MKCOL with missing intermediate gave 404, should be 409
+    ...................... pass (with 1 warning)
+    ......................  6. mkcol_over_plain...... pass
+ 7. delete................  7. delete................ pass
+ 8. delete_null...........  8. delete_null........... pass
+ 9. delete_fragment.......  9. delete_fragment....... pass
+10. mkcol................. 10. mkcol................. pass
+11. mkcol_again........... 11. mkcol_again........... pass
+12. delete_coll........... 12. delete_coll........... pass
+13. mkcol_no_parent....... WARNING: MKCOL with missing intermediate gave 404, should be 409 (RFC2518:8.3.1)
+    ...................... pass (with 1 warning)
+    ...................... 14. mkcol_with_body....... pass
+15. finish................ 15. finish................ pass
+<- summary for `basic': of 16 tests run: 16 passed, 0 failed. 100.0%
+-> 3 warnings were issued.
+-> running `copymove':
+ 0. init..................  0. init.................. pass
+ 1. begin.................  1. begin................. pass
+ 2. copy_init.............  2. copy_init............. pass
+ 3. copy_simple...........  3. copy_simple........... pass
+ 4. copy_overwrite........  4. copy_overwrite........ FAIL (COPY-on-existing with 'Overwrite: T' should succeed (RFC2518:S8.8.4): 412 Precondition Failed)
+ 5. copy_nodestcoll.......  5. copy_nodestcoll....... FAIL (COPY into non-existant collection '/litmus/nonesuch' succeeded)
+ 6. copy_cleanup..........  6. copy_cleanup.......... pass
+ 7. copy_coll.............  7. copy_coll............. FAIL (collection COPY `/litmus/ccsrc/' to `/litmus/ccdest/': 501 Not Implemented)
+ 8. copy_shallow..........  8. copy_shallow.......... FAIL (MKCOL on `/litmus/ccsrc/': 405 Method Not Allowed)
+ 9. move..................  9. move.................. FAIL (MOVE onto existing resource with Overwrite: T `/litmus/move2' to `/litmus/movedest': 501 Not Implemented)
+10. move_coll............. 10. move_coll............. FAIL (collection COPY `/litmus/mvsrc/' to `/litmus/mvdest2/', depth infinity: 501 Not Implemented)
+11. move_cleanup.......... 11. move_cleanup.......... pass
+12. finish................ 12. finish................ pass
+<- summary for `copymove': of 13 tests run: 7 passed, 6 failed. 53.8%
+-> running `props':
+ 0. init..................  0. init.................. pass
+ 1. begin.................  1. begin................. pass
+ 2. propfind_invalid......  2. propfind_invalid...... pass
+ 3. propfind_invalid2.....  3. propfind_invalid2..... FAIL (PROPFIND with invalid namespace declaration in body (see FAQ) got 207 response not 400)
+ 4. propfind_d0...........  4. propfind_d0........... pass
+ 5. propinit..............  5. propinit.............. pass
+ 6. propset...............  6. propset............... FAIL (PROPPATCH on `/litmus/prop': 501 Not Implemented)
+ 7. propget...............  7. propget............... SKIPPED
+ 8. propextended..........  8. propextended.......... pass
+ 9. propmove..............  9. propmove.............. SKIPPED
+10. propget............... 10. propget............... SKIPPED
+11. propdeletes........... 11. propdeletes........... SKIPPED
+12. propget............... 12. propget............... SKIPPED
+13. propreplace........... 13. propreplace........... SKIPPED
+14. propget............... 14. propget............... SKIPPED
+15. propnullns............ 15. propnullns............ SKIPPED
+16. propget............... 16. propget............... SKIPPED
+17. prophighunicode....... 17. prophighunicode....... SKIPPED
+18. propget............... 18. propget............... SKIPPED
+19. propremoveset......... 19. propremoveset......... SKIPPED
+20. propget............... 20. propget............... SKIPPED
+21. propsetremove......... 21. propsetremove......... SKIPPED
+22. propget............... 22. propget............... SKIPPED
+23. propvalnspace......... 23. propvalnspace......... SKIPPED
+24. propwformed........... 24. propwformed........... pass
+25. propinit.............. 25. propinit.............. pass
+26. propmanyns............ 26. propmanyns............ FAIL (PROPPATCH on `/litmus/prop': 501 Not Implemented)
+27. propget............... 27. propget............... FAIL (No value given for property {http://example.com/kappa}somename)
+28. propcleanup........... 28. propcleanup........... pass
+29. finish................ 29. finish................ pass
+-> 16 tests were skipped.
+<- summary for `props': of 14 tests run: 10 passed, 4 failed. 71.4%
+-> running `locks':
+ 0. init..................  0. init.................. pass
+ 1. begin.................  1. begin................. pass
+ 2. options............... WARNING: server does not claim Class 2 compliance
+    ...................... pass (with 1 warning)
+    ......................  3. precond............... SKIPPED (locking tests skipped,
+server does not claim Class 2 compliance)
+-> 1 test was skipped.
+<- summary for `locks': of 3 tests run: 3 passed, 0 failed. 100.0%
+-> 1 warning was issued.
+-> running `http':
+ 0. init..................  0. init.................. pass
+ 1. begin.................  1. begin................. pass
+ 2. expect100.............  2. expect100............. pass
+ 3. finish................  3. finish................ pass
+<- summary for `http': of 4 tests run: 4 passed, 0 failed. 100.0%

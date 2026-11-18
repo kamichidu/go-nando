@@ -1,0 +1,8 @@
+{
+  "target": "real host FUSE mount",
+  "mount_options": [],
+  "allow_other": false,
+  "workload": "committed truncate/fstat/read/fsync reproduction",
+  "uid": 736972916,
+  "gid": 736972916
+}

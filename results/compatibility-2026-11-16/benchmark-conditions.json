@@ -1,0 +1,11 @@
+{
+  "delivery_mode": "local",
+  "cache_state": "fresh unique paths; immediate read; host page cache not cleared",
+  "storage": "isolated local repository on workspace XFS filesystem",
+  "repository_filesystem": "xfs",
+  "other_workload": "isolated test services; no intentional competing workload",
+  "mount_options": ["allow_other"],
+  "host_uid": 736972916,
+  "payload_bytes": 4096,
+  "iterations": 10
+}

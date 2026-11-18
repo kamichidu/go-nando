@@ -1,0 +1,18 @@
+Canonical E2E result
+===================
+Profile: e2e/run.sh --stress
+Repository commit: cb5a88787505d6f68da766d12f4ab0bdccbfc63c
+Overall exit code: 0
+G0 PASS — root/FUSE/WebDAV test and race suites, workspace installs, lint, builds, Design IR validation
+G1 PASS — native real-FUSE local scenarios
+G2 PASS — fake-GCS delivery, outage/retry, idempotency, lost-ack replay
+G3 PASS — crash and recovery
+G4 PASS — bounded concurrent writer stress
+G5 PASS — WebDAV HTTP and PROPFIND/PROPPATCH coverage
+G6 PASS — truncate repro and pinned fsx
+G7 PASS — Litmus basic 16/16, copymove 13/13, props 30/30, locks 3/3, http 4/4 (66/66)
+Cleanup PASS — no E2E daemon/FUSE/holder processes or mounts remain
+
+Detailed G5 informational skips: LOCK/UNLOCK intentionally unsupported and separately asserted as 501; cadaver optional tool not installed. G5 gate passed.
+
+Conditions, manifests, per-gate raw logs, scenario logs, WebDAV results, Litmus raw logs and derived analysis, fsx validation captures, cleanup records, and SHA256SUMS are in this directory and raw-run/. Full unfiltered temp capture remains at /tmp/go-nando-e2e.1Lx9jz.

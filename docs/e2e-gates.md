@@ -1,6 +1,6 @@
 = Reproducible E2E gates
 
-`e2e/run.sh` is the host one-command entry point for G0-G3 plus WebDAV G5. Docker Compose owns only the pinned `fake-gcs-server` external dependency. Go checks, `nando`, `nando-fuse`, `nando-webdav`, and the scenario runner execute directly on the Linux/WSL host. The gate never mounts FUSE inside a container, requests `privileged`, or grants a container mount capabilities.
+`e2e/run.sh` is the host one-command entry point for G0-G3, real FUSE truncate/fsx G6, WebDAV HTTP G5, and full Litmus WebDAV G7. Docker Compose owns only the pinned `fake-gcs-server` external dependency. Go checks, `nando`, `nando-fuse`, `nando-webdav`, Litmus, and the scenario runner execute directly on the Linux/WSL host. The gate never mounts FUSE inside a container, requests `privileged`, or grants a container mount capabilities.
 
 Run the required gates:
 
@@ -43,6 +43,48 @@ The host needs Go 1.25.1, Python 3, curl, Docker Compose v2, `golangci-lint`, `f
 Every run creates an isolated temporary evidence and repository directory and a unique Compose project. The command starts fake GCS, then G0 runs root, FUSE, and WebDAV module unit and race tests, workspace install targets, the repository lint configuration and checks for all modules, native binary builds, and the pinned Design IR validator. G1 uses only a Local-mode repository and makes no GCS requests. G2 uses a project-scoped named volume and loopback-only host port to test fake GCS delivery, outage, restart, and retry. A host-only HTTP fault proxy holds the successful upload response after fake GCS has durably accepted one object; the gate kills the daemon before the response can acknowledge transfer completion, restarts it, and verifies an actual replay keeps the same generation and single object name. The proxy is test infrastructure only; it adds no production hook. Native binaries use the isolated repositories and Unix sockets. Exit cleanup discovers only processes whose executable arguments refer to that run's artifact directory, terminates their process groups or recorded proxy PID with deadlines, unmounts only mounts under that directory, reports D-state processes, captures Compose status and logs, and runs `docker compose down --volumes --remove-orphans`. Any remaining process, mount, or cleanup failure makes the command fail. Evidence remains under the printed `/tmp/go-nando-e2e.*` path. No existing repository state or volume is reused.
 
 Missing FUSE prerequisites produce G1-G3 `SKIP` and a nonzero overall result. A failed or unavailable real mount never becomes PASS. Each scenario has a 45-second deadline; readiness and eventual conditions poll against monotonic deadlines, and each gate has an outer timeout. Logs include `gates.tsv`, per-gate command output, `scenarios.jsonl`, `scenarios.log`, native daemon/FUSE logs, and Compose logs. If a kernel operation becomes uninterruptible, the gate fails, attempts unmount and process cleanup, and leaves the evidence directory for diagnosis.
+
+G6 reuses the native daemon startup, readiness probe, `runner.py` mount context, and
+scoped EXIT cleanup. It builds `nando-fuse` from the checked out HEAD in G0,
+mounts with the adapter defaults (an empty mount option list), then runs the
+committed truncate reproduction and the prepared xfstests-dev `fsx` through
+`tools/validation_capture.py`. It does not request `allow_other`; the mount is
+accessed by the same host user that starts it. The prepared fsx manifest checks
+the executable digest, source revision, source tree, and read-only version
+command before running. Captures are copied to
+`results/pr14-fuse-revalidation-2026-11-17/evidence/`, including each command,
+revision, exit status, conditions, preflight, stdout, stderr, and result JSON.
+The gate distinguishes a successful command from a captured nonzero failure;
+missing prerequisites remain `SKIP`, and neither state is reported as PASS.
+
+G7 uses the G0-built `nando` and `nando-webdav` binaries, native daemon ping
+readiness, a loopback HTTP readiness probe, and bounded process cleanup. It
+creates a fresh Local repository and runs every default Litmus 0.13-4 group
+with `--keep-going`. `tools/validation_capture.py` records executable and
+`dpkg-query` hashes, the Debian source package revision, exact command, target
+URL and conditions, repository commit, exit code, stdout, stderr, and
+preflight. G7 parses every group summary; process exit zero does not override
+failed cases or missing default groups. Captures and derived analysis are
+retained under `results/pr14-litmus-g7-2026-11-17/`.
+
+The default suite shares `/litmus/` across groups. G7 records each group and
+each executed case as `PASS`, `FAIL`, `UNSUPPORTED`, or `SKIP`. Non-empty
+collection `DELETE` must remove descendants so later groups can recreate
+`/litmus/`; the HTTP regression also verifies descendants return 404 from
+`GET` and `PROPFIND` and that the deleted namespace can be reused. The
+repository metadata contract deletes one entry atomically and rejects deleting
+a non-empty collection, but does not offer a transaction spanning a tree. A
+failure during recursive deletion can leave already processed descendants
+deleted while the parent and unprocessed entries remain; G5 and repository
+tests capture this behavior.
+
+The saved fresh-parent COPY/MOVE reproduction under
+`results/compatibility-2026-11-16/litmus-isolated-repro/` documents independent
+outcomes: overwrite COPY returns 412, COPY into a missing destination
+collection succeeds unexpectedly, and collection or replacement COPY/MOVE
+cases return 501 under the Phase A unsupported boundary. `LOCK` and
+`PROPPATCH` remain unsupported contract areas. These results are kept separate
+from the collection `DELETE` fix.
 
 == Scenario catalog
 
@@ -127,6 +169,13 @@ Missing FUSE prerequisites produce G1-G3 `SKIP` and a nonzero overall result. A 
 |G5 `G5-01`
 |WebDAV HTTP interoperability smoke check
 |Host curl verifies OPTIONS, GET/HEAD and ETag, PUT with If-Match/If-None-Match, MKCOL/PROPFIND, MOVE, file COPY to an absent path, DELETE, and explicit 501 responses for LOCK/PROPPATCH.
+|G6 `G6-01` / `G6-02`
+|Real FUSE truncate and fsx revalidation
+|The committed truncate reproduction and pinned fsx run against a fresh Local repository through the G0-built `nando-fuse`; `validation_capture.py` records independent result JSON and raw logs. Mount options are empty and `allow_other` is omitted.
+
+|G7 `G7-litmus`
+|Full prepared Litmus WebDAV compatibility suite
+|All five default groups run against the HEAD-built daemon and WebDAV HTTP server. Group summaries determine PASS/FAIL. Missing prepared tooling is `SKIP`; captured failed cases make G7 `FAIL` without discarding the baseline.
 |===
 
 == Emulator scope

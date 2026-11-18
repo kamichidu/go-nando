@@ -1,0 +1,72 @@
+{
+  "status": "completed_with_residual_failures",
+  "g7": "FAIL",
+  "derived_suite_status": "FAIL",
+  "target_commit": "c4341cc540597520777f755a2ff3e2a83c304f5e",
+  "builds": [
+    {
+      "path": "/tmp/go-nando-webdav-head.pjFvSW/bin/nando",
+      "sha256": "ad75c77d0c26cba3749bf63318b27744b9942752333f003a8e97356600fb7884",
+      "built_from": "c4341cc540597520777f755a2ff3e2a83c304f5e"
+    },
+    {
+      "path": "/tmp/go-nando-webdav-head.pjFvSW/bin/nando-webdav",
+      "sha256": "1e8a7bcb4a3649f3b6378530072acaa9ea24050ed676427edd4d4cc20bac3baa",
+      "built_from": "c4341cc540597520777f755a2ff3e2a83c304f5e"
+    }
+  ],
+  "repository_init": {
+    "exit_code": 0,
+    "delivery_mode": "local",
+    "repository": "/tmp/go-nando-webdav-head.pjFvSW/state/repository"
+  },
+  "webdav_http_gate": "PASS",
+  "litmus_process_exit_code": 0,
+  "groups": [
+    {
+      "name": "basic",
+      "tests_run": 16,
+      "passed": 16,
+      "failed": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "copymove",
+      "tests_run": 13,
+      "passed": 7,
+      "failed": 6,
+      "status": "FAIL"
+    },
+    {
+      "name": "props",
+      "tests_run": 14,
+      "passed": 10,
+      "failed": 4,
+      "status": "FAIL"
+    },
+    {
+      "name": "locks",
+      "tests_run": 3,
+      "passed": 3,
+      "failed": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "http",
+      "tests_run": 4,
+      "passed": 4,
+      "failed": 0,
+      "status": "PASS"
+    }
+  ],
+  "setup_chain": "PASS; DELETE 409 \u2192 MKCOL 405 did not recur",
+  "canonical_e2e": {
+    "command": "DESIGN_IR_REPO=/home/sekito_centsys_jp/workspaces/design-ir e2e/run.sh",
+    "design_ir_revision": "455ed318b7bc409d3e1da320620ef92d457042b9",
+    "result": "G0 FAIL because Docker could not bind 127.0.0.1:4443 (already allocated); G1-G7 marked SKIP by canonical runner",
+    "evidence": "canonical-e2e-G0.log"
+  },
+  "go_race": "PASS: go test -race ./... in root, adapters/webdav, and adapters/fuse",
+  "evidence_path": "evidence/",
+  "source_changes_committed": true
+}

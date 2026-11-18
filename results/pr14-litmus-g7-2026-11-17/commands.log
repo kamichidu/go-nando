@@ -1,0 +1,1 @@
+HEAD c4341cc540597520777f755a2ff3e2a83c304f5e: go build ./cmd/nando and ./adapters/webdav/cmd/nando-webdav; fresh Local repository; loopback HTTP; tools/validation_capture.py --suite litmus --target webdav -- litmus --keep-going <URL>

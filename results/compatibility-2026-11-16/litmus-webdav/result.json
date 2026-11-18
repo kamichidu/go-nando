@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "suite": "litmus",
+  "tool": {
+    "name": "litmus",
+    "version": "0.13-4",
+    "source_revision": "",
+    "installation_notes": "Separate preparation: Ubuntu 22.04 package litmus 0.13-4 installed via apt; no runtime updates.",
+    "manifest": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline/results/compatibility-2026-11-16/tooling-litmus.json",
+    "manifest_sha256": "06f0ad2eafdc195eeb565d2b497362342b24c9c9ad7354a56e4f320aa06b9197",
+    "preconditions": {
+      "target": "real loopback nando WebDAV server",
+      "auth": "none"
+    },
+    "executables": [
+      {
+        "name": "/usr/bin/litmus",
+        "path": "/usr/bin/litmus",
+        "sha256": "c48fd902ddd4464605f2f5bda2f54ee8d634431886c7ed16c4681c5d3a0f2704"
+      },
+      {
+        "name": "/usr/bin/dpkg-query",
+        "path": "/usr/bin/dpkg-query",
+        "sha256": "11b7055ec6ec739838f171182ced296ca75ec2da2d32e4331e9926021d6f8d08"
+      }
+    ],
+    "source_trees": [],
+    "version_check": {
+      "command": [
+        "dpkg-query",
+        "-W",
+        "-f=${Version}",
+        "litmus"
+      ],
+      "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline",
+      "exit_code": 0,
+      "stdout": "0.13-4",
+      "stdout_sha256": "50414a8fdc9ed0c1fc8f044289b73188edc757f66ce398a0d8ff9ab818d160bc",
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "target": "webdav",
+  "command": [
+    "litmus",
+    "-k",
+    "http://127.0.0.1:18080/"
+  ],
+  "command_display": "litmus -k http://127.0.0.1:18080/",
+  "started_at": "2026-11-16T13:48:51.934095+00:00",
+  "finished_at": "2026-11-16T13:48:52.493236+00:00",
+  "duration_seconds": 0.5591080010053702,
+  "timeout_seconds": 600.0,
+  "status": "completed",
+  "failure_kind": null,
+  "failure_classification": "unclassified",
+  "preflight": {
+    "status": "passed",
+    "checks": {
+      "tooling_manifest_sha256": "06f0ad2eafdc195eeb565d2b497362342b24c9c9ad7354a56e4f320aa06b9197",
+      "tooling_manifest": "passed",
+      "conditions": "passed",
+      "executables": "passed",
+      "source_trees": [],
+      "version_check": "passed"
+    },
+    "version_check": {
+      "command": [
+        "dpkg-query",
+        "-W",
+        "-f=${Version}",
+        "litmus"
+      ],
+      "exit_code": 0,
+      "stdout": "0.13-4",
+      "stdout_sha256": "50414a8fdc9ed0c1fc8f044289b73188edc757f66ce398a0d8ff9ab818d160bc",
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "launch_error": null,
+  "timeout_error": null,
+  "exit_code": 0,
+  "conditions": {
+    "target": "WebDAV",
+    "url": "http://127.0.0.1:18080/",
+    "auth": "none",
+    "workload": "unmodified litmus default suite",
+    "repository": "isolated local repository on XFS",
+    "other_workload": "idle except nando daemon and adapters"
+  },
+  "conditions_sha256": "6f79d3b0e9dff73e86387edf580449d68b131d721f0790198d787444ceb15998",
+  "tooling_manifest_sha256": "06f0ad2eafdc195eeb565d2b497362342b24c9c9ad7354a56e4f320aa06b9197",
+  "repository_sha": "bd12fbe8654fb3165ff359048e44ae64b74fd80b",
+  "environment": {
+    "platform": "Linux-6.8.0-1070-gcp-x86_64-with-glibc2.35",
+    "python": "3.11.9",
+    "machine": "x86_64",
+    "kernel": "6.8.0-1070-gcp",
+    "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline"
+  },
+  "logs": {
+    "stdout": {
+      "path": "stdout.log",
+      "sha256": "0d1b8b48a4e510d5850af088c5455660cea0ea5c0453517685aedde43fd0e487"
+    },
+    "stderr": {
+      "path": "stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "preflight": {
+      "path": "preflight.log",
+      "sha256": "a0501d72fea72ba11d43388839696436325f354a27873df5637084c1dd0fba19"
+    },
+    "tooling_manifest_input": {
+      "path": "tooling-manifest.input.json",
+      "sha256": "06f0ad2eafdc195eeb565d2b497362342b24c9c9ad7354a56e4f320aa06b9197"
+    },
+    "conditions_input": {
+      "path": "conditions.input.json",
+      "sha256": "6f79d3b0e9dff73e86387edf580449d68b131d721f0790198d787444ceb15998"
+    },
+    "version_check_stdout": {
+      "path": "version-check.stdout.log",
+      "sha256": "50414a8fdc9ed0c1fc8f044289b73188edc757f66ce398a0d8ff9ab818d160bc"
+    },
+    "version_check_stderr": {
+      "path": "version-check.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "auxiliary_logs": {
+    "debug.log": {
+      "path": "debug.log",
+      "sha256": "5bcafbd1b67134ef199a593298fff3b6a9c339c0e60233909dd31463c31d5f18",
+      "bytes": 27037
+    },
+    "child.log": {
+      "path": "child.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  },
+  "harness_sources_sha256": {
+    "tools/interface_benchmark.py": "1d6b8075997a1b55d8c29422b067ba0742076a069adf55af3fd5ceb3484b7bd4",
+    "tools/validation_capture.py": "76409607b16b0d7356524a549238cbc250d9f55e0d256a02d32884f554467ee6",
+    "tools/validation_tooling.py": "9326a6a6637c6b0affcdb6b1bec2a45eb3511daa23063df5995ae95cc39fcc19"
+  },
+  "working_tree_modified_during_run": true
+}

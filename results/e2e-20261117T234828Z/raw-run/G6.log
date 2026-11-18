@@ -1,0 +1,8 @@
+COMMAND G6: bash -c $'\n  set -Eeuo pipefail\n  rm -rf "$2"\n  "$1" --repository "$2" init --delivery-mode local\n  setsid "$1" --repository "$2" --daemon-listen "unix://$3" daemon >"$4/daemon-fsx.log" 2>&1 & daemon=$!\n  trap "kill -TERM \\$daemon 2>/dev/null || true; wait \\$daemon 2>/dev/null || true" EXIT\n  export E2E_REPOSITORY="$2" E2E_SOCKET="$3"\n  python3 "$5/e2e/runner.py" wait-daemon\n  python3 "$5/e2e/runner.py" fsx-validation\n' _ /tmp/go-nando-e2e.1Lx9jz/bin/nando /tmp/go-nando-e2e.1Lx9jz/state/local/repository /tmp/go-nando-e2e.1Lx9jz/run/nando.sock /tmp/go-nando-e2e.1Lx9jz /home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline 
+Initialized empty nando repository in /tmp/go-nando-e2e.1Lx9jz/state/local/repository
+PASS daemon readiness: ping succeeded
+{"tooling_manifest": "/tmp/go-nando-e2e.1Lx9jz/fsx-validation/tooling-truncate-probe.json", "tool_name": "truncate-probe", "version": "Python 3.11.9"}
+{"result": "/tmp/go-nando-e2e.1Lx9jz/fsx-validation/truncate-probe/result.json", "status": "completed", "exit_code": 0}
+{"result": "/tmp/go-nando-e2e.1Lx9jz/fsx-validation/fsx/result.json", "status": "completed", "exit_code": 0}
+PASS G6-01: captured result and logs
+PASS G6-02: captured result and logs

@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "suite": "fsx",
+  "tool": {
+    "name": "fsx",
+    "version": "d07dca72d2455f4ba8c660ad4c008541ccccb707",
+    "source_revision": "d07dca72d2455f4ba8c660ad4c008541ccccb707",
+    "installation_notes": "Separate preparation: pinned xfstests-dev source checkout; ./configure then make -C lib -j2 and make -C ltp -j2 fsx; required xfs, acl, attr development headers installed from Ubuntu 22.04 packages.",
+    "manifest": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline/results/compatibility-2026-11-16/tooling-fsx.json",
+    "manifest_sha256": "83db55e7b8a9f1893a6a8cb507aa21f6b5e0b7e17d28df7640e5b087d06408f6",
+    "preconditions": {
+      "target": "real nando FUSE mount",
+      "iterations": "10000",
+      "file_size": "1MiB"
+    },
+    "executables": [
+      {
+        "name": "/tmp/nando-validation-tools/xfstests/ltp/fsx",
+        "path": "/tmp/nando-validation-tools/xfstests/ltp/fsx",
+        "sha256": "e49c3ebc31795123e3f2d92bfe033f1b7fed77533940b6698e0ef1d255dd79dc"
+      },
+      {
+        "name": "/usr/bin/git",
+        "path": "/usr/bin/git",
+        "sha256": "07997209f4513fdee3e1eb151b1c37d56cfe37f9915d331ec37d688c6b9d3ce9"
+      }
+    ],
+    "source_trees": [
+      {
+        "path": "/tmp/nando-validation-tools/xfstests/ltp",
+        "sha256": "4b0d701c8d452840bf0ea8439c5f6e1771f9aaca47e906b48dd181b5af4302ec"
+      }
+    ],
+    "version_check": {
+      "command": [
+        "git",
+        "-C",
+        "/tmp/nando-validation-tools/xfstests",
+        "rev-parse",
+        "HEAD"
+      ],
+      "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline",
+      "exit_code": 0,
+      "stdout": "d07dca72d2455f4ba8c660ad4c008541ccccb707\n",
+      "stdout_sha256": "8d6df621f2c243389a13b449cbd5669a73273a3dbd69186c391afc5054f72bc1",
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "target": "fuse",
+  "command": [
+    "/tmp/nando-validation-tools/xfstests/ltp/fsx",
+    "-N",
+    "10000",
+    "-l",
+    "1048576",
+    "/tmp/nando-validation-tools/run/mount/fsx.data"
+  ],
+  "command_display": "/tmp/nando-validation-tools/xfstests/ltp/fsx -N 10000 -l 1048576 /tmp/nando-validation-tools/run/mount/fsx.data",
+  "started_at": "2026-11-16T13:48:39.876943+00:00",
+  "finished_at": "2026-11-16T13:48:40.331306+00:00",
+  "duration_seconds": 0.45432322699343786,
+  "timeout_seconds": 300.0,
+  "status": "command_failed",
+  "failure_kind": "exit_code",
+  "failure_classification": "unclassified",
+  "preflight": {
+    "status": "passed",
+    "checks": {
+      "tooling_manifest_sha256": "83db55e7b8a9f1893a6a8cb507aa21f6b5e0b7e17d28df7640e5b087d06408f6",
+      "tooling_manifest": "passed",
+      "conditions": "passed",
+      "executables": "passed",
+      "source_trees": [
+        {
+          "path": "/tmp/nando-validation-tools/xfstests/ltp",
+          "expected_sha256": "4b0d701c8d452840bf0ea8439c5f6e1771f9aaca47e906b48dd181b5af4302ec",
+          "actual_sha256": "4b0d701c8d452840bf0ea8439c5f6e1771f9aaca47e906b48dd181b5af4302ec"
+        }
+      ],
+      "version_check": "passed"
+    },
+    "version_check": {
+      "command": [
+        "git",
+        "-C",
+        "/tmp/nando-validation-tools/xfstests",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exit_code": 0,
+      "stdout": "d07dca72d2455f4ba8c660ad4c008541ccccb707\n",
+      "stdout_sha256": "8d6df621f2c243389a13b449cbd5669a73273a3dbd69186c391afc5054f72bc1",
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "launch_error": null,
+  "timeout_error": null,
+  "exit_code": 130,
+  "conditions": {
+    "target": "FUSE",
+    "mountpoint": "/tmp/nando-validation-tools/run/mount",
+    "mount_options": [
+      "allow_other"
+    ],
+    "workload": "upstream xfstests-dev ltp/fsx; -N 10000",
+    "file": "/tmp/nando-validation-tools/run/mount/fsx.data",
+    "file_size": "1MiB",
+    "repository": "isolated local repository on XFS",
+    "other_workload": "idle except nando daemon and adapters"
+  },
+  "conditions_sha256": "c812f88b880b94727cfe13a1ab9034a407b1d380ce1dcad5a3b58c51911fc31b",
+  "tooling_manifest_sha256": "83db55e7b8a9f1893a6a8cb507aa21f6b5e0b7e17d28df7640e5b087d06408f6",
+  "repository_sha": "bd12fbe8654fb3165ff359048e44ae64b74fd80b",
+  "environment": {
+    "platform": "Linux-6.8.0-1070-gcp-x86_64-with-glibc2.35",
+    "python": "3.11.9",
+    "machine": "x86_64",
+    "kernel": "6.8.0-1070-gcp",
+    "cwd": "/tmp/nando-validation-tools/run/mount"
+  },
+  "logs": {
+    "stdout": {
+      "path": "stdout.log",
+      "sha256": "1544053fed171a02fb5584efcbbf8213b788ce1cf3639ba09796e2ef8124ae05"
+    },
+    "stderr": {
+      "path": "stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "preflight": {
+      "path": "preflight.log",
+      "sha256": "56be9c5501464892fcd42041a2a7fea7f4ecb37766a72f4857c5fa5cd521c92e"
+    },
+    "tooling_manifest_input": {
+      "path": "tooling-manifest.input.json",
+      "sha256": "83db55e7b8a9f1893a6a8cb507aa21f6b5e0b7e17d28df7640e5b087d06408f6"
+    },
+    "conditions_input": {
+      "path": "conditions.input.json",
+      "sha256": "c812f88b880b94727cfe13a1ab9034a407b1d380ce1dcad5a3b58c51911fc31b"
+    },
+    "version_check_stdout": {
+      "path": "version-check.stdout.log",
+      "sha256": "8d6df621f2c243389a13b449cbd5669a73273a3dbd69186c391afc5054f72bc1"
+    },
+    "version_check_stderr": {
+      "path": "version-check.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "harness_sources_sha256": {
+    "tools/interface_benchmark.py": "1d6b8075997a1b55d8c29422b067ba0742076a069adf55af3fd5ceb3484b7bd4",
+    "tools/validation_capture.py": "76409607b16b0d7356524a549238cbc250d9f55e0d256a02d32884f554467ee6",
+    "tools/validation_tooling.py": "9326a6a6637c6b0affcdb6b1bec2a45eb3511daa23063df5995ae95cc39fcc19"
+  },
+  "working_tree_modified_during_run": true
+}

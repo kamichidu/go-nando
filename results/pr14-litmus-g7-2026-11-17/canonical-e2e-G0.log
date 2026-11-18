@@ -1,0 +1,9 @@
+COMMAND G0: bash -c $'\n  set -Eeuo pipefail\n  compose=(docker compose --project-directory "$1" -f "$1/e2e/compose.yaml" -p "$2")\n  "${compose[@]}" up -d fake-gcs\n  exec bash "$1/e2e/static.sh" "$1" "$3"\n' _ /home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline go-nando-e2e-20261116163815-3421186 /home/sekito_centsys_jp/workspaces/design-ir 
+ Network go-nando-e2e-20261116163815-3421186_default  Creating
+ Network go-nando-e2e-20261116163815-3421186_default  Created
+ Volume "go-nando-e2e-20261116163815-3421186_fake-gcs-data"  Creating
+ Volume "go-nando-e2e-20261116163815-3421186_fake-gcs-data"  Created
+ Container go-nando-e2e-20261116163815-3421186-fake-gcs-1  Creating
+ Container go-nando-e2e-20261116163815-3421186-fake-gcs-1  Created
+ Container go-nando-e2e-20261116163815-3421186-fake-gcs-1  Starting
+Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint go-nando-e2e-20261116163815-3421186-fake-gcs-1 (080151b9738681d58f56e433e3ec104d3acd30941dc3f07268a05316e9117b47): Bind for 127.0.0.1:4443 failed: port is already allocated

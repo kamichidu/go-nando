@@ -1,0 +1,321 @@
+{
+  "schema_version": 1,
+  "kind": "interface_benchmark",
+  "interface": "webdav",
+  "started_at": "2026-11-16T13:43:25.210942+00:00",
+  "finished_at": "2026-11-16T13:43:25.565807+00:00",
+  "repository_sha": "bd12fbe8654fb3165ff359048e44ae64b74fd80b",
+  "tool": {
+    "name": "go-nando",
+    "version": "bd12fbe8654f"
+  },
+  "measurement_scope": "end_to_end",
+  "adapter_cost_isolation": "not_measured; cross-interface latency differences are not attributable to adapter-only cost",
+  "comparison_policy": "Do not interpret simple RPC/FUSE/WebDAV latency deltas as adapter thinness or overhead.",
+  "interface_conditions": {
+    "rpc": {
+      "connection": "new Unix HTTP connection for each JSON-RPC request; no connection reuse",
+      "cache": "daemon/resource behavior included; harness adds no cache",
+      "write_commit_boundary": "beginWrite + local Resource write/fsync + commit + release",
+      "read_boundary": "beginRead + local Resource read + release"
+    },
+    "fuse": {
+      "connection": "kernel FUSE requests; adapter RPC behavior included",
+      "cache": "adapter sets zero entry/attribute/negative lookup TTL and uses FOPEN_DIRECT_IO",
+      "write_commit_boundary": "write + fsync; adapter commit performed by fsync",
+      "read_boundary": "open/read/close through FUSE adapter"
+    },
+    "webdav": {
+      "connection": "one urllib HTTP request per operation; no explicit persistent session reuse",
+      "cache": "HTTP client and adapter behavior included; harness adds no cache",
+      "write_commit_boundary": "PUT response completion",
+      "read_boundary": "GET response body consumed"
+    }
+  },
+  "configuration": {
+    "iterations": 10,
+    "payload_bytes": 4096,
+    "rpc_endpoint": null,
+    "mountpoint": null,
+    "webdav_url": "http://127.0.0.1:18080"
+  },
+  "environment": {
+    "platform": "Linux-6.8.0-1070-gcp-x86_64-with-glibc2.35",
+    "kernel": "6.8.0-1070-gcp",
+    "machine": "x86_64",
+    "python": "3.11.9",
+    "go_toolchain": "go version go1.25.1 linux/amd64",
+    "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline"
+  },
+  "completed": 0,
+  "failed": 10,
+  "cleanup_failed": 0,
+  "status": "failed",
+  "run_conditions": {
+    "delivery_mode": "local",
+    "cache_state": "fresh unique paths; immediate read; host page cache not cleared",
+    "storage": "isolated local repository on workspace XFS filesystem",
+    "repository_filesystem": "xfs",
+    "other_workload": "isolated test services; no intentional competing workload",
+    "mount_options": [
+      "allow_other"
+    ],
+    "host_uid": 736972916,
+    "payload_bytes": 4096,
+    "iterations": 10
+  },
+  "percentile_method": "nearest-rank: sorted sample at ceil(p*n)-1 (1-indexed)",
+  "classification": "unclassified",
+  "summary_successful_iterations": {},
+  "summary_failed_partial_observations": {},
+  "iterations": [
+    {
+      "iteration": 0,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "completed",
+        "results": [
+          {
+            "path": "/nando-bench-dfe5a07ccef4491da1675519ecfb1b1f",
+            "status": "already_absent"
+          },
+          {
+            "path": "/nando-bench-dfe5a07ccef4491da1675519ecfb1b1f-renamed",
+            "status": "already_absent"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 1,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "completed",
+        "results": [
+          {
+            "path": "/nando-bench-94ede2a0475b418395415baab624b1cf",
+            "status": "already_absent"
+          },
+          {
+            "path": "/nando-bench-94ede2a0475b418395415baab624b1cf-renamed",
+            "status": "already_absent"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 2,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "completed",
+        "results": [
+          {
+            "path": "/nando-bench-3b6e5068e2284bb590c8f3cec5321954",
+            "status": "already_absent"
+          },
+          {
+            "path": "/nando-bench-3b6e5068e2284bb590c8f3cec5321954-renamed",
+            "status": "already_absent"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 3,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "completed",
+        "results": [
+          {
+            "path": "/nando-bench-290b10ba18f045039de6006fe75b389e",
+            "status": "already_absent"
+          },
+          {
+            "path": "/nando-bench-290b10ba18f045039de6006fe75b389e-renamed",
+            "status": "already_absent"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 4,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "completed",
+        "results": [
+          {
+            "path": "/nando-bench-eb282bcb7dc143ebaeb6a6c5a46e245d",
+            "status": "already_absent"
+          },
+          {
+            "path": "/nando-bench-eb282bcb7dc143ebaeb6a6c5a46e245d-renamed",
+            "status": "already_absent"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 5,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "completed",
+        "results": [
+          {
+            "path": "/nando-bench-b540d6bf480d4de88a258769f82ad369",
+            "status": "already_absent"
+          },
+          {
+            "path": "/nando-bench-b540d6bf480d4de88a258769f82ad369-renamed",
+            "status": "already_absent"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 6,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "completed",
+        "results": [
+          {
+            "path": "/nando-bench-ee292a3e0d144b8db8146cafff8076fb",
+            "status": "already_absent"
+          },
+          {
+            "path": "/nando-bench-ee292a3e0d144b8db8146cafff8076fb-renamed",
+            "status": "already_absent"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 7,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "completed",
+        "results": [
+          {
+            "path": "/nando-bench-24e1f6abc8fa400ca3f178def9426c9b",
+            "status": "already_absent"
+          },
+          {
+            "path": "/nando-bench-24e1f6abc8fa400ca3f178def9426c9b-renamed",
+            "status": "already_absent"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 8,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "completed",
+        "results": [
+          {
+            "path": "/nando-bench-38c1a89bc08a4eeaab04dba08f31be6f",
+            "status": "already_absent"
+          },
+          {
+            "path": "/nando-bench-38c1a89bc08a4eeaab04dba08f31be6f-renamed",
+            "status": "already_absent"
+          }
+        ]
+      }
+    },
+    {
+      "iteration": 9,
+      "payload_bytes": 4096,
+      "operations": {},
+      "status": "failed",
+      "cleanup": {
+        "attempted": true,
+        "status": "completed",
+        "results": [
+          {
+            "path": "/nando-bench-3794818d494f45709c7f03395116f7fc",
+            "status": "already_absent"
+          },
+          {
+            "path": "/nando-bench-3794818d494f45709c7f03395116f7fc-renamed",
+            "status": "already_absent"
+          }
+        ]
+      }
+    }
+  ],
+  "errors": [
+    {
+      "iteration": 0,
+      "error": "HTTPError: HTTP Error 404: Not Found"
+    },
+    {
+      "iteration": 1,
+      "error": "HTTPError: HTTP Error 404: Not Found"
+    },
+    {
+      "iteration": 2,
+      "error": "HTTPError: HTTP Error 404: Not Found"
+    },
+    {
+      "iteration": 3,
+      "error": "HTTPError: HTTP Error 404: Not Found"
+    },
+    {
+      "iteration": 4,
+      "error": "HTTPError: HTTP Error 404: Not Found"
+    },
+    {
+      "iteration": 5,
+      "error": "HTTPError: HTTP Error 404: Not Found"
+    },
+    {
+      "iteration": 6,
+      "error": "HTTPError: HTTP Error 404: Not Found"
+    },
+    {
+      "iteration": 7,
+      "error": "HTTPError: HTTP Error 404: Not Found"
+    },
+    {
+      "iteration": 8,
+      "error": "HTTPError: HTTP Error 404: Not Found"
+    },
+    {
+      "iteration": 9,
+      "error": "HTTPError: HTTP Error 404: Not Found"
+    }
+  ],
+  "harness_sources_sha256": {
+    "tools/interface_benchmark.py": "1d6b8075997a1b55d8c29422b067ba0742076a069adf55af3fd5ceb3484b7bd4",
+    "tools/validation_capture.py": "76409607b16b0d7356524a549238cbc250d9f55e0d256a02d32884f554467ee6",
+    "tools/validation_tooling.py": "9326a6a6637c6b0affcdb6b1bec2a45eb3511daa23063df5995ae95cc39fcc19"
+  },
+  "working_tree_modified_during_run": true
+}

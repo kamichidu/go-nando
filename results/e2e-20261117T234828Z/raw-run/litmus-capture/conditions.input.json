@@ -1,0 +1,9 @@
+{
+  "target": "real nando WebDAV loopback HTTP",
+  "url": "http://127.0.0.1:40277/",
+  "auth": "none",
+  "workload": "unmodified full Litmus default suite with --keep-going",
+  "repository": "/tmp/go-nando-e2e.1Lx9jz/state/litmus/repository",
+  "mount": "native daemon repository; no FUSE mount in WebDAV adapter path",
+  "isolation": "fresh Local repository; no concurrent workload"
+}

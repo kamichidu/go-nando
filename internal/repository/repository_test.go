@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,82 @@ import (
 
 type fixedIDMetadataStore struct {
 	metadata.MetadataStore
+}
+
+type failDeleteMetadataStore struct {
+	metadata.MetadataStore
+	failID metadata.EntryID
+}
+
+type failNamedCreateMetadataStore struct {
+	metadata.MetadataStore
+	name   string
+	failID metadata.EntryID
+}
+
+type blockingDetachedCreateStore struct {
+	metadata.MetadataStore
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingDetachedCreateStore) CreateDetachedEntry(ctx context.Context, buffer metadata.BufferID, fence uint64, entry metadata.Entry) (metadata.Entry, error) {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return metadata.Entry{}, ctx.Err()
+	}
+	return s.MetadataStore.CreateDetachedEntry(ctx, buffer, fence, entry)
+}
+
+func (s *failNamedCreateMetadataStore) Create(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
+	if entry.Name == s.name {
+		return metadata.Entry{}, errors.New("injected COPY staging create failure")
+	}
+	return s.MetadataStore.Create(ctx, entry)
+}
+
+func (s *failNamedCreateMetadataStore) CreateDetachedEntry(ctx context.Context, buffer metadata.BufferID, fence uint64, entry metadata.Entry) (metadata.Entry, error) {
+	created, err := s.MetadataStore.CreateDetachedEntry(ctx, buffer, fence, entry)
+	if err != nil {
+		return metadata.Entry{}, err
+	}
+	if entry.Name == s.name {
+		s.failID = created.ID
+		return created, errors.New("injected detached COPY create failure after persistence")
+	}
+	return created, nil
+}
+
+func (s *failNamedCreateMetadataStore) DeleteDetachedEntry(ctx context.Context, buffer metadata.BufferID, fence uint64, id metadata.EntryID) error {
+	if id == s.failID {
+		return errors.New("injected detached COPY reclaim failure")
+	}
+	return s.MetadataStore.DeleteDetachedEntry(ctx, buffer, fence, id)
+}
+
+func (s *failDeleteMetadataStore) ListChildren(ctx context.Context, id metadata.EntryID) ([]metadata.Entry, error) {
+	entries, err := s.MetadataStore.ListChildren(ctx, id)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	return entries, err
+}
+
+func (s *failDeleteMetadataStore) Delete(ctx context.Context, id metadata.EntryID) error {
+	if id == s.failID {
+		return errors.New("injected metadata delete failure")
+	}
+	return s.MetadataStore.Delete(ctx, id)
+}
+
+func (s *failDeleteMetadataStore) DeleteDetachedEntry(ctx context.Context, buffer metadata.BufferID, fence uint64, id metadata.EntryID) error {
+	if id == s.failID {
+		return errors.New("injected metadata delete failure")
+	}
+	return s.MetadataStore.DeleteDetachedEntry(ctx, buffer, fence, id)
 }
 
 type fakeRemoteObjectStore struct {
@@ -1683,4 +1760,302 @@ func TestRepository(t *testing.T) {
 			t.Errorf("Repository operation scenario trace mismatch!\nActual:\n%s\nExpected:\n%s", actual, expected)
 		}
 	})
+}
+
+func TestCollectionCopySharesObjectsAndSupportsDepthAndOverwrite(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(tempDir, "objects"), filepath.Join(tempDir, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := openRepositoryInstance(t, tempDir, metaStore, objects, hasher)
+	if err := repo.Mkdir(ctx, "/source", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Mkdir(ctx, "/source/nested", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(tempDir, "payload")
+	if err := os.WriteFile(file, []byte("shared payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Put(ctx, file, "/source/nested/file.txt"); err != nil {
+		t.Fatal(err)
+	}
+	source, err := repo.Stat(ctx, "/source/nested/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDir, err := repo.Stat(ctx, "/source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CopyEntry(ctx, sourceDir.ID, "/source", sourceDir.Revision+1, "/stale", "infinity", false); !errors.Is(err, metadata.ErrEntryConflict) {
+		t.Fatalf("stale source revision error=%v, want conflict", err)
+	}
+	for _, destination := range []string{"/source", "/source/child"} {
+		if _, err := repo.CopyEntry(ctx, sourceDir.ID, "/source", sourceDir.Revision, destination, "infinity", false); !errors.Is(err, metadata.ErrEntryConflict) {
+			t.Errorf("overlapping destination %q error=%v, want conflict", destination, err)
+		}
+	}
+	if replaced, err := repo.CopyEntry(ctx, sourceDir.ID, "/source", sourceDir.Revision, "/shallow", "0", false); err != nil || replaced {
+		t.Fatalf("Depth 0 COPY: replaced=%t err=%v", replaced, err)
+	}
+	if children, err := repo.List(ctx, "/shallow"); err != nil || len(children) != 0 {
+		t.Fatalf("Depth 0 children=%v err=%v", children, err)
+	}
+	if replaced, err := repo.CopyEntry(ctx, sourceDir.ID, "/source", sourceDir.Revision, "/deep", "infinity", false); err != nil || replaced {
+		t.Fatalf("infinity COPY: replaced=%t err=%v", replaced, err)
+	}
+	copyFile, err := repo.Stat(ctx, "/deep/nested/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if copyFile.ObjectID == nil || source.ObjectID == nil || *copyFile.ObjectID != *source.ObjectID {
+		t.Fatalf("COPY did not share Content ID: source=%v copy=%v", source.ObjectID, copyFile.ObjectID)
+	}
+	copiedRoot, err := repo.Stat(ctx, "/deep")
+	if err != nil || copiedRoot.Mode != sourceDir.Mode {
+		t.Fatalf("collection COPY root mode=%o err=%v, want source mode %o", copiedRoot.Mode, err, sourceDir.Mode)
+	}
+	if _, err := repo.CopyEntry(ctx, sourceDir.ID, "/source", sourceDir.Revision, "/deep", "infinity", false); !errors.Is(err, metadata.ErrEntryConflict) {
+		t.Fatalf("Overwrite F error=%v, want conflict", err)
+	}
+	if replaced, err := repo.CopyEntry(ctx, sourceDir.ID, "/source", sourceDir.Revision, "/deep", "infinity", true); err != nil || !replaced {
+		t.Fatalf("overwrite COPY: replaced=%t err=%v", replaced, err)
+	}
+	if err := metaStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	reopenedRepo := openRepositoryInstance(t, tempDir, reopened, objects, hasher)
+	if _, err := reopenedRepo.Stat(ctx, "/deep/nested/file.txt"); err != nil {
+		t.Fatalf("copy after store reopen: %v", err)
+	}
+}
+
+func TestActiveCollectionCopyLeaseProtectsStagingFromReclaimer(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	hasher := content.NewHasher()
+	meta := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(tempDir, "objects"), filepath.Join(tempDir, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := openRepositoryInstance(t, tempDir, meta, objects, hasher)
+	if err := repo.Mkdir(ctx, "/source", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(tempDir, "payload")
+	if err := os.WriteFile(file, []byte("copy bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Put(ctx, file, "/source/file"); err != nil {
+		t.Fatal(err)
+	}
+	source, err := repo.Stat(ctx, "/source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocking := &blockingDetachedCreateStore{MetadataStore: meta, entered: make(chan struct{}, 1), release: make(chan struct{})}
+	copyRepo := openRepositoryInstance(t, tempDir, blocking, objects, hasher)
+	done := make(chan error, 1)
+	go func() {
+		_, err := copyRepo.CopyEntry(ctx, source.ID, "/source", source.Revision, "/copy", "infinity", false)
+		done <- err
+	}()
+	select {
+	case <-blocking.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("COPY did not reach staged child creation")
+	}
+	if err := repo.ReclaimDetached(ctx); err != nil {
+		t.Fatalf("reclaimer raced active COPY: %v", err)
+	}
+	buffers, err := meta.DetachedBuffers(ctx)
+	if err != nil || len(buffers) != 1 {
+		t.Fatalf("active COPY buffer lost: %+v err=%v", buffers, err)
+	}
+	if buffers[0].Claimed {
+		t.Fatal("reclaimer claimed an unexpired active COPY lease")
+	}
+	close(blocking.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("COPY after reclaimer pass: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("COPY did not finish")
+	}
+	if _, err := repo.Stat(ctx, "/copy/file"); err != nil {
+		t.Fatalf("COPY was not published: %v", err)
+	}
+}
+
+func TestCollectionCopyFailureKeepsPrivateBufferForRestartReclaim(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	hasher := content.NewHasher()
+	metaStore := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(tempDir, "objects"), filepath.Join(tempDir, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := openRepositoryInstance(t, tempDir, metaStore, objects, hasher)
+	if err := repo.Mkdir(ctx, "/source", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Mkdir(ctx, "/source/nested", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source, err := repo.Stat(ctx, "/source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failing := openRepositoryInstance(t, tempDir, &failNamedCreateMetadataStore{MetadataStore: metaStore, name: "nested"}, objects, hasher)
+	if _, err := failing.CopyEntry(ctx, source.ID, "/source", source.Revision, "/failed-copy", "infinity", false); err == nil {
+		t.Fatal("injected failure was not returned")
+	}
+	rootEntries, err := repo.List(ctx, "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range rootEntries {
+		if strings.HasPrefix(entry.Name, ".nando-copy-") {
+			t.Fatalf("COPY staging leaked into public root: %q", entry.Name)
+		}
+	}
+	buffers, err := metaStore.DetachedBuffers(ctx)
+	if err != nil || len(buffers) != 1 {
+		t.Fatalf("failed COPY buffer registry=%+v err=%v", buffers, err)
+	}
+	if _, err := metaStore.GetByID(ctx, buffers[0].RootID); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("staging buffer root visible by public Entry ID: %v", err)
+	}
+	if err := metaStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	reopenedRepo := openRepositoryInstance(t, tempDir, reopened, objects, hasher)
+	if err := reopenedRepo.RecoverDetachedAfterRestart(ctx); err != nil {
+		t.Fatalf("restart did not reclaim failed COPY staging: %v", err)
+	}
+	if buffers, err := reopened.DetachedBuffers(ctx); err != nil || len(buffers) != 0 {
+		t.Fatalf("detached buffers remain after restart cleanup: %+v err=%v", buffers, err)
+	}
+}
+
+func TestRemoveDeletesCollectionsRecursively(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	hasher := content.NewHasher()
+	meta := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(tempDir, "objects"), filepath.Join(tempDir, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := openRepositoryInstance(t, tempDir, meta, objects, hasher)
+	put := func(path, value string) {
+		t.Helper()
+		localFile := filepath.Join(tempDir, strings.ReplaceAll(path, "/", "_"))
+		if err := os.WriteFile(localFile, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.Put(ctx, localFile, path); err != nil {
+			t.Fatalf("Put(%s): %v", path, err)
+		}
+	}
+
+	if err := repo.Mkdir(ctx, "/empty", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Remove(ctx, "/empty"); err != nil {
+		t.Fatalf("remove empty collection: %v", err)
+	}
+	if _, err := repo.Stat(ctx, "/empty"); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("empty collection remains: %v", err)
+	}
+
+	put("/tree/root.txt", "root")
+	put("/tree/branch/leaf.txt", "leaf")
+	if err := repo.Remove(ctx, "/tree"); err != nil {
+		t.Fatalf("remove non-empty collection: %v", err)
+	}
+	for _, path := range []string{"/tree", "/tree/root.txt", "/tree/branch", "/tree/branch/leaf.txt"} {
+		if _, err := repo.Stat(ctx, path); !errors.Is(err, metadata.ErrEntryNotFound) {
+			t.Errorf("%s still resolves after DELETE: %v", path, err)
+		}
+	}
+	if _, err := repo.List(ctx, "/"); err != nil {
+		t.Fatalf("list root after DELETE: %v", err)
+	}
+	if err := repo.Remove(ctx, "/missing"); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("missing target error=%v", err)
+	}
+}
+
+func TestRemoveCollectionReportsPartialFailure(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	hasher := content.NewHasher()
+	meta := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	failingMeta := &failDeleteMetadataStore{MetadataStore: meta}
+	objects, err := local.NewStore(filepath.Join(tempDir, "objects"), filepath.Join(tempDir, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := openRepositoryInstance(t, tempDir, failingMeta, objects, hasher)
+	for _, path := range []string{"/tree/a.txt", "/tree/z.txt"} {
+		localFile := filepath.Join(tempDir, strings.ReplaceAll(path, "/", "_"))
+		if err := os.WriteFile(localFile, []byte(path), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.Put(ctx, localFile, path); err != nil {
+			t.Fatalf("Put(%s): %v", path, err)
+		}
+	}
+	blocked, err := repo.Stat(ctx, "/tree/z.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failingMeta.failID = blocked.ID
+	if err := repo.Remove(ctx, "/tree"); err != nil {
+		t.Fatalf("atomic namespace detach: %v", err)
+	}
+	if err := repo.ReclaimDetached(ctx); err == nil || !strings.Contains(err.Error(), "injected metadata delete failure") {
+		t.Fatalf("reclaim error=%v, want injected failure after detach", err)
+	}
+	for _, path := range []string{"/tree", "/tree/a.txt", "/tree/z.txt"} {
+		if _, err := repo.Stat(ctx, path); !errors.Is(err, metadata.ErrEntryNotFound) {
+			t.Errorf("detached namespace %s remains public: %v", path, err)
+		}
+	}
+	// Reopen Metadata to model a process restart after the partial failure.
+	if err := meta.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := sqlite.NewStore(filepath.Join(tempDir, "metadata.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened Metadata Store: %v", err)
+		}
+	})
+	restarted := openRepositoryInstance(t, tempDir, reopened, objects, hasher)
+	if err := restarted.RecoverDetachedAfterRestart(ctx); err != nil {
+		t.Fatalf("resume detached-tree reclamation after restart: %v", err)
+	}
+	if buffers, err := reopened.DetachedBuffers(ctx); err != nil || len(buffers) != 0 {
+		t.Fatalf("detached buffers after restart recovery: %+v err=%v", buffers, err)
+	}
+	if deleted, err := restarted.GC(ctx); err != nil || deleted != 2 {
+		t.Errorf("GC after detached recursive DELETE: deleted=%d err=%v, want both orphan blobs reclaimed", deleted, err)
+	}
 }

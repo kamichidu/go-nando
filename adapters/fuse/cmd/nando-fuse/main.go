@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -53,6 +54,14 @@ func validateMountOptions(options []string) error {
 	return nil
 }
 
+func classifyMountFailure(err error) string {
+	var errno syscall.Errno
+	if errors.As(err, &errno) && (errno == syscall.EPERM || errno == syscall.ENODEV || errno == syscall.ENOSYS) {
+		return "runner-unsupported"
+	}
+	return "unknown"
+}
+
 func (*command) Name() string { return "nando-fuse" }
 func (c *command) RegisterFlags(ctx context.Context, fs *flagshim.FlagSet) context.Context {
 	fs.StringVar(&c.options.Config, "config", "", "configuration file path")
@@ -98,6 +107,10 @@ func (c *command) Run(ctx context.Context, args []string) error {
 	}
 	server, err := fusefs.New(client).Mount(mountpoint, &fs.Options{MountOptions: fuse.MountOptions{Options: mountOptions}})
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "nando-fuse startup-stage: mount")
+		if classification := classifyMountFailure(err); classification != "unknown" {
+			fmt.Fprintf(os.Stderr, "nando-fuse mount-classification: %s\n", classification)
+		}
 		for _, option := range mountOptions {
 			if option == "allow_other" {
 				return fmt.Errorf("mount FUSE filesystem: %w (allow_other may require user_allow_other in /etc/fuse.conf)", err)

@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/net/webdav"
 
+	"github.com/google/uuid"
 	"github.com/kamichidu/go-nando/controlrpc"
 )
 
@@ -39,7 +40,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.propfind(w, r)
 	case http.MethodOptions:
 		w.Header().Set("DAV", "1")
-		w.Header().Set("Allow", "GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY")
+		w.Header().Set("Allow", "GET, HEAD, OPTIONS, PROPFIND, PROPPATCH, PUT, DELETE, MKCOL, MOVE, COPY")
 		w.WriteHeader(http.StatusOK)
 	case http.MethodPut:
 		h.put(w, r)
@@ -51,8 +52,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.move(w, r)
 	case "COPY":
 		h.copyFile(w, r)
-	case "LOCK", "UNLOCK", "PROPPATCH":
-		w.Header().Set("Allow", "GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY")
+	case "PROPPATCH":
+		h.proppatch(w, r)
+	case "LOCK", "UNLOCK":
+		w.Header().Set("Allow", "GET, HEAD, OPTIONS, PROPFIND, PROPPATCH, PUT, DELETE, MKCOL, MOVE, COPY")
 		http.Error(w, "method not supported by Phase A repository contract", http.StatusNotImplemented)
 	default:
 		h.dav.ServeHTTP(w, r)
@@ -409,13 +412,72 @@ func (h *Handler) move(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid MOVE path", 400)
 		return
 	}
+	overwrite, err := overwriteAllowed(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if src == dst {
+		http.Error(w, "source and destination are identical", http.StatusForbidden)
+		return
+	}
+	if depth := r.Header.Get("Depth"); depth != "" && depth != "infinity" {
+		http.Error(w, "MOVE Depth must be infinity", http.StatusBadRequest)
+		return
+	}
+	var source controlrpc.Entry
+	if err := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": src}, &source); err != nil {
+		http.Error(w, err.Error(), statusFor(err))
+		return
+	}
+	if source.Kind == "directory" && (strings.HasPrefix(dst, src+"/") || strings.HasPrefix(src, dst+"/")) {
+		http.Error(w, "collection MOVE source and destination overlap", http.StatusForbidden)
+		return
+	}
+	var destinationParent controlrpc.Entry
+	if err := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": path.Dir(dst)}, &destinationParent); err != nil {
+		if statusFor(err) == http.StatusNotFound {
+			http.Error(w, err.Error(), http.StatusConflict)
+		} else {
+			http.Error(w, err.Error(), statusFor(err))
+		}
+		return
+	}
+	if destinationParent.Kind != "directory" {
+		http.Error(w, "destination parent is not a collection", http.StatusConflict)
+		return
+	}
 	var exists controlrpc.Entry
 	if err := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": dst}, &exists); err == nil {
-		if r.Header.Get("Overwrite") == "F" {
+		if !overwrite {
 			http.Error(w, "destination exists", http.StatusPreconditionFailed)
-		} else {
-			http.Error(w, "MOVE replacement is outside the Phase A repository contract", http.StatusNotImplemented)
+			return
 		}
+		backup := "/.nando-move-" + uuid.NewString()
+		if err := h.client.Call(r.Context(), controlrpc.MethodMoveEntry, controlrpc.MoveEntryParams{EntryID: exists.ID, Destination: backup}, nil); err != nil {
+			http.Error(w, err.Error(), preconditionStatus(err))
+			return
+		}
+		if err := h.client.Call(r.Context(), controlrpc.MethodMoveEntry, controlrpc.MoveEntryParams{EntryID: source.ID, Destination: dst}, nil); err != nil {
+			// Restore only if the destination is still absent. Otherwise leave the
+			// displaced entry reachable at its root-level recovery name.
+			var current controlrpc.Entry
+			if statErr := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": dst}, &current); statusFor(statErr) == http.StatusNotFound {
+				if restoreErr := h.client.Call(r.Context(), controlrpc.MethodMoveEntry, controlrpc.MoveEntryParams{EntryID: exists.ID, Destination: dst}, nil); restoreErr != nil {
+					http.Error(w, errors.Join(err, fmt.Errorf("restore displaced destination at %s: %w", backup, restoreErr)).Error(), http.StatusInternalServerError)
+					return
+				}
+			}
+			http.Error(w, err.Error(), preconditionStatus(err))
+			return
+		}
+		// Remove by the exact displaced Entry ID. A partial recursive removal
+		// leaves the remaining subtree reachable under backup.
+		if err := h.removeEntryTree(r.Context(), backup, exists); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 		return
 	} else if statusFor(err) != http.StatusNotFound {
 		http.Error(w, err.Error(), statusFor(err))
@@ -426,6 +488,19 @@ func (h *Handler) move(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
+}
+
+func (h *Handler) removeEntryTree(ctx context.Context, entryPath string, entry controlrpc.Entry) error {
+	// RemoveEntry detaches the exact parked root atomically; metadata reclamation
+	// proceeds through the daemon's durable internal buffer.
+	return h.client.Call(ctx, controlrpc.MethodRemoveEntry, controlrpc.RemoveEntryParams{EntryID: entry.ID}, nil)
+}
+
+func copyFailure(err error, backupPath string) string {
+	if backupPath == "" {
+		return err.Error()
+	}
+	return fmt.Sprintf("%v; old destination remains at %s", err, backupPath)
 }
 
 func (h *Handler) copyFile(w http.ResponseWriter, r *http.Request) {
@@ -448,53 +523,140 @@ func (h *Handler) copyFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid destination", http.StatusBadRequest)
 		return
 	}
+	overwrite, err := overwriteAllowed(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if src == dst {
+		http.Error(w, "source and destination are identical", http.StatusForbidden)
+		return
+	}
+	depth := r.Header.Get("Depth")
+	if depth != "" && depth != "0" && depth != "infinity" {
+		http.Error(w, "COPY Depth must be 0 or infinity", http.StatusBadRequest)
+		return
+	}
 	var info controlrpc.Entry
 	if err := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": src}, &info); err != nil {
 		http.Error(w, err.Error(), statusFor(err))
 		return
 	}
-	if info.Kind != "file" {
-		http.Error(w, "directory COPY is outside Phase A", http.StatusNotImplemented)
+	if info.Kind == "directory" {
+		if strings.HasPrefix(dst, src+"/") || strings.HasPrefix(src, dst+"/") {
+			http.Error(w, "collection COPY source and destination overlap", http.StatusForbidden)
+			return
+		}
+		var target controlrpc.Entry
+		statErr := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": dst}, &target)
+		exists := statErr == nil
+		if exists && !overwrite {
+			http.Error(w, "destination exists", http.StatusPreconditionFailed)
+			return
+		}
+		if statErr != nil && statusFor(statErr) != http.StatusNotFound {
+			http.Error(w, statErr.Error(), statusFor(statErr))
+			return
+		}
+		var parent controlrpc.Entry
+		if err := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": path.Dir(dst)}, &parent); err != nil {
+			if statusFor(err) == http.StatusNotFound {
+				http.Error(w, err.Error(), http.StatusConflict)
+			} else {
+				http.Error(w, err.Error(), statusFor(err))
+			}
+			return
+		}
+		if parent.Kind != "directory" {
+			http.Error(w, "destination parent is not a collection", http.StatusConflict)
+			return
+		}
+		var result controlrpc.CopyEntryResult
+		if err := h.client.Call(r.Context(), controlrpc.MethodCopyEntry, controlrpc.CopyEntryParams{EntryID: info.ID, SourcePath: src, Revision: info.Revision, Destination: dst, Depth: depth, Overwrite: overwrite}, &result); err != nil {
+			http.Error(w, err.Error(), preconditionStatus(err))
+			return
+		}
+		if result.Replaced || exists {
+			w.WriteHeader(http.StatusNoContent)
+		} else {
+			w.WriteHeader(http.StatusCreated)
+		}
 		return
+	}
+	if info.Kind != "file" {
+		http.Error(w, "unsupported COPY source kind", http.StatusForbidden)
+		return
+	}
+	if strings.HasPrefix(src, dst+"/") {
+		var overlap controlrpc.Entry
+		if err := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": dst}, &overlap); err == nil && overlap.Kind == "directory" {
+			http.Error(w, "COPY source and destination overlap", http.StatusForbidden)
+			return
+		}
 	}
 	var target controlrpc.Entry
 	statErr := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": dst}, &target)
+	destinationExists := statErr == nil
 	if statErr == nil {
-		http.Error(w, "COPY destination overwrite is unsupported", http.StatusPreconditionFailed)
-		return
-	}
-	if statusFor(statErr) != http.StatusNotFound {
+		if !overwrite {
+			http.Error(w, "destination exists", http.StatusPreconditionFailed)
+			return
+		}
+	} else if statusFor(statErr) != http.StatusNotFound {
 		http.Error(w, statErr.Error(), statusFor(statErr))
 		return
 	}
+	parent := path.Dir(dst)
+	var parentEntry controlrpc.Entry
+	if err := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": parent}, &parentEntry); err != nil {
+		if statusFor(err) == http.StatusNotFound {
+			http.Error(w, err.Error(), http.StatusConflict)
+		} else {
+			http.Error(w, err.Error(), statusFor(err))
+		}
+		return
+	}
+	if parentEntry.Kind != "directory" {
+		http.Error(w, "destination parent is not a collection", http.StatusConflict)
+		return
+	}
+	backupPath := ""
+	if destinationExists && target.Kind == "directory" {
+		backupPath = "/.nando-copy-old-" + uuid.NewString()
+		if err := h.client.Call(r.Context(), controlrpc.MethodMoveEntry, controlrpc.MoveEntryParams{EntryID: target.ID, Destination: backupPath}, nil); err != nil {
+			http.Error(w, err.Error(), preconditionStatus(err))
+			return
+		}
+	}
 	var read controlrpc.BeginReadResult
 	if err := h.client.Call(r.Context(), controlrpc.MethodBeginRead, controlrpc.BeginReadParams{Path: src, ResourceSchemes: []string{"file"}}, &read); err != nil {
-		http.Error(w, err.Error(), statusFor(err))
+		http.Error(w, copyFailure(err, backupPath), statusFor(err))
 		return
 	}
 	sourcePath, err := localPath(read.ResourceURI)
 	if err != nil {
-		http.Error(w, errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)).Error(), http.StatusInternalServerError)
+		http.Error(w, copyFailure(errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)), backupPath), http.StatusInternalServerError)
 		return
 	}
 	source, err := os.Open(sourcePath)
 	if err != nil {
-		http.Error(w, errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)).Error(), http.StatusInternalServerError)
+		http.Error(w, copyFailure(errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)), backupPath), http.StatusInternalServerError)
 		return
 	}
 	var write controlrpc.BeginWriteResult
-	if err := h.client.Call(r.Context(), controlrpc.MethodBeginWrite, controlrpc.BeginWriteParams{Path: dst, ResourceSchemes: []string{"file"}}, &write); err != nil {
-		http.Error(w, errors.Join(err, source.Close(), h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)).Error(), preconditionStatus(err))
+	mode := info.Mode
+	if err := h.client.Call(r.Context(), controlrpc.MethodBeginWrite, controlrpc.BeginWriteParams{Path: dst, ResourceSchemes: []string{"file"}, LogicalMode: &mode}, &write); err != nil {
+		http.Error(w, copyFailure(errors.Join(err, source.Close(), h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)), backupPath), preconditionStatus(err))
 		return
 	}
 	stage, err := localPath(write.ResourceURI)
 	if err != nil {
-		http.Error(w, errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil), source.Close(), h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)).Error(), http.StatusInternalServerError)
+		http.Error(w, copyFailure(errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil), source.Close(), h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)), backupPath), http.StatusInternalServerError)
 		return
 	}
 	dest, err := os.OpenFile(stage, os.O_WRONLY|os.O_TRUNC, 0)
 	if err != nil {
-		http.Error(w, errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": write.SessionID}, nil), source.Close(), h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)).Error(), http.StatusInternalServerError)
+		http.Error(w, copyFailure(errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil), source.Close(), h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)), backupPath), http.StatusInternalServerError)
 		return
 	}
 	_, copyErr := copyWithRenew(r.Context(), h.client, write.SessionID, dest, source)
@@ -503,14 +665,63 @@ func (h *Handler) copyFile(w http.ResponseWriter, r *http.Request) {
 	sourceCloseErr := source.Close()
 	readReleaseErr := h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": read.SessionID}, nil)
 	if err := errors.Join(copyErr, syncErr, closeErr, sourceCloseErr, readReleaseErr); err != nil {
-		http.Error(w, errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodRelease, map[string]string{"session_id": write.SessionID}, nil)).Error(), http.StatusInternalServerError)
+		http.Error(w, copyFailure(errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil)), backupPath), http.StatusInternalServerError)
 		return
 	}
 	if err := h.client.Call(r.Context(), controlrpc.MethodCommit, map[string]string{"session_id": write.SessionID}, nil); err != nil {
-		http.Error(w, err.Error(), preconditionStatus(err))
+		http.Error(w, copyFailure(errors.Join(err, h.client.Call(context.Background(), controlrpc.MethodAbort, map[string]string{"session_id": write.SessionID}, nil)), backupPath), preconditionStatus(err))
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
+	var copied controlrpc.Entry
+	if err := h.client.Call(r.Context(), controlrpc.MethodStat, map[string]string{"path": dst}, &copied); err != nil {
+		http.Error(w, "COPY committed but destination metadata read failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var properties []controlrpc.DeadProperty
+	if err := h.client.Call(r.Context(), controlrpc.MethodDeadProperties, map[string]string{"entry_id": info.ID}, &properties); err != nil {
+		http.Error(w, "COPY committed but source properties could not be read: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var oldProperties []controlrpc.DeadProperty
+	if err := h.client.Call(r.Context(), controlrpc.MethodDeadProperties, map[string]string{"entry_id": copied.ID}, &oldProperties); err != nil {
+		http.Error(w, "COPY committed but destination properties could not be read: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(properties) > 0 || len(oldProperties) > 0 {
+		changes := make([]controlrpc.DeadPropertyChange, 0, len(properties)+len(oldProperties))
+		for _, property := range oldProperties {
+			changes = append(changes, controlrpc.DeadPropertyChange{Property: property, Remove: true})
+		}
+		for _, property := range properties {
+			changes = append(changes, controlrpc.DeadPropertyChange{Property: property})
+		}
+		if err := h.client.Call(r.Context(), controlrpc.MethodUpdateDeadProperties, controlrpc.DeadPropertiesParams{EntryID: copied.ID, Changes: changes}, nil); err != nil {
+			http.Error(w, "COPY committed but destination properties could not be stored: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if backupPath != "" {
+		if err := h.removeEntryTree(context.Background(), backupPath, target); err != nil {
+			http.Error(w, fmt.Sprintf("COPY committed but old destination cleanup failed at %s: %v", backupPath, err), http.StatusInternalServerError)
+			return
+		}
+	}
+	if destinationExists {
+		w.WriteHeader(http.StatusNoContent)
+	} else {
+		w.WriteHeader(http.StatusCreated)
+	}
+}
+
+func overwriteAllowed(r *http.Request) (bool, error) {
+	value := r.Header.Get("Overwrite")
+	if value == "" || value == "T" {
+		return true, nil
+	}
+	if value == "F" {
+		return false, nil
+	}
+	return false, fmt.Errorf("invalid Overwrite header %q (expected T or F)", value)
 }
 
 func preconditionsMatch(r *http.Request, begin controlrpc.BeginWriteResult) bool {

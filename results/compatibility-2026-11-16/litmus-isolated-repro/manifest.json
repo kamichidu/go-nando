@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "purpose": "Separate default-suite setup collision from actual Litmus/WebDAV behavior",
+  "tool": "litmus 0.13-4",
+  "conditions": {
+    "target": "real WebDAV adapter on a fresh isolated Local repository",
+    "listen": "127.0.0.1:18080",
+    "parent_collection": "/repro-copymove/",
+    "parent_created_by": "Python stdlib HTTP MKCOL before Litmus",
+    "test_selection": "TESTS=copymove",
+    "command": "TESTS=copymove /usr/bin/litmus http://127.0.0.1:18080/repro-copymove/",
+    "parent_mkcol_status": 201,
+    "litmus_exit_code": 1,
+    "litmus_group": "7 passed, 6 failed"
+  },
+  "interpretation": "The copymove begin sequence passed on a fresh path, so the original subsequent-group MKCOL 405 was not a standalone inability to create a collection. The baseline debug log shows each later group first DELETE /litmus/ -> 409 (non-empty collection), then MKCOL /litmus/ -> 405 (resource still mapped). RFC 4918 permits/defines 405 for MKCOL on a mapped URL and requires collection DELETE to operate recursively. Thus the 405 is secondary to cleanup failure; the failed recursive DELETE is a WebDAV compatibility candidate. The isolated run then exposed actual COPY/MOVE incompatibilities (including 501 and 412); its full raw output is retained separately and does not alter baseline suite totals."
+}

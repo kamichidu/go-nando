@@ -153,6 +153,9 @@ func (f *fakeRepositoryUseCases) Move(context.Context, app.MoveInput) error { re
 func (f *fakeRepositoryUseCases) MoveEntry(context.Context, metadata.EntryID, string) error {
 	return nil
 }
+func (f *fakeRepositoryUseCases) CopyEntry(context.Context, metadata.EntryID, string, uint64, string, string, bool) (bool, error) {
+	return false, nil
+}
 func (f *fakeRepositoryUseCases) Remove(context.Context, string) error { return nil }
 func (f *fakeRepositoryUseCases) RemoveEntry(_ context.Context, id metadata.EntryID) error {
 	f.mu.Lock()
@@ -291,6 +294,16 @@ func (f *fakeRepositoryUseCases) PutExpectedWithMode(ctx context.Context, input 
 }
 
 func (f *fakeRepositoryUseCases) PutExpectedEntryIDWithMode(ctx context.Context, input app.PutInput, observed metadata.Entry, mode *uint32) error {
+	f.mu.Lock()
+	if f.entry == nil || f.entry.ID != observed.ID {
+		f.mu.Unlock()
+		return metadata.ErrEntryNotFound
+	}
+	if f.entry.Revision != observed.Revision {
+		f.mu.Unlock()
+		return metadata.ErrEntryConflict
+	}
+	f.mu.Unlock()
 	return f.PutExpectedWithMode(ctx, input, repository.PutExpectation{EntryID: observed.ID, Revision: observed.Revision}, mode)
 }
 
@@ -1147,6 +1160,166 @@ func TestRecoveryPreservationFailuresKeepBeginManifestAndStaging(t *testing.T) {
 			}()
 			if records := restarted.listRecoveries(); len(records) != 1 || records[0].SessionID != result.SessionID {
 				t.Fatalf("Begin manifest did not reconstruct recovery: %+v", records)
+			}
+		})
+	}
+}
+
+func TestStableEntryCommitDiscardsOnlyAuthoritativeNotFound(t *testing.T) {
+	ctx := context.Background()
+	fake := &fakeRepositoryUseCases{entry: &metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 4}}
+	sessions, err := newSessionManagerWithTTL(fake, t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sessions.close(); err != nil {
+			t.Errorf("close sessions: %v", err)
+		}
+	}()
+
+	conflicted, err := sessions.beginWrite(ctx, "/file", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictStage := resourcePathFromURI(t, conflicted.ResourceURI)
+	if err := os.WriteFile(conflictStage, []byte("keep concurrent edit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	fake.entry.Revision++ // another adapter commits a newer revision while this fd is open
+	fake.content = []byte("winner")
+	fake.mu.Unlock()
+	if err := sessions.commit(ctx, conflicted.SessionID); !errors.Is(err, metadata.ErrEntryConflict) {
+		t.Fatalf("Commit conflict=%v, want recoverable CAS conflict", err)
+	}
+	if records := sessions.listRecoveries(); len(records) != 1 || records[0].SessionID != conflicted.SessionID {
+		t.Fatalf("concurrent update did not retain staged write in Recovery: %+v", records)
+	}
+	if data, err := os.ReadFile(conflictStage); err != nil || string(data) != "keep concurrent edit" {
+		t.Fatalf("conflict staging=%q err=%v", data, err)
+	}
+
+	detached, err := sessions.beginWrite(ctx, "/file", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detachedStage := resourcePathFromURI(t, detached.ResourceURI)
+	if err := os.WriteFile(detachedStage, []byte("discard detached edit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	fake.entry = nil // external recursive DELETE detached the stable Entry
+	fake.mu.Unlock()
+	if err := sessions.commit(ctx, detached.SessionID); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("detached Commit=%v, want not-found", err)
+	}
+	if _, err := os.Stat(detachedStage); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("detached staging was not discarded: %v", err)
+	}
+	if records := sessions.listRecoveries(); len(records) != 1 || records[0].SessionID != conflicted.SessionID {
+		t.Fatalf("detached write entered Recovery or conflict Recovery disappeared: %+v", records)
+	}
+
+	fake.mu.Lock()
+	fake.entry = &metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 8}
+	fake.mu.Unlock()
+	transient, err := sessions.beginWrite(ctx, "/file", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transientStage := resourcePathFromURI(t, transient.ResourceURI)
+	if err := os.WriteFile(transientStage, []byte("keep ambiguous edit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	transportErr := errors.New("metadata read unavailable")
+	fake.putErr = transportErr
+	if err := sessions.commit(ctx, transient.SessionID); !errors.Is(err, transportErr) {
+		t.Fatalf("ambiguous Commit=%v, want transport error", err)
+	}
+	if records := sessions.listRecoveries(); len(records) != 2 {
+		t.Fatalf("ambiguous failure was not retained alongside CAS Recovery: %+v", records)
+	}
+	if data, err := os.ReadFile(transientStage); err != nil || string(data) != "keep ambiguous edit" {
+		t.Fatalf("ambiguous staging=%q err=%v", data, err)
+	}
+}
+
+func TestDetachedDiscardCleanupFailuresHaveDistinctRPCOutcomeAndConverge(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		files      func(string) sessionFiles
+		wantMarker bool
+	}{
+		{name: "discard marker persistence fails", files: func(_ string) sessionFiles {
+			return failingSessionFiles{writeErr: errors.New("injected discard marker write failure")}
+		}},
+		{name: "discard stage cleanup fails", wantMarker: true, files: func(stage string) sessionFiles {
+			return failingSessionFiles{removePath: stage, removeErr: errors.New("injected discard stage cleanup failure")}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			fake := &fakeRepositoryUseCases{entry: &metadata.Entry{ID: "entry-1", Name: "file", Kind: metadata.EntryKindFile, Revision: 3}}
+			root := t.TempDir()
+			sessions, err := newSessionManagerWithTTL(fake, root, time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := newService(fake, sessions)
+			result, err := service.Call(ctx, controlrpc.MethodBeginWrite, marshalTestJSON(t, map[string]any{"path": "/file", "follow_entry_id": true, "resource_schemes": []string{"file"}}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var begin controlrpc.BeginWriteResult
+			if err := decodeTestResult(t, result, &begin); err != nil {
+				t.Fatal(err)
+			}
+			stage := resourcePathFromURI(t, begin.ResourceURI)
+			if err := os.WriteFile(stage, []byte("discard after external delete"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			fake.mu.Lock()
+			fake.entry = nil
+			fake.mu.Unlock()
+			sessions.files = tc.files(stage)
+			_, err = service.Call(ctx, controlrpc.MethodCommit, marshalTestJSON(t, map[string]string{"session_id": begin.SessionID}))
+			var methodErr *methodError
+			if !errors.As(err, &methodErr) || methodErr.Code != controlrpc.CodeDetachedDiscardIncomplete {
+				t.Fatalf("Commit error=%v, want detached-discard-incomplete RPC code", err)
+			}
+			if errors.As(err, &methodErr) && methodErr.Code == controlrpc.CodeEntryNotFound {
+				t.Fatal("cleanup failure was misreported as successful detach")
+			}
+			if records := sessions.listRecoveries(); len(records) != 0 {
+				t.Fatalf("discarded bytes were exposed as ordinary Recovery: %+v", records)
+			}
+			data, readErr := os.ReadFile(sessions.recordPath(begin.SessionID))
+			if readErr != nil {
+				t.Fatalf("discard intent record missing after failed cleanup: %v", readErr)
+			}
+			var record recoveryRecord
+			if err := json.Unmarshal(data, &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.Discarding != tc.wantMarker {
+				t.Fatalf("durable discard marker=%v want=%v", record.Discarding, tc.wantMarker)
+			}
+			stopSessionManagerForCrash(sessions)
+			restarted, err := newSessionManagerWithTTL(fake, root, time.Hour)
+			if err != nil {
+				t.Fatalf("restart did not converge detached discard: %v", err)
+			}
+			t.Cleanup(func() {
+				if err := restarted.close(); err != nil {
+					t.Errorf("close restarted session manager: %v", err)
+				}
+			})
+			if records := restarted.listRecoveries(); len(records) != 0 {
+				t.Fatalf("restart exposed detached bytes as Recovery: %+v", records)
+			}
+			if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("restart left detached staging: %v", err)
 			}
 		})
 	}

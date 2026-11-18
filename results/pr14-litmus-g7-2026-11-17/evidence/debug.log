@@ -1,0 +1,3139 @@
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:45981 begins.
+HTTP session to http://127.0.0.1:45981 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:45981
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+******* Running test 2: options ********
+Running pre_send hooks
+Sending request headers:
+OPTIONS /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 2 (options)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 200 OK
+[hdr] Allow: GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY
+Header Name: [allow], Value: [GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY]
+[hdr] Dav: 1
+Header Name: [dav], Value: [1]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 200 class 2xx, error line:
+200 OK
+Running destroy hooks.
+Request ends.
+******* Running test 3: put_get ********
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/res HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 41
+X-Litmus: basic: 3 (put_get)
+
+Sending request-line and headers:
+Sending request body:
+Body block (41 bytes):
+[This is
+a test file.
+for litmus
+testing.
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "d4a53320-d1ee-4889-9e4c-aac6780ba44d-1"
+Header Name: [etag], Value: ["d4a53320-d1ee-4889-9e4c-aac6780ba44d-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+GET /litmus/res HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 3 (put_get)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 200 OK
+[hdr] Accept-Ranges: bytes
+Header Name: [accept-ranges], Value: [bytes]
+[hdr] Content-Length: 41
+Header Name: [content-length], Value: [41]
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] Etag: "d4a53320-d1ee-4889-9e4c-aac6780ba44d-1"
+Header Name: [etag], Value: ["d4a53320-d1ee-4889-9e4c-aac6780ba44d-1"]
+[hdr] Last-Modified: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [last-modified], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 41 bytes of response body.
+Got 41 bytes.
+Read block (41 bytes):
+[This is
+a test file.
+for litmus
+testing.
+]
+Running post_send hooks
+Running destroy hooks.
+Request ends.
+******* Running test 4: put_get_utf8_segment ********
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/res-%e2%82%ac HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 41
+X-Litmus: basic: 4 (put_get_utf8_segment)
+
+Sending request-line and headers:
+Sending request body:
+Body block (41 bytes):
+[This is
+a test file.
+for litmus
+testing.
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "aa27fa7a-b650-4957-91ee-c81324248c82-1"
+Header Name: [etag], Value: ["aa27fa7a-b650-4957-91ee-c81324248c82-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+GET /litmus/res-%e2%82%ac HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 4 (put_get_utf8_segment)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 200 OK
+[hdr] Accept-Ranges: bytes
+Header Name: [accept-ranges], Value: [bytes]
+[hdr] Content-Length: 41
+Header Name: [content-length], Value: [41]
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] Etag: "aa27fa7a-b650-4957-91ee-c81324248c82-1"
+Header Name: [etag], Value: ["aa27fa7a-b650-4957-91ee-c81324248c82-1"]
+[hdr] Last-Modified: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [last-modified], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 41 bytes of response body.
+Got 41 bytes.
+Read block (41 bytes):
+[This is
+a test file.
+for litmus
+testing.
+]
+Running post_send hooks
+Running destroy hooks.
+Request ends.
+******* Running test 5: put_no_parent ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/409me/noparent.txt/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 5 (put_no_parent)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+******* Running test 6: mkcol_over_plain ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/res-%e2%82%ac/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 6 (mkcol_over_plain)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 405 Method Not Allowed
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 47
+Header Name: [content-length], Value: [47]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 47 bytes of response body.
+Got 47 bytes.
+Read block (47 bytes):
+[JSON-RPC error -32012: metadata entry conflict
+]
+Running post_send hooks
+Request ends, status 405 class 4xx, error line:
+405 Method Not Allowed
+Running destroy hooks.
+Request ends.
+******* Running test 7: delete ********
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/res-%e2%82%ac HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 7 (delete)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+******* Running test 8: delete_null ********
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/404me HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 8 (delete_null)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+******* Running test 9: delete_fragment ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/frag/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 9 (delete_fragment)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/frag/#ment HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 9 (delete_fragment)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/frag/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 9 (delete_fragment)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+******* Running test 10: mkcol ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/coll/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 10 (mkcol)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+******* Running test 11: mkcol_again ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/coll/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 11 (mkcol_again)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 405 Method Not Allowed
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 47
+Header Name: [content-length], Value: [47]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 47 bytes of response body.
+Got 47 bytes.
+Read block (47 bytes):
+[JSON-RPC error -32012: metadata entry conflict
+]
+Running post_send hooks
+Request ends, status 405 class 4xx, error line:
+405 Method Not Allowed
+Running destroy hooks.
+Request ends.
+******* Running test 12: delete_coll ********
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/coll/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 12 (delete_coll)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+******* Running test 13: mkcol_no_parent ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/409me/noparent/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: basic: 13 (mkcol_no_parent)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+******* Running test 14: mkcol_with_body ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/mkcolbody HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Type: xzy-foo/bar-512
+Content-Length: 8
+X-Litmus: basic: 14 (mkcol_with_body)
+
+Sending request-line and headers:
+Sending request body:
+Body block (8 bytes):
+[afafafaf]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 415 Unsupported Media Type
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 34
+Header Name: [content-length], Value: [34]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 34 bytes of response body.
+Got 34 bytes.
+Read block (34 bytes):
+[MKCOL request body is unsupported
+]
+Running post_send hooks
+Request ends, status 415 class 4xx, error line:
+415 Unsupported Media Type
+Running destroy hooks.
+Request ends.
+******* Running test 15: finish ********
+sess: Destroying session.
+sess: Closing connection.
+sess: Connection closed.
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:45981 begins.
+HTTP session to http://127.0.0.1:45981 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:45981
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+******* Running test 2: copy_init ********
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/copysrc HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 2 (copy_init)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "64ebac6e-1627-4d5f-b3ac-ca11968d83f2-1"
+Header Name: [etag], Value: ["64ebac6e-1627-4d5f-b3ac-ca11968d83f2-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/copycoll/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 2 (copy_init)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+******* Running test 3: copy_simple ********
+Running pre_send hooks
+Sending request headers:
+COPY /litmus/copysrc HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Depth: infinity
+Destination: http://127.0.0.1:45981/litmus/copydest
+Overwrite: F
+X-Litmus: copymove: 3 (copy_simple)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+******* Running test 4: copy_overwrite ********
+Running pre_send hooks
+Sending request headers:
+COPY /litmus/copysrc HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Depth: infinity
+Destination: http://127.0.0.1:45981/litmus/copydest
+Overwrite: F
+X-Litmus: copymove: 4 (copy_overwrite)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 412 Precondition Failed
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 42
+Header Name: [content-length], Value: [42]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 42 bytes of response body.
+Got 42 bytes.
+Read block (42 bytes):
+[COPY destination overwrite is unsupported
+]
+Running post_send hooks
+Request ends, status 412 class 4xx, error line:
+412 Precondition Failed
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+COPY /litmus/copysrc HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Depth: infinity
+Destination: http://127.0.0.1:45981/litmus/copydest
+Overwrite: T
+X-Litmus: copymove: 4 (copy_overwrite)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 412 Precondition Failed
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:02 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:02 GMT]
+[hdr] Content-Length: 42
+Header Name: [content-length], Value: [42]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 42 bytes of response body.
+Got 42 bytes.
+Read block (42 bytes):
+[COPY destination overwrite is unsupported
+]
+Running post_send hooks
+Request ends, status 412 class 4xx, error line:
+412 Precondition Failed
+Running destroy hooks.
+Request ends.
+******* Running test 5: copy_nodestcoll ********
+Running pre_send hooks
+Sending request headers:
+COPY /litmus/copysrc HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Depth: 0
+Destination: http://127.0.0.1:45981/litmus/nonesuch/foo
+Overwrite: F
+X-Litmus: copymove: 5 (copy_nodestcoll)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+******* Running test 6: copy_cleanup ********
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/copysrc HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 6 (copy_cleanup)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/copydest HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 6 (copy_cleanup)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/copycoll HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 6 (copy_cleanup)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/copycoll/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 6 (copy_cleanup)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+******* Running test 7: copy_coll ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ccsrc/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/ccsrc/foo.0 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "fe7f1955-5305-4e22-a73d-a377b0092aec-1"
+Header Name: [etag], Value: ["fe7f1955-5305-4e22-a73d-a377b0092aec-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/ccsrc/foo.1 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "16c1573e-a6cb-4507-98b9-ed67b4b75305-1"
+Header Name: [etag], Value: ["16c1573e-a6cb-4507-98b9-ed67b4b75305-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/ccsrc/foo.2 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "b2797c11-c9c3-4103-94c6-285e9fddc43b-1"
+Header Name: [etag], Value: ["b2797c11-c9c3-4103-94c6-285e9fddc43b-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/ccsrc/foo.3 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "ab519220-aa65-4fe7-8d9c-4fd80170beba-1"
+Header Name: [etag], Value: ["ab519220-aa65-4fe7-8d9c-4fd80170beba-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/ccsrc/foo.4 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "85f9970b-a019-47ce-a817-fad9b5b49457-1"
+Header Name: [etag], Value: ["85f9970b-a019-47ce-a817-fad9b5b49457-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/ccsrc/foo.5 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "6b18826a-6517-46a2-8006-b7f0f88c7ec2-1"
+Header Name: [etag], Value: ["6b18826a-6517-46a2-8006-b7f0f88c7ec2-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/ccsrc/foo.6 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "b7e77604-5a86-4702-832a-44c9355b8144-1"
+Header Name: [etag], Value: ["b7e77604-5a86-4702-832a-44c9355b8144-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/ccsrc/foo.7 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "86343230-ad4e-4d34-a8cf-06a20a8c9ae7-1"
+Header Name: [etag], Value: ["86343230-ad4e-4d34-a8cf-06a20a8c9ae7-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/ccsrc/foo.8 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "488799ce-80ab-4c7d-b74b-1dfa577b142c-1"
+Header Name: [etag], Value: ["488799ce-80ab-4c7d-b74b-1dfa577b142c-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/ccsrc/foo.9 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "cb185aec-cb82-4de6-ae3e-53a86550bab6-1"
+Header Name: [etag], Value: ["cb185aec-cb82-4de6-ae3e-53a86550bab6-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ccsrc/subcoll/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ccdest/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ccdest2/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+COPY /litmus/ccsrc/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Depth: infinity
+Destination: http://127.0.0.1:45981/litmus/ccdest/
+Overwrite: F
+X-Litmus: copymove: 7 (copy_coll)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 501 Not Implemented
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 34
+Header Name: [content-length], Value: [34]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 34 bytes of response body.
+Got 34 bytes.
+Read block (34 bytes):
+[directory COPY is outside Phase A
+]
+Running post_send hooks
+Request ends, status 501 class 5xx, error line:
+501 Not Implemented
+Running destroy hooks.
+Request ends.
+******* Running test 8: copy_shallow ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ccsrc/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 8 (copy_shallow)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 405 Method Not Allowed
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 47
+Header Name: [content-length], Value: [47]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 47 bytes of response body.
+Got 47 bytes.
+Read block (47 bytes):
+[JSON-RPC error -32012: metadata entry conflict
+]
+Running post_send hooks
+Request ends, status 405 class 4xx, error line:
+405 Method Not Allowed
+Running destroy hooks.
+Request ends.
+******* Running test 9: move ********
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/move HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 9 (move)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "0985180a-facd-4e71-afd3-91543f252f22-1"
+Header Name: [etag], Value: ["0985180a-facd-4e71-afd3-91543f252f22-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/move2 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 9 (move)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "344368d2-05ed-415e-a1ab-effbcac35964-1"
+Header Name: [etag], Value: ["344368d2-05ed-415e-a1ab-effbcac35964-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/movecoll/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 9 (move)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MOVE /litmus/move HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Destination: http://127.0.0.1:45981/litmus/movedest
+Overwrite: F
+X-Litmus: copymove: 9 (move)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MOVE /litmus/move2 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Destination: http://127.0.0.1:45981/litmus/movedest
+Overwrite: F
+X-Litmus: copymove: 9 (move)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 412 Precondition Failed
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 19
+Header Name: [content-length], Value: [19]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 19 bytes of response body.
+Got 19 bytes.
+Read block (19 bytes):
+[destination exists
+]
+Running post_send hooks
+Request ends, status 412 class 4xx, error line:
+412 Precondition Failed
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MOVE /litmus/move2 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Destination: http://127.0.0.1:45981/litmus/movedest
+Overwrite: T
+X-Litmus: copymove: 9 (move)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 501 Not Implemented
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 60
+Header Name: [content-length], Value: [60]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 60 bytes of response body.
+Got 60 bytes.
+Read block (60 bytes):
+[MOVE replacement is outside the Phase A repository contract
+]
+Running post_send hooks
+Request ends, status 501 class 5xx, error line:
+501 Not Implemented
+Running destroy hooks.
+Request ends.
+******* Running test 10: move_coll ********
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/mvsrc/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 10 (move_coll)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/mvsrc/foo.0 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 10 (move_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "d9639e92-152f-43ed-8339-db5c155fe410-1"
+Header Name: [etag], Value: ["d9639e92-152f-43ed-8339-db5c155fe410-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/mvsrc/foo.1 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 10 (move_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "a6e39e0a-02d7-4da5-b612-75dd5f7e792d-1"
+Header Name: [etag], Value: ["a6e39e0a-02d7-4da5-b612-75dd5f7e792d-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/mvsrc/foo.2 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 10 (move_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "96afe6e3-35dd-440d-afd6-20410918482f-1"
+Header Name: [etag], Value: ["96afe6e3-35dd-440d-afd6-20410918482f-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:03 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:03 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/mvsrc/foo.3 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 10 (move_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "50011189-d191-4b8a-a1ad-3f299f8bccf0-1"
+Header Name: [etag], Value: ["50011189-d191-4b8a-a1ad-3f299f8bccf0-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/mvsrc/foo.4 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 10 (move_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "3c220789-cce5-4913-8cc8-bba38545501b-1"
+Header Name: [etag], Value: ["3c220789-cce5-4913-8cc8-bba38545501b-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/mvsrc/foo.5 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 10 (move_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "4ccae829-df68-4f5f-ae97-ef69454a0f4d-1"
+Header Name: [etag], Value: ["4ccae829-df68-4f5f-ae97-ef69454a0f4d-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/mvsrc/foo.6 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 10 (move_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "42a69d8b-aa74-4be2-a48e-759fae5159da-1"
+Header Name: [etag], Value: ["42a69d8b-aa74-4be2-a48e-759fae5159da-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/mvsrc/foo.7 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 10 (move_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "138f6f8e-1608-4758-a9b2-5b35afad52ab-1"
+Header Name: [etag], Value: ["138f6f8e-1608-4758-a9b2-5b35afad52ab-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/mvsrc/foo.8 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 10 (move_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "1809986a-386f-4a39-bba9-7ec452971a2a-1"
+Header Name: [etag], Value: ["1809986a-386f-4a39-bba9-7ec452971a2a-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/mvsrc/foo.9 HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 10 (move_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "b7ef9dc3-479d-4a59-9e97-3916692bc0fa-1"
+Header Name: [etag], Value: ["b7ef9dc3-479d-4a59-9e97-3916692bc0fa-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/mvnoncoll HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: copymove: 10 (move_coll)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "656e2037-7236-4a3e-9f06-e011f9cb8500-1"
+Header Name: [etag], Value: ["656e2037-7236-4a3e-9f06-e011f9cb8500-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/mvsrc/subcoll/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 10 (move_coll)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+COPY /litmus/mvsrc/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Depth: infinity
+Destination: http://127.0.0.1:45981/litmus/mvdest2/
+Overwrite: F
+X-Litmus: copymove: 10 (move_coll)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 501 Not Implemented
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 34
+Header Name: [content-length], Value: [34]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 34 bytes of response body.
+Got 34 bytes.
+Read block (34 bytes):
+[directory COPY is outside Phase A
+]
+Running post_send hooks
+Request ends, status 501 class 5xx, error line:
+501 Not Implemented
+Running destroy hooks.
+Request ends.
+******* Running test 11: move_cleanup ********
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/mvdest/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 11 (move_cleanup)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/mvdest2/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 11 (move_cleanup)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/mvnoncoll HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: copymove: 11 (move_cleanup)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+******* Running test 12: finish ********
+sess: Destroying session.
+sess: Closing connection.
+sess: Connection closed.
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:45981 begins.
+HTTP session to http://127.0.0.1:45981 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: props: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:45981
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: props: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+******* Running test 2: propfind_invalid ********
+Running pre_send hooks
+Sending request headers:
+PROPFIND /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 5
+Depth: 0
+X-Litmus: props: 2 (propfind_invalid)
+
+Sending request-line and headers:
+Sending request body:
+Body block (5 bytes):
+[<foo>]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 400 Bad Request
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 11
+Header Name: [content-length], Value: [11]
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 11 bytes of response body.
+Got 11 bytes.
+Read block (11 bytes):
+[Bad Request]
+Running post_send hooks
+Request ends, status 400 class 4xx, error line:
+400 Bad Request
+Running destroy hooks.
+Request ends.
+******* Running test 3: propfind_invalid2 ********
+Running pre_send hooks
+Sending request headers:
+PROPFIND /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 80
+Depth: 0
+X-Litmus: props: 3 (propfind_invalid2)
+
+Sending request-line and headers:
+Sending request body:
+Body block (80 bytes):
+[<D:propfind xmlns:D="DAV:"><D:prop><bar:foo xmlns:bar=""/></D:prop></D:propfind>]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 207 Multi-Status
+[hdr] Content-Type: text/xml; charset=utf-8
+Header Name: [content-type], Value: [text/xml; charset=utf-8]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 230
+Header Name: [content-length], Value: [230]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 230 bytes of response body.
+Got 230 bytes.
+Read block (230 bytes):
+[<?xml version="1.0" encoding="UTF-8"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>/litmus/</D:href><D:propstat><D:prop><foo></foo></D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat></D:response></D:multistatus>]
+Running post_send hooks
+Request ends, status 207 class 2xx, error line:
+207 Multi-Status
+******* Running test 4: propfind_d0 ********
+Running pre_send hooks
+Sending request headers:
+PROPFIND /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Depth: 0
+Content-Length: 304
+Content-Type: application/xml
+X-Litmus: props: 4 (propfind_d0)
+
+Sending request-line and headers:
+Sending request body:
+Body block (304 bytes):
+[<?xml version="1.0" encoding="utf-8"?>
+<propfind xmlns="DAV:"><prop>
+<getcontentlength xmlns="DAV:"/>
+<getlastmodified xmlns="DAV:"/>
+<displayname xmlns="DAV:"/>
+<resourcetype xmlns="DAV:"/>
+<foo xmlns="http://example.com/neon/litmus/"/>
+<bar xmlns="http://example.com/neon/litmus/"/>
+</prop></propfind>
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 207 Multi-Status
+[hdr] Content-Type: text/xml; charset=utf-8
+Header Name: [content-type], Value: [text/xml; charset=utf-8]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 608
+Header Name: [content-length], Value: [608]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 608 bytes of response body.
+Got 608 bytes.
+Read block (608 bytes):
+[<?xml version="1.0" encoding="UTF-8"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>/litmus/</D:href><D:propstat><D:prop><D:getlastmodified>Thu, 01 Jan 1970 00:00:00 GMT</D:getlastmodified><D:displayname>litmus</D:displayname><D:resourcetype><D:collection xmlns:D="DAV:"/></D:resourcetype></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat><D:propstat><D:prop><D:getcontentlength></D:getcontentlength><foo xmlns="http://example.com/neon/litmus/"></foo><bar xmlns="http://example.com/neon/litmus/"></bar></D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat></D:response></D:multistatus>]
+XML: Parsing 608 bytes.
+XML: start-element (0, {DAV:, multistatus}) => 1
+XML: start-element (1, {DAV:, response}) => 2
+XML: start-element (2, {DAV:, href}) => 4
+XML: char-data (4) returns 0
+XML: end-element (4, {DAV:, href})
+XML: start-element (2, {DAV:, propstat}) => 7
+XML: start-element (7, {DAV:, prop}) => 50
+Got property #0: {DAV:}getlastmodified.
+XML: start-element (50, {DAV:, getlastmodified}) => 99
+XML: char-data (99) returns 0
+XML: end-element (99, {DAV:, getlastmodified})
+Got property #1: {DAV:}displayname.
+XML: start-element (50, {DAV:, displayname}) => 99
+XML: char-data (99) returns 0
+XML: end-element (99, {DAV:, displayname})
+XML: start-element (50, {DAV:, resourcetype}) => 201
+XML: start-element (201, {DAV:, collection}) => 0
+XML: end-element (0, {DAV:, collection})
+XML: end-element (201, {DAV:, resourcetype})
+XML: end-element (50, {DAV:, prop})
+XML: start-element (7, {DAV:, status}) => 6
+XML: char-data (6) returns 0
+Decoded status line: HTTP/1.1 200 OK
+XML: end-element (6, {DAV:, status})
+XML: end-element (7, {DAV:, propstat})
+XML: start-element (2, {DAV:, propstat}) => 7
+XML: start-element (7, {DAV:, prop}) => 50
+Got property #0: {DAV:}getcontentlength.
+XML: start-element (50, {DAV:, getcontentlength}) => 99
+XML: end-element (99, {DAV:, getcontentlength})
+Got property #1: {http://example.com/neon/litmus/}foo.
+XML: start-element (50, {http://example.com/neon/litmus/, foo}) => 99
+XML: end-element (99, {http://example.com/neon/litmus/, foo})
+Got property #2: {http://example.com/neon/litmus/}bar.
+XML: start-element (50, {http://example.com/neon/litmus/, bar}) => 99
+XML: end-element (99, {http://example.com/neon/litmus/, bar})
+XML: end-element (50, {DAV:, prop})
+XML: start-element (7, {DAV:, status}) => 6
+XML: char-data (6) returns 0
+Decoded status line: HTTP/1.1 404 Not Found
+XML: end-element (6, {DAV:, status})
+XML: end-element (7, {DAV:, propstat})
+XML: end-element (2, {DAV:, response})
+XML: end-element (1, {DAV:, multistatus})
+XML: xmlParseChunk returned 0
+XML: End of document.
+XML: xmlParseChunk returned 0
+Running post_send hooks
+Request ends, status 207 class 2xx, error line:
+207 Multi-Status
+******* Running test 5: propinit ********
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/prop HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: props: 5 (propinit)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 404 Not Found
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 48
+Header Name: [content-length], Value: [48]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 48 bytes of response body.
+Got 48 bytes.
+Read block (48 bytes):
+[JSON-RPC error -32004: metadata entry not found
+]
+Running post_send hooks
+Request ends, status 404 class 4xx, error line:
+404 Not Found
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/prop HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: props: 5 (propinit)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "bd6a7eb7-238e-4e6c-aff4-3aedcd7b8bec-1"
+Header Name: [etag], Value: ["bd6a7eb7-238e-4e6c-aff4-3aedcd7b8bec-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+******* Running test 6: propset ********
+Running pre_send hooks
+Sending request headers:
+PROPPATCH /litmus/prop HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 1033
+Content-Type: application/xml
+X-Litmus: props: 6 (propset)
+
+Sending request-line and headers:
+Sending request body:
+Body block (1033 bytes):
+[<?xml version="1.0" encoding="utf-8" ?>
+<D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><prop0 xmlns="http://example.com/neon/litmus/">value0</prop0></D:prop></D:set>
+<D:set><D:prop><prop1 xmlns="http://example.com/neon/litmus/">value1</prop1></D:prop></D:set>
+<D:set><D:prop><prop2 xmlns="http://example.com/neon/litmus/">value2</prop2></D:prop></D:set>
+<D:set><D:prop><prop3 xmlns="http://example.com/neon/litmus/">value3</prop3></D:prop></D:set>
+<D:set><D:prop><prop4 xmlns="http://example.com/neon/litmus/">value4</prop4></D:prop></D:set>
+<D:set><D:prop><prop5 xmlns="http://example.com/neon/litmus/">value5</prop5></D:prop></D:set>
+<D:set><D:prop><prop6 xmlns="http://example.com/neon/litmus/">value6</prop6></D:prop></D:set>
+<D:set><D:prop><prop7 xmlns="http://example.com/neon/litmus/">value7</prop7></D:prop></D:set>
+<D:set><D:prop><prop8 xmlns="http://example.com/neon/litmus/">value8</prop8></D:prop></D:set>
+<D:set><D:prop><prop9 xmlns="http://example.com/neon/litmus/">value9</prop9></D:prop></D:set>
+</D:propertyupdate>
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 501 Not Implemented
+[hdr] Allow: GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY
+Header Name: [allow], Value: [GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY]
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 52
+Header Name: [content-length], Value: [52]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 52 bytes of response body.
+Got 52 bytes.
+Read block (52 bytes):
+[method not supported by Phase A repository contract
+]
+Running post_send hooks
+Request ends, status 501 class 5xx, error line:
+501 Not Implemented
+Running destroy hooks.
+Request ends.
+******* Running test 7: propget ********
+******* Running test 8: propextended ********
+Running pre_send hooks
+Sending request headers:
+PROPFIND /litmus/prop HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 92
+X-Litmus: props: 8 (propextended)
+
+Sending request-line and headers:
+Sending request body:
+Body block (92 bytes):
+[<?xml version="1.0" encoding="utf-8" ?><propfind xmlns="DAV:"><foobar/><allprop/></propfind>]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 207 Multi-Status
+[hdr] Content-Type: text/xml; charset=utf-8
+Header Name: [content-type], Value: [text/xml; charset=utf-8]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 520
+Header Name: [content-length], Value: [520]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 520 bytes of response body.
+Got 520 bytes.
+Read block (520 bytes):
+[<?xml version="1.0" encoding="UTF-8"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>/litmus/prop</D:href><D:propstat><D:prop><D:displayname>prop</D:displayname><D:getlastmodified>Mon, 16 Nov 2026 16:52:04 GMT</D:getlastmodified><D:resourcetype></D:resourcetype><D:getcontentlength>32</D:getcontentlength><D:getcontenttype>text/plain; charset=utf-8</D:getcontenttype><D:getetag>"bd6a7eb7-238e-4e6c-aff4-3aedcd7b8bec-1"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>]
+XML: Parsing 520 bytes.
+XML: start-element (0, {DAV:, multistatus}) => 0
+XML: end-element (0, {DAV:, multistatus})
+XML: xmlParseChunk returned 0
+XML: End of document.
+XML: xmlParseChunk returned 0
+Running post_send hooks
+Request ends, status 207 class 2xx, error line:
+207 Multi-Status
+Running destroy hooks.
+Request ends.
+******* Running test 9: propmove ********
+******* Running test 10: propget ********
+******* Running test 11: propdeletes ********
+******* Running test 12: propget ********
+******* Running test 13: propreplace ********
+******* Running test 14: propget ********
+******* Running test 15: propnullns ********
+******* Running test 16: propget ********
+******* Running test 17: prophighunicode ********
+******* Running test 18: propget ********
+******* Running test 19: propremoveset ********
+******* Running test 20: propget ********
+******* Running test 21: propsetremove ********
+******* Running test 22: propget ********
+******* Running test 23: propvalnspace ********
+******* Running test 24: propwformed ********
+Running pre_send hooks
+Sending request headers:
+PROPFIND /litmus/prop HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 134
+X-Litmus: props: 24 (propwformed)
+
+Sending request-line and headers:
+Sending request body:
+Body block (134 bytes):
+[<?xml version="1.0" encoding="utf-8" ?><propfind xmlns='DAV:'><prop><prop0 xmlns='http://example.com/neon/litmus/'/></prop></propfind>]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 207 Multi-Status
+[hdr] Content-Type: text/xml; charset=utf-8
+Header Name: [content-type], Value: [text/xml; charset=utf-8]
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] Content-Length: 278
+Header Name: [content-length], Value: [278]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 278 bytes of response body.
+Got 278 bytes.
+Read block (278 bytes):
+[<?xml version="1.0" encoding="UTF-8"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>/litmus/prop</D:href><D:propstat><D:prop><prop0 xmlns="http://example.com/neon/litmus/"></prop0></D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat></D:response></D:multistatus>]
+XML: Parsing 278 bytes.
+XML: start-element (0, {DAV:, multistatus}) => 0
+XML: end-element (0, {DAV:, multistatus})
+XML: xmlParseChunk returned 0
+XML: End of document.
+XML: xmlParseChunk returned 0
+Running post_send hooks
+Request ends, status 207 class 2xx, error line:
+207 Multi-Status
+Running destroy hooks.
+Request ends.
+******* Running test 25: propinit ********
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/prop HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: props: 25 (propinit)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:52:04 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:04 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+PUT /litmus/prop HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 32
+X-Litmus: props: 25 (propinit)
+
+Sending request-line and headers:
+Sending request body:
+Body block (32 bytes):
+[This
+is
+a
+test
+file
+called
+foo
+
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Etag: "3a9f4d64-2222-46f4-95e9-dd0c50e9b451-1"
+Header Name: [etag], Value: ["3a9f4d64-2222-46f4-95e9-dd0c50e9b451-1"]
+[hdr] Date: Mon, 16 Nov 2026 16:52:05 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:05 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+******* Running test 26: propmanyns ********
+Running pre_send hooks
+Sending request headers:
+PROPPATCH /litmus/prop HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Content-Length: 1070
+Content-Type: application/xml
+X-Litmus: props: 26 (propmanyns)
+
+Sending request-line and headers:
+Sending request body:
+Body block (1070 bytes):
+[<?xml version="1.0" encoding="utf-8" ?>
+<D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><somename xmlns="http://example.com/alpha">manynsvalue</somename></D:prop></D:set>
+<D:set><D:prop><somename xmlns="http://example.com/beta">manynsvalue</somename></D:prop></D:set>
+<D:set><D:prop><somename xmlns="http://example.com/gamma">manynsvalue</somename></D:prop></D:set>
+<D:set><D:prop><somename xmlns="http://example.com/delta">manynsvalue</somename></D:prop></D:set>
+<D:set><D:prop><somename xmlns="http://example.com/epsilon">manynsvalue</somename></D:prop></D:set>
+<D:set><D:prop><somename xmlns="http://example.com/zeta">manynsvalue</somename></D:prop></D:set>
+<D:set><D:prop><somename xmlns="http://example.com/eta">manynsvalue</somename></D:prop></D:set>
+<D:set><D:prop><somename xmlns="http://example.com/theta">manynsvalue</somename></D:prop></D:set>
+<D:set><D:prop><somename xmlns="http://example.com/iota">manynsvalue</somename></D:prop></D:set>
+<D:set><D:prop><somename xmlns="http://example.com/kappa">manynsvalue</somename></D:prop></D:set>
+</D:propertyupdate>
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 501 Not Implemented
+[hdr] Allow: GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY
+Header Name: [allow], Value: [GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY]
+[hdr] Content-Type: text/plain; charset=utf-8
+Header Name: [content-type], Value: [text/plain; charset=utf-8]
+[hdr] X-Content-Type-Options: nosniff
+Header Name: [x-content-type-options], Value: [nosniff]
+[hdr] Date: Mon, 16 Nov 2026 16:52:05 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:05 GMT]
+[hdr] Content-Length: 52
+Header Name: [content-length], Value: [52]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 52 bytes of response body.
+Got 52 bytes.
+Read block (52 bytes):
+[method not supported by Phase A repository contract
+]
+Running post_send hooks
+Request ends, status 501 class 5xx, error line:
+501 Not Implemented
+Running destroy hooks.
+Request ends.
+******* Running test 27: propget ********
+Running pre_send hooks
+Sending request headers:
+PROPFIND /litmus/prop HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+Depth: 0
+Content-Length: 535
+Content-Type: application/xml
+X-Litmus: props: 27 (propget)
+
+Sending request-line and headers:
+Sending request body:
+Body block (535 bytes):
+[<?xml version="1.0" encoding="utf-8"?>
+<propfind xmlns="DAV:"><prop>
+<somename xmlns="http://example.com/alpha"/>
+<somename xmlns="http://example.com/beta"/>
+<somename xmlns="http://example.com/gamma"/>
+<somename xmlns="http://example.com/delta"/>
+<somename xmlns="http://example.com/epsilon"/>
+<somename xmlns="http://example.com/zeta"/>
+<somename xmlns="http://example.com/eta"/>
+<somename xmlns="http://example.com/theta"/>
+<somename xmlns="http://example.com/iota"/>
+<somename xmlns="http://example.com/kappa"/>
+</prop></propfind>
+]
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 207 Multi-Status
+[hdr] Content-Type: text/xml; charset=utf-8
+Header Name: [content-type], Value: [text/xml; charset=utf-8]
+[hdr] Date: Mon, 16 Nov 2026 16:52:05 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:05 GMT]
+[hdr] Content-Length: 760
+Header Name: [content-length], Value: [760]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Reading 760 bytes of response body.
+Got 760 bytes.
+Read block (760 bytes):
+[<?xml version="1.0" encoding="UTF-8"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>/litmus/prop</D:href><D:propstat><D:prop><somename xmlns="http://example.com/alpha"></somename><somename xmlns="http://example.com/beta"></somename><somename xmlns="http://example.com/gamma"></somename><somename xmlns="http://example.com/delta"></somename><somename xmlns="http://example.com/epsilon"></somename><somename xmlns="http://example.com/zeta"></somename><somename xmlns="http://example.com/eta"></somename><somename xmlns="http://example.com/theta"></somename><somename xmlns="http://example.com/iota"></somename><somename xmlns="http://example.com/kappa"></somename></D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat></D:response></D:multistatus>]
+XML: Parsing 760 bytes.
+XML: start-element (0, {DAV:, multistatus}) => 1
+XML: start-element (1, {DAV:, response}) => 2
+XML: start-element (2, {DAV:, href}) => 4
+XML: char-data (4) returns 0
+XML: end-element (4, {DAV:, href})
+XML: start-element (2, {DAV:, propstat}) => 7
+XML: start-element (7, {DAV:, prop}) => 50
+Got property #0: {http://example.com/alpha}somename.
+XML: start-element (50, {http://example.com/alpha, somename}) => 99
+XML: end-element (99, {http://example.com/alpha, somename})
+Got property #1: {http://example.com/beta}somename.
+XML: start-element (50, {http://example.com/beta, somename}) => 99
+XML: end-element (99, {http://example.com/beta, somename})
+Got property #2: {http://example.com/gamma}somename.
+XML: start-element (50, {http://example.com/gamma, somename}) => 99
+XML: end-element (99, {http://example.com/gamma, somename})
+Got property #3: {http://example.com/delta}somename.
+XML: start-element (50, {http://example.com/delta, somename}) => 99
+XML: end-element (99, {http://example.com/delta, somename})
+Got property #4: {http://example.com/epsilon}somename.
+XML: start-element (50, {http://example.com/epsilon, somename}) => 99
+XML: end-element (99, {http://example.com/epsilon, somename})
+Got property #5: {http://example.com/zeta}somename.
+XML: start-element (50, {http://example.com/zeta, somename}) => 99
+XML: end-element (99, {http://example.com/zeta, somename})
+Got property #6: {http://example.com/eta}somename.
+XML: start-element (50, {http://example.com/eta, somename}) => 99
+XML: end-element (99, {http://example.com/eta, somename})
+Got property #7: {http://example.com/theta}somename.
+XML: start-element (50, {http://example.com/theta, somename}) => 99
+XML: end-element (99, {http://example.com/theta, somename})
+Got property #8: {http://example.com/iota}somename.
+XML: start-element (50, {http://example.com/iota, somename}) => 99
+XML: end-element (99, {http://example.com/iota, somename})
+Got property #9: {http://example.com/kappa}somename.
+XML: start-element (50, {http://example.com/kappa, somename}) => 99
+XML: end-element (99, {http://example.com/kappa, somename})
+XML: end-element (50, {DAV:, prop})
+XML: start-element (7, {DAV:, status}) => 6
+XML: char-data (6) returns 0
+Decoded status line: HTTP/1.1 404 Not Found
+XML: end-element (6, {DAV:, status})
+XML: end-element (7, {DAV:, propstat})
+XML: end-element (2, {DAV:, response})
+XML: end-element (1, {DAV:, multistatus})
+XML: xmlParseChunk returned 0
+XML: End of document.
+XML: xmlParseChunk returned 0
+Running post_send hooks
+Request ends, status 207 class 2xx, error line:
+207 Multi-Status
+Running destroy hooks.
+Request ends.
+******* Running test 28: propcleanup ********
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/prop HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: props: 28 (propcleanup)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:52:05 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:05 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+******* Running test 29: finish ********
+sess: Destroying session.
+sess: Closing connection.
+sess: Connection closed.
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:45981 begins.
+HTTP session to http://127.0.0.1:45981 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: locks: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:45981
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:52:05 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:05 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: locks: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:05 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:05 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+******* Running test 2: options ********
+Running pre_send hooks
+Sending request headers:
+OPTIONS /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: locks: 2 (options)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 200 OK
+[hdr] Allow: GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY
+Header Name: [allow], Value: [GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, COPY]
+[hdr] Dav: 1
+Header Name: [dav], Value: [1]
+[hdr] Date: Mon, 16 Nov 2026 16:52:05 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:05 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 200 class 2xx, error line:
+200 OK
+Running destroy hooks.
+Request ends.
+******* Running test 3: precond ********
+Version string: neon 0.32.2: Library build, IPv6, libxml 2.9.12, zlib 1.2.11, GNU TLS 3.7.2.
+******* Running test 0: init ********
+******* Running test 1: begin ********
+HTTP session to http://127.0.0.1:45981 begins.
+HTTP session to http://127.0.0.1:45981 begins.
+Running pre_send hooks
+Sending request headers:
+DELETE /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Keep-Alive: 
+Connection: TE, Keep-Alive
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: http: 1 (begin)
+
+Sending request-line and headers:
+Doing DNS lookup on 127.0.0.1...
+req: Connecting to 127.0.0.1:45981
+Request sent; retry is 0.
+[status-line] < HTTP/1.1 204 No Content
+[hdr] Date: Mon, 16 Nov 2026 16:52:05 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:05 GMT]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 204 class 2xx, error line:
+204 No Content
+Running destroy hooks.
+Request ends.
+Running pre_send hooks
+Sending request headers:
+MKCOL /litmus/ HTTP/1.1
+User-Agent: litmus/0.13 neon/0.32.2
+Connection: TE
+TE: trailers
+Host: 127.0.0.1:45981
+X-Litmus: http: 1 (begin)
+
+Sending request-line and headers:
+Request sent; retry is 1.
+[status-line] < HTTP/1.1 201 Created
+[hdr] Date: Mon, 16 Nov 2026 16:52:05 GMT
+Header Name: [date], Value: [Mon, 16 Nov 2026 16:52:05 GMT]
+[hdr] Content-Length: 0
+Header Name: [content-length], Value: [0]
+[hdr] 
+End of headers.
+Running post_headers hooks
+Running post_send hooks
+Request ends, status 201 class 2xx, error line:
+201 Created
+Running destroy hooks.
+Request ends.
+******* Running test 2: expect100 ********
+Request:
+PUT /litmus/expect100 HTTP/1.1
+Host: 127.0.0.1:45981
+X-Litmus: http
+User-Agent: litmus/0.13
+Content-Length: 100
+Expect: 100-continue
+
+[status] HTTP/1.1 100 Continue
+******* Running test 3: finish ********
+sess: Destroying session.
+sess: Closing connection.
+sess: Connection closed.

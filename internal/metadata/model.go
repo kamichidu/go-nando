@@ -17,6 +17,31 @@ var ErrEntryConflict = errors.New("metadata entry conflict")
 // EntryID is a stable, immutable, globally unique entry identifier.
 type EntryID string
 
+// BufferID identifies one internal-only detached subtree awaiting reclamation.
+type BufferID string
+
+// DetachedBuffer identifies the detached root of one independently reclaimable subtree.
+type DetachedBuffer struct {
+	ID        BufferID
+	RootID    EntryID
+	ExpiresAt Timestamp
+	Fencing   uint64
+	Claimed   bool
+}
+
+// DeadProperty is an opaque WebDAV property value keyed by an Entry and expanded name.
+type DeadProperty struct {
+	EntryID   EntryID `json:"entry_id"`
+	Namespace string  `json:"namespace"`
+	Name      string  `json:"name"`
+	XML       string  `json:"xml"`
+}
+
+type DeadPropertyChange struct {
+	Property DeadProperty
+	Remove   bool
+}
+
 // String returns the string representation of the EntryID.
 func (id EntryID) String() string {
 	return string(id)

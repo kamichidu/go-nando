@@ -1,0 +1,81 @@
+{
+  "path": "/tmp/go-nando-e2e.1Lx9jz/mount-fsx-validation-326393/truncate-probe.bin",
+  "observations": [
+    {
+      "step": "write_initial",
+      "result": 11
+    },
+    {
+      "step": "fsync_initial",
+      "result": null
+    },
+    {
+      "step": "truncate_to_current_size",
+      "result": null
+    },
+    {
+      "step": "truncate_extend",
+      "result": null
+    },
+    {
+      "step": "fstat_after_extend",
+      "result": 100011
+    },
+    {
+      "step": "read_hole_after_extend",
+      "result": {
+        "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "length": 32
+      }
+    },
+    {
+      "step": "truncate_shrink",
+      "result": null
+    },
+    {
+      "step": "truncate_reextend",
+      "result": null
+    },
+    {
+      "step": "fstat_after_reextend",
+      "result": 100
+    },
+    {
+      "step": "read_preserved_prefix",
+      "result": {
+        "hex": "70726566",
+        "length": 4
+      }
+    },
+    {
+      "step": "read_reextended_hole",
+      "result": {
+        "hex": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "length": 96
+      }
+    },
+    {
+      "step": "write_across_end_boundary",
+      "result": 3
+    },
+    {
+      "step": "fstat_after_boundary_write",
+      "result": 101
+    },
+    {
+      "step": "read_across_end_boundary",
+      "result": {
+        "hex": "000058595a",
+        "length": 5
+      }
+    },
+    {
+      "step": "fsync_after_boundary_write",
+      "result": null
+    },
+    {
+      "step": "path_stat_after_commit",
+      "result": 101
+    }
+  ]
+}

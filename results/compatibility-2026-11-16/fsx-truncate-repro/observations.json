@@ -1,0 +1,72 @@
+{
+  "path": "/tmp/nando-analysis-repro/mount/minimal.bin",
+  "observations": [
+    {
+      "step": "write_initial",
+      "result": 11
+    },
+    {
+      "step": "fsync_initial",
+      "result": null
+    },
+    {
+      "step": "truncate_base",
+      "result": null
+    },
+    {
+      "step": "extend_once",
+      "result": null
+    },
+    {
+      "step": "stat_after_extend",
+      "result": 11
+    },
+    {
+      "step": "read_hole",
+      "result": {
+        "length": 0,
+        "all_zero": false
+      }
+    },
+    {
+      "step": "shrink",
+      "result": null
+    },
+    {
+      "step": "reextend",
+      "result": null
+    },
+    {
+      "step": "stat_after_reextend",
+      "result": 11
+    },
+    {
+      "step": "preserved_prefix",
+      "result": "70726566"
+    },
+    {
+      "step": "reextended_hole",
+      "result": false
+    },
+    {
+      "step": "boundary_write",
+      "result": 3
+    },
+    {
+      "step": "boundary_stat",
+      "result": 11
+    },
+    {
+      "step": "boundary_read",
+      "result": ""
+    },
+    {
+      "step": "fsync_final",
+      "result": null
+    },
+    {
+      "step": "stat_after_commit",
+      "result": 101
+    }
+  ]
+}

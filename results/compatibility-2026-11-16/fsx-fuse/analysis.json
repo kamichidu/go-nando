@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "suite": "fsx",
+  "target": "FUSE",
+  "status": "command_failed",
+  "process_exit_code": 130,
+  "observed_output": "Seed set to 1\nno extend on truncate! not posix!\n",
+  "upstream_test_interpretation": "unclassified; raw output contains the upstream non-POSIX truncate warning; no cases were rewritten or retried against modified expectations",
+  "stdout_sha256": "1544053fed171a02fb5584efcbbf8213b788ce1cf3639ba09796e2ef8124ae05"
+}

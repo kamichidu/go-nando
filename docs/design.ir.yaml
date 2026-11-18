@@ -102,7 +102,7 @@ nodes:
   - id: REQ-FUSE-DURABILITY
     level: system_requirement
     kind: filesystem-commit-invariant
-    statement: A successful FUSE Fsync MUST mean the complete file bytes have been durably published as an immutable Local Object and the corresponding Metadata revision plus any selected-backend delivery obligation have committed atomically; this visibility is synchronous before the Fsync call returns. Remote upload is asynchronous and is not part of Fsync. A crash after successful Fsync but before Flush, Close, or Release MUST preserve that committed revision and its queued delivery obligation. The daemon's generic Resource Release MUST NOT commit bytes. The FUSE adapter MUST attempt Commit for remaining dirty staging on Fsync and final close, before sending daemon Release; a failed attempt MUST leave staging and a durable or Begin-anchored recovery manifest. Linux/go-fuse may dispatch final-close RELEASE asynchronously with respect to close(2), so close return alone does not guarantee that final-close Commit has completed or become visible; callers that require a synchronous visibility boundary MUST use successful Fsync. The adapter's ordinary handle close is distinct from explicit daemon Abort and explicit recovery discard. A failed CAS MUST never silently retry against a newer revision. Before a commit attempt, the last committed revision remains visible and intact.
+    statement: A successful FUSE Fsync MUST mean the complete file bytes have been durably published as an immutable Local Object and the corresponding Metadata revision plus any selected-backend delivery obligation have committed atomically; this visibility is synchronous before the Fsync call returns. Remote upload is asynchronous and is not part of Fsync. A crash after successful Fsync but before Flush, Close, or Release MUST preserve that committed revision and its queued delivery obligation. The daemon's generic Resource Release MUST NOT commit bytes. The FUSE adapter MUST attempt Commit for remaining dirty staging on Fsync and final close, before sending daemon Release; a failed attempt MUST leave staging and a durable or Begin-anchored recovery manifest. Linux/go-fuse may dispatch final-close RELEASE asynchronously with respect to close(2), so close return alone does not guarantee that final-close Commit has completed or become visible; callers that require a synchronous visibility boundary MUST use successful Fsync. The adapter's ordinary handle close is distinct from explicit daemon Abort and explicit recovery discard. A failed CAS MUST never silently retry against a newer revision. Before a commit attempt, the last committed revision remains visible and intact. For a stable Entry detached by another adapter, a successful Commit MUST yield Fsync or final-Release success; authoritative Entry-not-found followed by successful discard MUST also return success while discarding private open-handle writes without resurrection. If Fsync reports detached-discard cleanup incomplete, it MUST return EIO, and repeated Fsync MUST continue to return EIO while cleanup remains pending, even though it syncs the held staging file. A later final Release retries cleanup with Abort. Abort failure MUST return EIO; Abort success MUST return Release success to confirm Resource cleanup only, without retroactively succeeding an earlier Fsync or persisting the discarded writes. When final Release itself first attempts Commit, successful detached discard returns success; incomplete discard cleanup returns EIO even if a subsequent Abort retry completes cleanup.
     provenance:
       origin: human-authored
   - id: REQ-FUSE-FILE-HANDLES
@@ -116,7 +116,7 @@ nodes:
     level: system_requirement
     kind: filesystem-handle-invariant
     statement: >-
-      While linked, Entry metadata is authoritative for logical mode. FUSE fchmod MUST use the ordinary repository metadata chmod operation by stable Entry ID, including on O_RDONLY and O_WRONLY handles and path chmod; path stat and every retained handle Getattr MUST refresh Entry metadata by stable ID and observe updates made by this adapter or any other repository client/adapter. After successful namespace removal, retained handles use the shared volatile open-inode mode state. A durable unlink discard intent alone MUST NOT transfer mode authority away from the still-linked Entry. Chmod is independent of staging and write-session lifetimes. Existing-entry content-only commits MUST preserve the latest Entry mode. A chmod racing a content commit is serialized by metadata revision CAS: whichever metadata update linearizes first is included by a later content update; if an update races after its CAS snapshot, that operation fails with EAGAIN and MUST NOT overwrite the winner. Failed chmod RPC leaves Entry mode unchanged and Setattr reports the mapped error. After successful unlink, logical mode becomes volatile in a shared FUSE open-inode mode state keyed by stable Entry ID, shared by read and write handles; fchmod through any retained handle updates it and fstat through every retained handle observes it. Detached chmod MUST NOT call daemon metadata methods, begin or commit a session, or recreate the name. The volatile mode state is discarded after the last handle closes. An open FUSE handle owns its retained Resource and attribute view. Successful Unlink detaches the namespace Entry while preserving resources. Detached write handles may continue private staging I/O; size changes truncate staging and Fsync syncs staging only. Detached reads continue from immutable resources; ftruncate fails EBADF. Write staging files remain physically mode 0600 and this invariant is independent of logical mode. Setattr responses describe the mutation's captured state snapshot. Final Release cleans the retained daemon resource and final close removes detached mode state. Daemon restart finishes durable unlink tombstone cleanup without exposing staging as ordinary Recovery.
+      While linked, Entry metadata is authoritative for logical mode. FUSE fchmod MUST use the ordinary repository metadata chmod operation by stable Entry ID, including on O_RDONLY and O_WRONLY handles and path chmod; path stat and every retained handle Getattr MUST refresh Entry metadata by stable ID and observe updates made by this adapter or any other repository client/adapter. After successful namespace removal, retained handles use the shared volatile open-inode mode state. A durable unlink discard intent alone MUST NOT transfer mode authority away from the still-linked Entry. Chmod is independent of staging and write-session lifetimes. Existing-entry content-only commits MUST preserve the latest Entry mode. A chmod racing a content commit is serialized by metadata revision CAS: whichever metadata update linearizes first is included by a later content update; if an update races after its CAS snapshot, that operation fails with EAGAIN and MUST NOT overwrite the winner. Failed chmod RPC leaves Entry mode unchanged and Setattr reports the mapped error. After successful unlink, logical mode becomes volatile in a shared FUSE open-inode mode state keyed by stable Entry ID, shared by read and write handles; fchmod through any retained handle updates it and fstat through every retained handle observes it. Detached chmod MUST NOT call daemon metadata methods, begin or commit a session, or recreate the name. The volatile mode state is discarded after the last handle closes. An open FUSE handle owns its retained Resource and attribute view. Successful Unlink detaches the namespace Entry while preserving resources. The same handle guarantees apply when another adapter detaches a parent subtree without FUSE Unlink: handle-based Getattr and Setattr MUST use the held Resource and cached inode state without requiring public Entry resolution. A stable-ID write Commit after external detach MUST be discard-only, MUST NOT recreate the Entry, and MUST NOT leave an ordinary failed-write Recovery record. Detached write handles may continue private staging I/O; size changes truncate staging and Fsync syncs staging only. Detached reads continue from immutable resources; ftruncate fails EBADF. Write staging files remain physically mode 0600 and this invariant is independent of logical mode. Setattr responses describe the mutation's captured state snapshot. Final Release cleans the retained daemon resource and final close removes detached mode state. Daemon restart finishes durable unlink tombstone cleanup without exposing staging as ordinary Recovery.
     provenance:
       origin: human-authored
   - id: REQ-REPRODUCIBLE-E2E-GATES
@@ -302,9 +302,16 @@ nodes:
     kind: compatibility-invariant
     statement: >-
       SQLite PRAGMA user_version MUST be the sole authority for SQLite schema
-      version, with initial schema version 1. Each schema change MUST increment
-      user_version by exactly one; schema version MUST be independent of
-      application semantic version. v1.0.0 starts compatibility guarantees.
+      version, with initial schema version 1. Before v1.0.0, the dead_properties
+      table is an amendment to the unreleased v1 baseline and MUST retain
+      user_version=1. Init MAY transactionally complete only the exact known
+      four-table, five-table, or known lease-less six-table pre-release v1
+      schema after validating its complete schema shape, Repository Format,
+      and root Entry. This narrow completion is not a
+      published migration and MUST end at first release. After v1.0.0, each
+      schema change MUST increment user_version by exactly one; schema version
+      MUST be independent of application semantic version. v1.0.0 starts
+      compatibility guarantees.
       Patch releases MUST contain compatible fixes; minor releases MAY add
       backward-compatible functionality; major releases MAY introduce breaking
       changes. Publishing or installing a binary is an explicit operator action;
@@ -328,9 +335,10 @@ nodes:
       migration entry point. Normal startup and initialization MUST validate the schema
       version and refuse mismatches without migration; initialization MAY
       complete a recognized interrupted repository provisioning state, but MUST
-      never migrate an existing database or modify an unsupported schema. A
+      never migrate a post-release existing database or modify an unsupported
+      schema. The exact pre-release completion above is the only exception. A
       valid existing v1 database MUST be validated and left unchanged. Unknown,
-      older, newer, and legacy schema/data states MUST be
+      extra, malformed, older, newer, and legacy schema/data states MUST be
       refused without mutation. A migration MUST apply schema changes and the
       new user_version in one transaction and roll back both on failure.
       Downgrade is unsupported. Operators MUST apply each required persisted
@@ -355,7 +363,9 @@ nodes:
       historical_migration_chain: unsupported
       migration_entry_point: nando-admin-migrate
       normal_startup_migration: prohibited
-      init_existing_database: validate-only-v1-and-resume-empty-schema
+      init_existing_database: validate-v1;pre-release-exact-four-table-v1-completion-only
+      pre_release_dead_properties: amend-v1-baseline;user_version-unchanged;completion-transactional-and-exact
+      post_release_schema_policy: adjacent-version-explicit-migration
       completed_init_rerun: idempotent-no-op
       unsupported_state_mutation: prohibited
       migration_atomicity: schema-and-user_version-same-transaction
@@ -413,9 +423,15 @@ nodes:
   - id: REQ-SUBTREE-MUTATIONS
     level: system_requirement
     kind: namespace-invariant
-    statement: Move and Remove MUST enforce conflicts across the affected subtree and MUST reject moving an Entry into its own descendant subtree.
+    statement: Move and Remove MUST enforce conflicts across the affected subtree and MUST reject moving an Entry into its own descendant subtree. Recursive Remove MUST atomically detach the selected root from the public namespace in one Metadata transaction before reclaiming descendants in separate resumable per-Entry Metadata operations. Detach MUST compare the selected Entry's observed parent and revision so a concurrent Move that linearizes first is not deleted at its new location. Detached roots MUST be inaccessible through ordinary path, Entry-ID, property, and listing APIs; object-reference enumeration MUST retain their objects until reclamation deletes them. Reclamation failure MUST leave a registered buffer for retry and MUST NOT block unrelated object GC or public namespace operations. The number of independent buffers MUST be unbounded by schema shape, and each buffer MUST be independently reclaimable. COPY staging buffers MUST use a dedicated internal-buffer TTL and heartbeat, separate from Resource-session and Resource-lock leases. Renewal, mutation, publication, and expiry claim MUST be transactional and compare a monotonically changing fencing token; once a reclaimer claims an expired buffer, stale COPY owners MUST be unable to renew, mutate, or publish. Daemon restart under the repository process lock MUST fence prior-process COPY owners and resume reclamation; failed COPY cleanup MUST expire/claim its own buffer and converge to deletion.
     provenance:
-      origin: imported
+      origin: human-authored
+  - id: REQ-WEBDAV-COPY-MOVE-BOUNDARIES
+    level: system_requirement
+    kind: protocol-invariant
+    statement: WebDAV MUST support file and collection COPY, COPY overwrite, and MOVE overwrite as implemented by the Phase A adapter. Each Metadata transaction and each individual namespace Move is atomic. Multi-step replacement, dead-property propagation, and displaced-tree reclamation are not globally atomic; on error the adapter MUST report whether content or namespace changes committed and MUST keep displaced or staged data reachable either in the public namespace or a registered internal buffer for recovery/reclamation. No requirement implies global rollback of a multi-step operation.
+    provenance:
+      origin: human-authored
   - id: REQ-GET-ATOMIC-DESTINATION
     level: system_requirement
     kind: export-invariant
@@ -574,14 +590,22 @@ nodes:
       fuse_access: read-write
       webdav_access: read-write
       webdav_process_and_module: separate-peer-of-daemon
-      webdav_http_methods: [GET, HEAD, OPTIONS, PROPFIND, PUT, DELETE, MKCOL, MOVE, file-COPY]
+      webdav_http_methods: [GET, HEAD, OPTIONS, PROPFIND, PROPPATCH, PUT, DELETE, MKCOL, MOVE, file-COPY, collection-COPY]
       webdav_put_commit_boundary: daemon-Commit-before-success-response
       webdav_etag: stable-Entry-ID-and-committed-revision
       webdav_conditional_put: If-Match-and-If-None-Match-against-Begin-CAS-snapshot
       webdav_phase_a_listener: loopback-only-HTTP; no-client-authentication; no-TLS; external-exposure-deferred
       webdav_phase_a_clients: same-local-user-only
       webdav_conditional_write_policy: If-Match-and-If-None-Match-against-Begin-CAS-snapshot; reject-unsupported-conditions
-      webdav_unsupported_until-contract-defined: [LOCK, UNLOCK, PROPPATCH, dead-properties, directory-COPY, COPY-overwrite, MOVE-overwrite]
+      webdav_unsupported_until-contract-defined: [LOCK, UNLOCK]
+      webdav_dead_properties: EntryID-namespaceURI-localname-opaque-XML; atomic-batch-update; COPY-clones; MOVE-retains; DELETE-cleans; PUT-preserves
+      webdav_copy_move_atomicity: each-Metadata-operation-and-individual-namespace-Move-is-atomic; multi-step-COPY-MOVE-replacement-property-update-and-old-tree-reclamation-are-not-globally-atomic; errors-identify-committed-or-recoverable-partial-state
+      metadata_internal_buffers: SQLite-only-dynamic-independent-buffers; atomically-detach-public-subtree-root; invisible-through-public-path-and-EntryID-APIs; retain-object-references-until-resumable-bottom-up-reclaim; retry-after-failure-and-daemon-restart
+      metadata_internal_buffer_lease: dedicated-30-second-TTL-renewed-every-5-seconds; atomic-fenced-renew-mutation-publish-and-expired-claim; startup-fences-prior-process-under-repository-lock; not-unified-with-Resource-session-or-lock-leases
+      metadata_internal_buffer_gc_claim: durable-claimed-ownership-under-single-daemon-repository-process-lock; claimed-expiry-cleared; interrupted-claim-reset-and-refenced-only-on-startup-after-process-lock; no-runtime-GC-claim-renewal
+      fuse_stable_handle_commit: only-authoritative-ErrEntryNotFound-for-stable-public-Entry-discarded; ErrEntryConflict-and-ambiguous-errors-retain-Recovery; metadata-visibility-or-CAS-transaction-is-classification-authority; atomic-CommitPut-requireExisting-prevents-detached-row-recreation-after-GC; Fsync-and-final-Release-use-same-result
+      fuse_detached_discard_failure: distinct-RPC-outcome-not-EntryNotFound; Fsync-EIO-sticky-while-cleanup-pending; later-final-Release-Abort-failure-is-EIO-and-success-confirms-cleanup-only-not-prior-Fsync-or-write-persistence; direct-final-Release-Commit-uses-normal-detached-entry-result; detached-pending-session-is-never-exposed-as-ordinary-Recovery; durable-discard-marker-is-retried-by-Abort-or-restart; if-marker-write-failed-startup-confirms-stable-Entry-absence-before-discard
+      metadata_detach_handle_lifetime: open-read-Resource-and-content-RLock-live-through-Release; open-write-session-remains-private; FUSE-own-Unlink-durably-marks-discard-before-detach; cross-adapter-detach-makes-expected-entry-Commit-discard-only; open-handle-Getattr-Setattr-use-held-Resource-and-cached-inode-state
       fuse_fsync: durable-Local-Object-and-atomic-Metadata-plus-delivery-obligation
       fuse_release_is_commit_boundary: true
       fuse_release_order: Commit-dirty-staging-before-Resource-Release
@@ -1079,7 +1103,7 @@ nodes:
     statement: Phase A delivers one WSL Linux daemon for single-user local-host operation with SQLite Metadata, Local durable commits, immediate single-daemon visibility, standard per-user Unix-domain-socket JSON-RPC 2.0 (private parent directory mode 0700 and socket mode 0600), daemon-owned Resource sessions, and local file:// Resource URIs. TCP support remains available only with TLS and bearer authentication but its bind/certificate/token operations are outside standard Phase A operation. CLI, FUSE, and WebDAV are client processes; FUSE and WebDAV are separate Go modules and executables. The phase includes read-write FUSE/WebDAV clients and idle-scheduled remote delivery using the GCS adapter with ADC or the S3-compatible adapter with optional runtime `[remote.s3]` endpoint and region plus AWS SDK v2 Default Credential Chain, but their complete implementations may be delivered incrementally. WebDAV is plain HTTP restricted to loopback and serves the same local OS user; external publication, client authentication, TLS termination, and multi-user authorization are deferred. WebDAV PUT supports If-Match and If-None-Match against the Begin-time Repository CAS snapshot; unsupported conditional headers are explicitly rejected. It does not implement Firestore, multiple daemons, globally published heads, remote Resource transfer, cross-platform runtime support, or Cloud Run deployment.
     attributes:
       roadmap_phase: A
-      phase_status: planned
+      phase_status: complete
       includes: [single-daemon, single-user-local-host, SQLite, Local-immediate-visibility, standard-JSON-RPC-UDS, daemon-owned-resource-sessions, file-Resource-URIs, separate-FUSE-module-and-process, separate-WebDAV-module-and-process, loopback-HTTP-WebDAV, Begin-CAS-conditional-PUT, idle-GCS-sync, ADC]
       excludes: [external-client-exposure, multi-user-authorization, WebDAV-client-authentication, WebDAV-TLS-termination, standard-TCP-operations, Firestore, multiple-daemons, Published-Head, remote-Resource-transfer, cross-platform, Cloud-Run]
       commit_boundary: [durable-Local-Object, atomic-Metadata-and-delivery-obligation]
@@ -1090,6 +1114,14 @@ nodes:
         - WebDAV If-Match and If-None-Match are evaluated against the Begin-time CAS snapshot and Commit conflict returns a precondition failure
         - unsupported WebDAV conditional headers are explicitly rejected rather than silently ignored
         - TCP listener remains unavailable unless TLS and bearer authentication are configured; TCP credential lifecycle is not a standard Phase A acceptance item
+      completion_basis:
+        decision: substantially-complete-with-nonblocking-follow-ups
+        evidence: docs/phase-a-completion-review.adoc
+        reviewed_branch: bench/fuse-webdav-baseline
+        reviewed_commit: 61797ee9bbc29ea5ffc61c9c537490898f8e40dd
+        evidence_scope: implemented Phase A contracts and recorded host/emulator verification; not full WebDAV interoperability or production GCS acceptance
+        non_blocking_open_items: [OPEN-GCS-SCHEDULER-DEFAULTS, OPEN-GCS-GENERATION-AND-BUCKET-POLICY, OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS, OPEN-READ-REVISION-CHANGE]
+        verification_limits: [Litmus compatibility groups with failures or unsupported operations, production GCS/ADC/IAM, experimental system-scope service runtime]
     provenance:
       origin: human-authored
   - id: DES-PHASE-B-PUBLISHED-HEAD
@@ -1220,7 +1252,7 @@ nodes:
   - id: IMP-SQLITE-SCHEMA-LIFECYCLE-GAP
     level: implementation
     kind: observed-implementation
-    statement: The current implementation uses PRAGMA user_version as the sole SQLite schema version authority and creates baseline version 1 transactionally with the v1 tables, root entry, and Repository Format. Application init validates existing v1 metadata and resumes only recognized provisioning components; an empty uninitialized database may receive the transactional baseline, while unknown or malformed databases are refused without mutation. Completed init is idempotent and preserves repository settings. Normal composition validates schema version and v1 table presence without migration. nando admin migrate opens only an existing database, validates schema and Repository Format, and reports a no-op for valid v1. Nonempty user_version=0 databases, including former schema_migrations databases, malformed/missing v1 tables, and unknown older/newer versions are refused without mutation. No v0-to-v1 migration exists. The generic future N-1-to-N transition is NOT implemented because v1 is the initial baseline and there is no predecessor schema to migrate; future schema-changing releases must implement only their immediate predecessor transition with transactional DDL and user_version update.
+    statement: The current pre-release implementation uses PRAGMA user_version as the sole SQLite schema version authority and creates baseline version 1 transactionally with entries, repository_format, transfer_queue, content_metadata, and dead_properties, root entry, and Repository Format. Before first release, init may transactionally complete only the exact known four-table v1 baseline after validating its shape, Repository Format, and root; it retains user_version=1. This is an unreleased baseline amendment, not a migration. Unknown, extra, or malformed schemas remain refused without mutation. After release, schema changes require the strict adjacent-version migration policy. Completed init is idempotent and preserves repository settings. Normal composition validates schema version and v1 table presence without migration. nando admin migrate opens only an existing database, validates schema and Repository Format, and reports a no-op for valid v1. Nonempty user_version=0 databases, including former schema_migrations databases, malformed/missing v1 tables, and unknown older/newer versions are refused without mutation. No v0-to-v1 migration exists. The generic future N-1-to-N transition is NOT implemented because v1 is the initial baseline and there is no predecessor schema to migrate; future schema-changing releases must implement only their immediate predecessor transition with transactional DDL and user_version update.
     provenance:
       origin: observed
     artifact_refs:

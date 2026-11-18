@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline/results/compatibility-2026-11-16/fsx-truncate-repro/reproduce.py", line 10, in <module>
+    fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_RDWR, 0o600)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 5] Input/output error: '/tmp/nando-validation-tools/run-69e4bb6/mount/truncate-probe.bin'

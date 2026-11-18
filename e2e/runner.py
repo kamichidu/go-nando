@@ -68,6 +68,7 @@ ACTION_SCENARIOS = {
     "g3-crash-fuse": ["G3-04"],
     "g3-verify-recovery": ["G3-05"],
     "g4": ["G4-01"],
+    "fsx-validation": ["G6-01", "G6-02"],
 }
 SCENARIO_EXPECTATIONS = {
     "G2-05": "GCS accepted the object but daemon died before receiving the upload response or completing its durable transfer obligation",
@@ -848,12 +849,18 @@ def g2_ack_crash() -> None:
         proxy_control("arm", method="POST")
         payload_path = ARTIFACTS / "ack-boundary.bin"
         payload_path.write_bytes(data)
+        # The transfer obligation becomes scheduler-eligible atomically with
+        # Put's metadata commit. Check for a pre-existing object before Put;
+        # after commit the scheduler may upload before the CLI returns.
+        content_id = "sha256-" + hashlib.sha256(data).hexdigest()
+        if gcs_object(content_id) is not None:
+            raise GateFailure("fault-injection object unexpectedly exists before Put eligibility")
         nando("put", str(payload_path), "/ack-boundary")
-        content_id = stat_hash("/ack-boundary")
+        committed_id = stat_hash("/ack-boundary")
+        if committed_id != content_id:
+            raise GateFailure(f"committed content ID {committed_id} differs from payload ID {content_id}")
         if cat_bytes("/ack-boundary") != data:
             raise GateFailure("local content was not committed before remote delivery")
-        if gcs_object(content_id) is not None:
-            raise GateFailure("fault-injection object unexpectedly exists before scheduler eligibility")
         wait_until("upstream object committed behind held upload response", lambda: gcs_object(content_id) is not None, timeout=30)
         proxy = wait_proxy_committed()
         if proxy["held_commits"] != 1:
@@ -1280,6 +1287,49 @@ def g4_stress() -> None:
         scenario("G4-01", "optional bounded parallel create/write/fsync stress preserves every result", parallel_fsyncs)
 
 
+def fsx_validation() -> None:
+    import shutil
+    repo = Path(__file__).resolve().parents[1]
+    repro = repo / "results/compatibility-2026-11-16/fsx-truncate-repro/reproduce.py"
+    fsx_manifest_source = repo / "results/compatibility-2026-11-16/tooling-fsx.json"
+    fsx = os.environ.get("E2E_FSX_BIN", "/tmp/nando-validation-tools/xfstests/ltp/fsx")
+    if not Path(fsx).is_file():
+        raise GateFailure(f"prepared fsx executable is unavailable: {fsx}")
+    with fuse_mount("fsx-validation") as mountpoint:
+        evidence = ARTIFACTS / "fsx-validation"
+        evidence.mkdir()
+        fsx_manifest = evidence / "tooling-fsx.json"
+        shutil.copyfile(fsx_manifest_source, fsx_manifest)
+        py = shutil.which("python3")
+        repro_manifest = evidence / "tooling-truncate-probe.json"
+        subprocess.run([py, str(repo / "tools/validation_tooling.py"), "--output", str(repro_manifest),
+            "--tool-name", "truncate-probe", "--version-command", f"{py} --version", "--executable", py,
+            "--installation-notes", "Host Python interpreter; committed truncate probe.",
+            "--source-revision", subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
+            "--source-tree", str(repro.parent), "--precondition", "target=real host FUSE mount"], check=True)
+        conditions = [
+            ("truncate-probe", {"target": "real host FUSE mount", "mount_options": [], "allow_other": False,
+                "workload": "committed truncate/fstat/read/fsync reproduction", "uid": os.getuid(), "gid": os.getgid()}),
+            ("fsx", {"target": "real host FUSE mount", "mount_options": [], "allow_other": False,
+                "iterations": 10000, "file_size": "1MiB", "uid": os.getuid(), "gid": os.getgid()}),
+        ]
+        for name, value in conditions:
+            (evidence / f"{name}-conditions.json").write_text(json.dumps(value, indent=2) + "\n")
+        commands = [("truncate-probe", repro_manifest, [py, str(repro), mountpoint]),
+            ("fsx", fsx_manifest, [fsx, "-N", "10000", "-l", "1048576", str(Path(mountpoint) / "fsx.data")])]
+        for name, manifest, command in commands:
+            result = subprocess.run([py, str(repo / "tools/validation_capture.py"), "--output", str(evidence / name),
+                "--suite", name, "--target", "real host FUSE mount", "--cwd", mountpoint,
+                "--tooling-manifest", str(manifest), "--conditions-json", str(evidence / f"{name}-conditions.json"),
+                "--timeout-seconds", "900", "--", *command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            (evidence / f"{name}-capture.log").write_text(result.stdout)
+            print(result.stdout, end="", flush=True)
+            if result.returncode:
+                raise GateFailure(f"{name} validation failed with exit {result.returncode}; see {evidence}")
+        scenario("G6-01", "truncate probe completed on real FUSE", lambda: "captured result and logs")
+        scenario("G6-02", "pinned fsx completed on real FUSE", lambda: "captured result and logs")
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: runner.py <wait-daemon|health|g1|g2-init|g2-proxy-ready|g2-normal|g2-outage|g2-ack-crash|g2-ack-replay|g2-retry|g3-commit|g3-verify|g3-start-uncommitted|g3-crash-fuse|g3-verify-recovery|g4>", file=sys.stderr)
@@ -1327,6 +1377,8 @@ def main() -> int:
             g3_verify_recovery()
         elif action == "g4":
             g4_stress()
+        elif action == "fsx-validation":
+            fsx_validation()
         else:
             raise GateFailure(f"unknown action {action!r}")
     except BaseException as exc:

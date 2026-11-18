@@ -1,0 +1,5 @@
+[remote]
+sync_idle_interval = "250ms"
+sync_periodic_interval = "1s"
+max_delivery_delay = "2s"
+sync_parallelism = 2

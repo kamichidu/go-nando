@@ -77,23 +77,70 @@ request 404 "$E2E_WEBDAV_URL/file"
 request 200 "$E2E_WEBDAV_URL/moved"; cmp "$TMP/winner" "$TMP/body"
 request 201 -X COPY -H "Destination: $E2E_WEBDAV_URL/copied" "$E2E_WEBDAV_URL/moved"
 request 200 "$E2E_WEBDAV_URL/copied"; cmp "$TMP/winner" "$TMP/body"
-request 412 -X COPY -H "Destination: $E2E_WEBDAV_URL/copied" "$E2E_WEBDAV_URL/moved"
+request 204 -X COPY -H "Destination: $E2E_WEBDAV_URL/copied" "$E2E_WEBDAV_URL/moved"
+request 200 "$E2E_WEBDAV_URL/copied"; cmp "$TMP/winner" "$TMP/body"
+request 412 -X COPY -H 'Overwrite: F' -H "Destination: $E2E_WEBDAV_URL/copied" "$E2E_WEBDAV_URL/moved"
+request 409 -X COPY -H "Destination: $E2E_WEBDAV_URL/no-such-parent/copied" "$E2E_WEBDAV_URL/moved"
+request 403 -X COPY -H "Destination: $E2E_WEBDAV_URL/moved" "$E2E_WEBDAV_URL/moved"
+request 201 -X MKCOL "$E2E_WEBDAV_URL/copy-source"
+request 201 -X MKCOL "$E2E_WEBDAV_URL/copy-source/nested"
+request 201 -X PUT --data-binary @"$TMP/payload" "$E2E_WEBDAV_URL/copy-source/nested/leaf"
+request 201 -X COPY -H 'Depth: 0' -H "Destination: $E2E_WEBDAV_URL/copy-shallow" "$E2E_WEBDAV_URL/copy-source"
+request 207 -X PROPFIND -H 'Depth: 1' -H 'Content-Type: application/xml' --data-binary @"$TMP/propfind" "$E2E_WEBDAV_URL/copy-shallow"
+! grep -q 'nested' "$TMP/body"
+request 201 -X COPY -H 'Depth: infinity' -H "Destination: $E2E_WEBDAV_URL/copy-deep" "$E2E_WEBDAV_URL/copy-source"
+request 200 "$E2E_WEBDAV_URL/copy-deep/nested/leaf"; cmp "$TMP/payload" "$TMP/body"
+request 412 -X COPY -H 'Overwrite: F' -H "Destination: $E2E_WEBDAV_URL/copy-deep" "$E2E_WEBDAV_URL/copy-source"
+request 204 -X COPY -H 'Overwrite: T' -H "Destination: $E2E_WEBDAV_URL/copy-deep" "$E2E_WEBDAV_URL/copy-source"
+request 201 -X MKCOL "$E2E_WEBDAV_URL/copy-file-target"
+request 201 -X MKCOL "$E2E_WEBDAV_URL/copy-file-target/nested"
+request 201 -X PUT --data-binary @"$TMP/payload" "$E2E_WEBDAV_URL/copy-file-target/nested/old"
+request 204 -X COPY -H 'Overwrite: T' -H "Destination: $E2E_WEBDAV_URL/copy-file-target" "$E2E_WEBDAV_URL/moved"
+request 200 "$E2E_WEBDAV_URL/copy-file-target"; cmp "$TMP/winner" "$TMP/body"
+request 403 -X COPY -H 'Depth: infinity' -H "Destination: $E2E_WEBDAV_URL/copy-source/nested/loop" "$E2E_WEBDAV_URL/copy-source"
+request 412 -X MOVE -H 'Overwrite: F' -H "Destination: $E2E_WEBDAV_URL/copied" "$E2E_WEBDAV_URL/moved"
+request 400 -X MOVE -H 'Depth: 0' -H "Destination: $E2E_WEBDAV_URL/moved-depth" "$E2E_WEBDAV_URL/moved"
 request 501 -X LOCK "$E2E_WEBDAV_URL/moved"
 request 501 -X UNLOCK -H 'Lock-Token: <opaquelocktoken:unsupported>' "$E2E_WEBDAV_URL/moved"
-request 501 -X PROPPATCH "$E2E_WEBDAV_URL/moved"
+cat >"$TMP/proppatch" <<'XML'
+<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:nando:test"><D:set><D:prop><X:color>blue</X:color></D:prop></D:set></D:propertyupdate>
+XML
+request 207 -X PROPPATCH -H 'Content-Type: application/xml' --data-binary @"$TMP/proppatch" "$E2E_WEBDAV_URL/moved"
+printf '<D:propfind xmlns:D="DAV:" xmlns:X="urn:nando:test"><D:prop><X:color/></D:prop></D:propfind>' >"$TMP/propfind-dead"
+request 207 -X PROPFIND -H 'Depth: 0' -H 'Content-Type: application/xml' --data-binary @"$TMP/propfind-dead" "$E2E_WEBDAV_URL/moved"
+grep -q blue "$TMP/body"
+request 201 -X COPY -H "Destination: $E2E_WEBDAV_URL/moved-copy" "$E2E_WEBDAV_URL/moved"
+request 207 -X PROPFIND -H 'Depth: 0' -H 'Content-Type: application/xml' --data-binary @"$TMP/propfind-dead" "$E2E_WEBDAV_URL/moved-copy"
+grep -q blue "$TMP/body"
+cat >"$TMP/proppatch-protected" <<'XML'
+<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:nando:test"><D:set><D:prop><D:getetag>bad</D:getetag><X:color>red</X:color></D:prop></D:set></D:propertyupdate>
+XML
+request 207 -X PROPPATCH -H 'Content-Type: application/xml' --data-binary @"$TMP/proppatch-protected" "$E2E_WEBDAV_URL/moved"
+grep -q '403 Forbidden' "$TMP/body"; grep -q '424 Failed Dependency' "$TMP/body"
 request 204 -X DELETE "$E2E_WEBDAV_URL/copied"
 request 404 "$E2E_WEBDAV_URL/copied"
+request 201 -X MKCOL "$E2E_WEBDAV_URL/delete-tree"
+request 201 -X MKCOL "$E2E_WEBDAV_URL/delete-tree/nested"
+request 201 -X PUT --data-binary @"$TMP/payload" "$E2E_WEBDAV_URL/delete-tree/root.txt"
+request 201 -X PUT --data-binary @"$TMP/payload" "$E2E_WEBDAV_URL/delete-tree/nested/leaf.txt"
+request 204 -X DELETE "$E2E_WEBDAV_URL/delete-tree"
+request 404 "$E2E_WEBDAV_URL/delete-tree"
+request 404 "$E2E_WEBDAV_URL/delete-tree/root.txt"
+request 404 "$E2E_WEBDAV_URL/delete-tree/nested/leaf.txt"
+request 404 -X PROPFIND -H 'Depth: 1' -H 'Content-Type: application/xml' --data-binary @"$TMP/propfind" "$E2E_WEBDAV_URL/delete-tree/nested"
+request 404 -X DELETE "$E2E_WEBDAV_URL/delete-tree"
+request 201 -X MKCOL "$E2E_WEBDAV_URL/delete-tree"
 echo 'PASS WebDAV curl CRUD, metadata, move/copy, ETag preconditions, unsupported contract boundaries'
 
 RESULTS=${E2E_ARTIFACTS_DIR:-$TMP}/webdav-results.tsv
 record() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" | tee -a "$RESULTS"; }
 : >"$RESULTS"
-record curl-basic PASS 'GET/HEAD/PUT/DELETE/MKCOL and repository bytes verified'
+record curl-basic PASS 'GET/HEAD/PUT/DELETE/MKCOL and repository bytes verified; empty and nested non-empty collection DELETE removes every descendant and clears namespace'
 record curl-http PASS 'OPTIONS, ETag and supported ETag conditions verified; unsupported DAV/HTTP PUT conditions explicitly rejected'
 record curl-propfind PASS 'allprop/propname omit supportedlock; explicit supportedlock is 404 at Depth 0/1; Depth 1 retains collections'
-record curl-file-copymove PASS 'file COPY to absent destination and MOVE verified; overwrite remains unsupported'
+record curl-copymove PASS 'file and collection COPY, Depth 0/infinity, Overwrite T/F, shared bytes, overlap rejection, and file MOVE verified'
 record curl-locks SKIP 'LOCK/UNLOCK are deliberately unsupported; a separate assertion confirmed 501'
-record curl-dead-properties SKIP 'PROPPATCH/dead properties are deliberately unsupported; a separate assertion confirmed 501'
+record curl-dead-properties PASS 'PROPPATCH is atomic; PROPFIND reads opaque dead properties; MOVE retains and COPY clones properties; protected live properties report 403/424'
 for group in basic copymove props locks http; do
   if command -v litmus >/dev/null 2>&1; then
     record "litmus-$group" SKIP 'Litmus available but full compliance run is outside the configured supported method surface'

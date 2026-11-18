@@ -1,0 +1,12 @@
+curl-basic	PASS	GET/HEAD/PUT/DELETE/MKCOL and repository bytes verified; empty and nested non-empty collection DELETE removes every descendant and clears namespace
+curl-http	PASS	OPTIONS, ETag and supported ETag conditions verified; unsupported DAV/HTTP PUT conditions explicitly rejected
+curl-propfind	PASS	allprop/propname omit supportedlock; explicit supportedlock is 404 at Depth 0/1; Depth 1 retains collections
+curl-file-copymove	PASS	file COPY to absent destination and MOVE verified; overwrite remains unsupported
+curl-locks	SKIP	LOCK/UNLOCK are deliberately unsupported; a separate assertion confirmed 501
+curl-dead-properties	SKIP	PROPPATCH/dead properties are deliberately unsupported; a separate assertion confirmed 501
+litmus-basic	SKIP	Litmus available but full compliance run is outside the configured supported method surface
+litmus-copymove	SKIP	Litmus available but full compliance run is outside the configured supported method surface
+litmus-props	SKIP	Litmus available but full compliance run is outside the configured supported method surface
+litmus-locks	SKIP	Litmus available but full compliance run is outside the configured supported method surface
+litmus-http	SKIP	Litmus available but full compliance run is outside the configured supported method surface
+cadaver	SKIP	cadaver executable is not installed on this host

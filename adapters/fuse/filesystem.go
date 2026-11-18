@@ -36,6 +36,7 @@ type openMode struct {
 	mode     uint32
 	refs     int
 	unlinked bool
+	deleted  bool
 }
 
 type entryNode struct {
@@ -55,17 +56,18 @@ type renewer struct {
 }
 
 type writeState struct {
-	mu               sync.Mutex
-	node             *entryNode
-	sessionID        string
-	pendingReleaseID string
-	recoveryID       string
-	resource         string
-	file             *os.File
-	lease            *renewer
-	handles          int
-	dirty            bool
-	unlinked         bool
+	mu                    sync.Mutex
+	node                  *entryNode
+	sessionID             string
+	pendingReleaseID      string
+	recoveryID            string
+	resource              string
+	file                  *os.File
+	lease                 *renewer
+	handles               int
+	dirty                 bool
+	unlinked              bool
+	discardCleanupPending bool
 	// unlinkIntent means the daemon has durably tombstoned this write session.
 	// It blocks Commit even if namespace removal has not succeeded yet.
 	unlinkIntent bool
@@ -137,6 +139,20 @@ func (f *FileSystem) call(ctx context.Context, method string, params, result any
 	return 0
 }
 
+// commitSession reports whether ENOENT came specifically from stable Entry
+// visibility. A missing/expired Resource session is distinct and must not be
+// mistaken for namespace deletion.
+func (f *FileSystem) commitSession(ctx context.Context, id string) (syscall.Errno, bool, bool) {
+	err := f.client.Call(ctx, controlrpc.MethodCommit, map[string]string{"session_id": id}, nil)
+	if err == nil {
+		return 0, false, false
+	}
+	var remote *controlrpc.RemoteError
+	entryDetached := errors.As(err, &remote) && remote.Code == controlrpc.CodeEntryNotFound
+	discardIncomplete := errors.As(err, &remote) && remote.Code == controlrpc.CodeDetachedDiscardIncomplete
+	return errnoFor(err), entryDetached, discardIncomplete
+}
+
 func (f *FileSystem) cleanupSession(ctx context.Context, id string, primary syscall.Errno) syscall.Errno {
 	if cleanup := f.call(ctx, controlrpc.MethodRelease, map[string]string{"session_id": id}, nil); cleanup != 0 {
 		return cleanup
@@ -176,6 +192,10 @@ func errnoFor(err error) syscall.Errno {
 			return syscall.EINVAL
 		case controlrpc.CodeResourceSessionExpired:
 			return syscall.ESTALE
+		case controlrpc.CodeResourceSessionMissing:
+			return syscall.ENOENT
+		case controlrpc.CodeDetachedDiscardIncomplete:
+			return syscall.EIO
 		case -32010:
 			return syscall.EOPNOTSUPP
 		}
@@ -395,12 +415,28 @@ func (n *entryNode) currentEntry() controlrpc.Entry {
 	return n.entry
 }
 
-func (n *entryNode) Getattr(ctx context.Context, _ fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	if errno := n.owner.resolveNode(ctx, n); errno != 0 {
-		return errno
+func (n *entryNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	if handle, ok := f.(*fileHandle); ok {
+		return handle.Getattr(ctx, out)
 	}
 	entry := n.currentEntry()
 	setAttr(&out.Attr, entry, n.StableAttr().Ino)
+	// A writable handle owns uncommitted size changes until Fsync/Release.
+	// The Entry can therefore still carry the committed size after Setattr.
+	if h, ok := f.(*fileHandle); ok && h.write != nil {
+		h.write.mu.Lock()
+		defer h.write.mu.Unlock()
+		if h.write.file == nil {
+			return syscall.ESTALE
+		}
+		info, err := h.write.file.Stat()
+		if err != nil {
+			return errnoFor(err)
+		}
+		out.Size = uint64(max(info.Size(), 0))
+		out.Mtime = uint64(info.ModTime().Unix())
+		out.Mtimensec = uint32(info.ModTime().Nanosecond())
+	}
 	return 0
 }
 
@@ -605,6 +641,20 @@ func (h *fileHandle) Fsync(ctx context.Context, _ uint32) syscall.Errno {
 	if state.closed {
 		return syscall.ESTALE
 	}
+	// Keep a detached-discard cleanup failure visible until final Abort
+	// confirms cleanup. Ordinary FUSE Unlink still only syncs private staging.
+	if state.discardCleanupPending {
+		if state.file == nil {
+			return syscall.ESTALE
+		}
+		if err := state.file.Sync(); err != nil {
+			return errnoFor(err)
+		}
+		if state.lastErr != nil {
+			return errnoFor(state.lastErr)
+		}
+		return syscall.EIO
+	}
 	if state.unlinked || state.unlinkIntent {
 		if state.file == nil {
 			return syscall.ESTALE
@@ -629,7 +679,37 @@ func (h *fileHandle) Fsync(ctx context.Context, _ uint32) syscall.Errno {
 	if err := state.lease.failure(); err != nil {
 		return errnoFor(err)
 	}
-	if errno := state.node.owner.call(ctx, controlrpc.MethodCommit, map[string]string{"session_id": state.sessionID}, nil); errno != 0 {
+	if errno, entryDetached, discardIncomplete := state.node.owner.commitSession(ctx, state.sessionID); errno != 0 {
+		if entryDetached {
+			state.unlinked, state.dirty = true, false
+			state.sessionID, state.recoveryID = "", ""
+			if state.lease != nil {
+				state.lease.close()
+				state.lease = nil
+			}
+			if h.modeState != nil {
+				h.modeState.mu.Lock()
+				h.modeState.deleted = true
+				h.modeState.mu.Unlock()
+			}
+			return 0
+		}
+		if discardIncomplete {
+			state.lastErr = errno
+			state.discardCleanupPending = true
+			state.unlinked, state.dirty = true, false
+			state.recoveryID = ""
+			if state.lease != nil {
+				state.lease.close()
+				state.lease = nil
+			}
+			if h.modeState != nil {
+				h.modeState.mu.Lock()
+				h.modeState.deleted = true
+				h.modeState.mu.Unlock()
+			}
+			return errno
+		}
 		state.lastErr = errno
 		state.recoveryID = state.sessionID
 		state.dirty = false
@@ -672,11 +752,34 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 						result = errnoFor(err)
 						log.Printf("final-close lease check failed for Entry %s session %s: %v", state.node.entryID(), state.sessionID, result)
 					} else {
-						result = state.node.owner.call(ctx, controlrpc.MethodCommit, map[string]string{"session_id": state.sessionID}, nil)
+						commitErrno, entryDetached, discardIncomplete := state.node.owner.commitSession(ctx, state.sessionID)
+						result = commitErrno
 						if result != 0 {
 							state.lastErr = result
-							state.recoveryID = state.sessionID
-							log.Printf("final-close Commit failed for Entry %s session %s: %v", state.node.entryID(), state.sessionID, result)
+							if entryDetached {
+								result = 0
+								state.unlinked = true
+								state.dirty = false
+								state.sessionID = ""
+								state.recoveryID = ""
+								if h.modeState != nil {
+									h.modeState.mu.Lock()
+									h.modeState.deleted = true
+									h.modeState.mu.Unlock()
+								}
+							} else if discardIncomplete {
+								state.discardCleanupPending = true
+								state.unlinked, state.dirty = true, false
+								state.recoveryID = ""
+								if h.modeState != nil {
+									h.modeState.mu.Lock()
+									h.modeState.deleted = true
+									h.modeState.mu.Unlock()
+								}
+							} else {
+								state.recoveryID = state.sessionID
+								log.Printf("final-close Commit failed for Entry %s session %s: %v", state.node.entryID(), state.sessionID, result)
+							}
 						}
 					}
 				}
@@ -687,12 +790,17 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 					method := controlrpc.MethodRelease
 					if !state.dirty && !state.unlinked && !state.unlinkIntent {
 						method = controlrpc.MethodAbort
+					} else if state.unlinked || state.unlinkIntent {
+						method = controlrpc.MethodAbort
 					}
 					if errno := state.node.owner.call(ctx, method, map[string]string{"session_id": state.sessionID}, nil); errno != 0 {
 						log.Printf("final-close %s cleanup failed for Entry %s session %s: %v", method, state.node.entryID(), state.sessionID, errno)
 						if result == 0 {
 							result = errno
 						}
+					} else if method == controlrpc.MethodAbort && state.discardCleanupPending {
+						state.discardCleanupPending = false
+						state.lastErr = nil
 					}
 				}
 				if state.pendingReleaseID != "" {
@@ -701,7 +809,7 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 					}
 				}
 				if (state.unlinked || state.unlinkIntent) && state.recoveryID != "" {
-					if errno := state.node.owner.call(ctx, controlrpc.MethodRelease, map[string]string{"session_id": state.recoveryID}, nil); result == 0 {
+					if errno := state.node.owner.call(ctx, controlrpc.MethodAbort, map[string]string{"session_id": state.recoveryID}, nil); result == 0 {
 						result = errno
 					}
 				}
@@ -747,6 +855,60 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 		return n.Getattr(ctx, nil, out)
 	}
 	h, hasHandle := f.(*fileHandle)
+	if hasHandle && h.modeState != nil {
+		h.modeState.mu.Lock()
+		detached := h.modeState.deleted || h.modeState.unlinked
+		h.modeState.mu.Unlock()
+		if !detached {
+			if errno := n.owner.resolveNode(ctx, n); errno == syscall.ENOENT {
+				h.modeState.mu.Lock()
+				h.modeState.deleted = true
+				h.modeState.mu.Unlock()
+				if h.write != nil {
+					h.write.mu.Lock()
+					h.write.unlinked = true
+					h.write.mu.Unlock()
+				}
+			} else if errno != 0 {
+				return errno
+			}
+		}
+	}
+	if hasHandle && h.modeState != nil {
+		h.modeState.mu.Lock()
+		deleted := h.modeState.deleted
+		h.modeState.mu.Unlock()
+		if deleted {
+			if h.write != nil {
+				h.write.mu.Lock()
+				defer h.write.mu.Unlock()
+				if sizeSet {
+					if h.write.file == nil {
+						return syscall.ESTALE
+					}
+					if err := h.write.file.Truncate(int64(size)); err != nil {
+						return errnoFor(err)
+					}
+					h.write.dirty = true
+				}
+				if modeSet {
+					h.write.logicalMode = mode & 0o7777
+				}
+				info, err := h.write.file.Stat()
+				if err != nil {
+					return errnoFor(err)
+				}
+				entry := n.currentEntry()
+				setAttr(&out.Attr, entry, n.StableAttr().Ino)
+				out.Size = uint64(max(info.Size(), 0))
+				return 0
+			}
+			if sizeSet {
+				return syscall.EBADF
+			}
+			return n.Getattr(ctx, h, out)
+		}
+	}
 	if modeSet && !sizeSet {
 		id := n.entryID()
 		var ms *openMode
@@ -766,12 +928,12 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 				ms.mu.Unlock()
 			}
 		}()
-		detached := ms != nil && ms.unlinked
+		detached := ms != nil && (ms.unlinked || ms.deleted)
 		detachedMode := uint32(0)
 		if detached {
 			detachedMode = ms.mode
 		}
-		if ms != nil && ms.unlinked {
+		if ms != nil && (ms.unlinked || ms.deleted) {
 			ms.mode = mode & 0o7777
 			detachedMode = ms.mode
 		} else {
@@ -984,6 +1146,25 @@ func (h *fileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Err
 	if err != nil {
 		return errnoFor(err)
 	}
+	// A detached inode still has an open handle. Keep reporting its cached
+	// metadata and Resource stat without resolving the now-private Entry ID.
+	if h.modeState != nil {
+		h.modeState.mu.Lock()
+		deleted := h.modeState.deleted
+		h.modeState.mu.Unlock()
+		if deleted {
+			entry := h.node.currentEntry()
+			h.modeState.mu.Lock()
+			mode := h.modeState.mode
+			h.modeState.mu.Unlock()
+			setAttr(&out.Attr, entry, h.node.StableAttr().Ino)
+			out.Mode = inodeMode(entry)&^0o7777 | mode
+			out.Size = uint64(max(info.Size(), 0))
+			out.Mtime = uint64(info.ModTime().Unix())
+			out.Mtimensec = uint32(info.ModTime().Nanosecond())
+			return 0
+		}
+	}
 	// Linked Entry metadata owns logical mode, including changes made by other
 	// clients. Detached handles instead retain their volatile open-inode mode.
 	var mode uint32
@@ -991,14 +1172,21 @@ func (h *fileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Err
 		mode = h.write.logicalMode
 		if h.modeState != nil {
 			h.modeState.mu.Lock()
-			detached := h.modeState.unlinked
+			detached := h.modeState.unlinked || h.modeState.deleted
 			mode = h.modeState.mode
 			h.modeState.mu.Unlock()
 			if !detached {
 				if errno := h.node.owner.resolveNode(ctx, h.node); errno != 0 {
-					return errno
+					if errno != syscall.ENOENT {
+						return errno
+					}
+					h.modeState.mu.Lock()
+					h.modeState.deleted = true
+					h.modeState.mu.Unlock()
+					h.write.unlinked = true
+				} else {
+					mode = h.node.currentEntry().Mode & 0o7777
 				}
-				mode = h.node.currentEntry().Mode & 0o7777
 			}
 		}
 		entry := h.node.currentEntry()
@@ -1007,14 +1195,20 @@ func (h *fileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Err
 	} else {
 		if h.modeState != nil {
 			h.modeState.mu.Lock()
-			detached := h.modeState.unlinked
+			detached := h.modeState.unlinked || h.modeState.deleted
 			mode = h.modeState.mode
 			h.modeState.mu.Unlock()
 			if !detached {
 				if errno := h.node.owner.resolveNode(ctx, h.node); errno != 0 {
-					return errno
+					if errno != syscall.ENOENT {
+						return errno
+					}
+					h.modeState.mu.Lock()
+					h.modeState.deleted = true
+					h.modeState.mu.Unlock()
+				} else {
+					mode = h.node.currentEntry().Mode & 0o7777
 				}
-				mode = h.node.currentEntry().Mode & 0o7777
 			}
 		} else {
 			mode = h.logicalMode

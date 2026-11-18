@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "purpose": "Revalidate FUSE ftruncate handle attributes fixed by go-nando commit 69e4bb6",
+  "repository_revision": "69e4bb6",
+  "baseline_conditions": "results/compatibility-2026-11-16/fsx-truncate-repro and fsx-fuse",
+  "environment": {
+    "kernel": "Linux 6.8.0-1070-gcp x86_64",
+    "uid": 736972916,
+    "fuse_device": "/dev/fuse present",
+    "fsx_revision": "d07dca72d2455f4ba8c660ad4c008541ccccb707",
+    "fsx_sha256": "e49c3ebc31795123e3f2d92bfe033f1b7fed77533940b6698e0ef1d255dd79dc",
+    "adapter_binary": "/tmp/nando-validation-tools/nando-fuse (pre-existing binary; built 2026-11-16, predates 69e4bb6)",
+    "daemon_binary": "/tmp/nando-validation-tools/nando (pre-existing binary; built 2026-11-16, predates 69e4bb6)",
+    "working_source": "69e4bb6 checked out, but pre-existing binaries were not rebuilt"
+  },
+  "results": {
+    "truncate_fstat_probe": {
+      "status": "blocked_before_observation",
+      "command": "python3 results/compatibility-2026-11-16/fsx-truncate-repro/reproduce.py /tmp/nando-validation-tools/run-69e4bb6/mount",
+      "exit_code": 1,
+      "stdout": "",
+      "stderr_classification": "FUSE open failed with EIO (errno 5) before any truncate/fstat operation"
+    },
+    "upstream_fsx": {
+      "status": "failed_before_target_scenario",
+      "command": "/tmp/nando-validation-tools/xfstests/ltp/fsx -N 10000 -l 1048576 /tmp/nando-validation-tools/run-69e4bb6/mount/fsx.data",
+      "exit_code": 91,
+      "stdout": "Seed set to 1\n/tmp/nando-validation-tools/run-69e4bb6/mount/fsx.data: Input/output error\n",
+      "stderr": "",
+      "classification": "FUSE file create/open I/O error before fsx truncate startup check"
+    }
+  },
+  "environment_constraints": [
+    "Original mount option allow_other could not be used: /etc/fuse.conf has user_allow_other commented out and this user cannot edit /etc/fuse.conf (permission denied).",
+    "Without allow_other, mount syscall succeeded, but FUSE file create/open returned EIO. No truncate/fstat conclusion can be drawn.",
+    "Initial background mount/daemon processes were terminated when the tool invocation ended; an attempted second daemon start hit the stale Unix socket path (address already in use). The same-call retry retained both processes but still returned EIO.",
+    "The available nando and nando-fuse binaries predate commit 69e4bb6, so this run did not execute the changed source. A source build was not completed; therefore even a successful run with these binaries could not validate the commit."
+  ],
+  "conclusion": "INCONCLUSIVE. The ftruncate-to-fstat mismatch was not rechecked because mounted file open failed first. The original fsx scenario was attempted and exited 91 on EIO, before its truncate probe. This is not evidence of either success or regression in commit 69e4bb6.",
+  "logs": {
+    "truncate_probe_stdout": "truncate-probe.stdout.log",
+    "truncate_probe_stderr": "truncate-probe.stderr.log",
+    "fsx_stdout": "fsx.stdout.log",
+    "fsx_stderr": "fsx.stderr.log",
+    "fuse_stdout": "fuse.stdout.log",
+    "fuse_stderr": "fuse.stderr.log",
+    "daemon_stdout": "daemon.stdout.log",
+    "daemon_stderr": "daemon.stderr.log",
+    "commands_and_exit_codes": "commands.log"
+  }
+}

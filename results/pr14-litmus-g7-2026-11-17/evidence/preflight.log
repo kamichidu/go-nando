@@ -1,0 +1,24 @@
+{
+  "status": "passed",
+  "checks": {
+    "tooling_manifest_sha256": "ae03fcab98081ae5409a17029c323d6c8261060cb14d70be5c7c9ecae84255dc",
+    "tooling_manifest": "passed",
+    "conditions": "passed",
+    "executables": "passed",
+    "source_trees": [],
+    "version_check": "passed"
+  },
+  "version_check": {
+    "command": [
+      "dpkg-query",
+      "-W",
+      "-f=${Version}",
+      "litmus"
+    ],
+    "exit_code": 0,
+    "stdout": "0.13-4",
+    "stdout_sha256": "50414a8fdc9ed0c1fc8f044289b73188edc757f66ce398a0d8ff9ab818d160bc",
+    "stderr": "",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

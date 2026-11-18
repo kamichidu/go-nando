@@ -59,6 +59,7 @@ type stubDaemon struct {
 	begins     int
 	commitErr  error
 	releaseErr error
+	abortErr   error
 	resolveErr error
 	chmodErr   error
 	removeErr  error
@@ -167,7 +168,9 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 		}
 		if s.followID {
 			if !d.exists || d.entry.ID != "entry-1" {
-				return &controlrpc.RemoteError{Code: controlrpc.CodeEntryConflict, Message: "identity changed"}
+				_ = os.Remove(s.file)
+				delete(d.sessions, id)
+				return &controlrpc.RemoteError{Code: controlrpc.CodeEntryNotFound, Message: "stable Entry detached"}
 			}
 			s.path = d.path
 		} else if s.path != d.path {
@@ -206,6 +209,9 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 		}
 		return nil
 	case controlrpc.MethodAbort:
+		if d.abortErr != nil {
+			return d.abortErr
+		}
 		if s := d.sessions[id]; s != nil {
 			_ = os.Remove(s.file)
 			delete(d.sessions, id)
@@ -645,6 +651,123 @@ func TestReadHandleGetattrRefreshesLinkedMetadata(t *testing.T) {
 	}
 }
 
+func TestOpenHandlesSurviveExternalRecursiveDeleteWithoutWriteResurrection(t *testing.T) {
+	ctx := context.Background()
+	d := newStub(t, []byte("original"))
+	f := New(d)
+	root := &entryNode{owner: f, entry: controlrpc.Entry{ID: "root", Kind: "directory", Mode: 0o755}, path: "/"}
+	_ = fs.NewNodeFS(root, &fs.Options{})
+	var ent fuse.EntryOut
+	if _, errno := root.Lookup(ctx, "file", &ent); errno != 0 {
+		t.Fatal(errno)
+	}
+	node := f.byID[d.entry.ID]
+	rh, _, errno := node.Open(ctx, uint32(os.O_RDONLY))
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	wh, _, errno := node.Open(ctx, uint32(os.O_RDWR))
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	reader, writer := mustFileHandle(t, rh), mustFileHandle(t, wh)
+	if _, errno := writer.Write(ctx, []byte("changed"), 0); errno != 0 {
+		t.Fatal(errno)
+	}
+	d.mu.Lock()
+	d.exists = false
+	d.mu.Unlock() // another adapter atomically detached the parent subtree
+	var attr fuse.AttrOut
+	if errno := node.Getattr(ctx, rh, &attr); errno != 0 {
+		t.Fatalf("read getattr after external detach: %v", errno)
+	}
+	if errno := reader.Getattr(ctx, &attr); errno != 0 {
+		t.Fatalf("read handle getattr after external detach: %v", errno)
+	}
+	size := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE, Size: 3}}
+	if errno := node.Setattr(ctx, wh, size, &attr); errno != 0 {
+		t.Fatalf("write setattr/truncate after external detach: %v", errno)
+	}
+	if attr.Size != 3 {
+		t.Fatalf("detached staging size=%d, want 3", attr.Size)
+	}
+	data, errno := reader.Read(ctx, make([]byte, 8), 0)
+	if errno != 0 {
+		t.Fatalf("read after external detach: %v", errno)
+	}
+	buf := make([]byte, 8)
+	got, status := data.Bytes(buf)
+	if status != fuse.OK || string(got) != "original" {
+		t.Fatalf("read after external detach=%q status=%v", got, status)
+	}
+	if errno := writer.Fsync(ctx, 0); errno != 0 {
+		t.Fatalf("fsync detached writer: %v", errno)
+	}
+	if errno := writer.Release(ctx); errno != 0 {
+		t.Fatalf("release detached writer: %v", errno)
+	}
+	if errno := reader.Release(ctx); errno != 0 {
+		t.Fatalf("release detached reader: %v", errno)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.commits != 0 {
+		t.Fatalf("detached write committed %d times", d.commits)
+	}
+	if len(d.sessions) != 0 {
+		t.Fatalf("detached sessions remain: %+v", d.sessions)
+	}
+}
+
+func TestExternalDeleteFinalReleaseAndConcurrentConflictClassification(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name       string
+		deleted    bool
+		commitErr  error
+		wantErrno  syscall.Errno
+		wantRetain bool
+	}{
+		{name: "release after external delete discards", deleted: true, wantErrno: 0},
+		{name: "conflict racing with delete remains recoverable", deleted: true, commitErr: &controlrpc.RemoteError{Code: controlrpc.CodeEntryConflict, Message: "CAS conflict"}, wantErrno: syscall.EAGAIN, wantRetain: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			daemon := newStub(t, []byte("old"))
+			adapter := New(daemon)
+			node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+			state, errno := adapter.startWrite(ctx, node, false)
+			if errno != 0 {
+				t.Fatal(errno)
+			}
+			state.handles = 1
+			adapter.writes[node.entryID()] = state
+			handle := &fileHandle{node: node, write: state, writable: true}
+			if _, errno := handle.Write(ctx, []byte("staged update"), 0); errno != 0 {
+				t.Fatal(errno)
+			}
+			daemon.mu.Lock()
+			daemon.exists = !tc.deleted
+			daemon.commitErr = tc.commitErr
+			daemon.mu.Unlock()
+			if errno := handle.Release(ctx); errno != tc.wantErrno {
+				t.Fatalf("Release errno=%v want=%v", errno, tc.wantErrno)
+			}
+			daemon.mu.Lock()
+			defer daemon.mu.Unlock()
+			if tc.wantRetain {
+				if state.recoveryID == "" || daemon.sessions[state.recoveryID] == nil {
+					t.Fatalf("concurrent conflict lost recovery staging: state=%+v sessions=%+v", state, daemon.sessions)
+				}
+			} else if len(daemon.sessions) != 0 || state.recoveryID != "" {
+				t.Fatalf("detached close left staging session: state=%+v sessions=%+v", state, daemon.sessions)
+			}
+			if daemon.commits != 0 {
+				t.Fatalf("external delete published stale bytes; commits=%d", daemon.commits)
+			}
+		})
+	}
+}
+
 func TestSetattrResponseReflectsUncommittedSession(t *testing.T) {
 	ctx := context.Background()
 	daemon := newStub(t, []byte("content"))
@@ -677,6 +800,101 @@ func TestSetattrResponseReflectsUncommittedSession(t *testing.T) {
 	}
 	if errno := h.Release(ctx); errno != 0 {
 		t.Fatalf("Release: %v", errno)
+	}
+}
+
+func TestFtruncateUpdatesSameHandleGetattrAndReopenedFile(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("prefix-data"))
+	adapter := New(daemon)
+	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	state, errno := adapter.startWrite(ctx, node, false)
+	if errno != 0 {
+		t.Fatalf("start write: %v", errno)
+	}
+	h := &fileHandle{node: node, write: state, writable: true}
+	defer func() {
+		if errno := h.Release(ctx); errno != 0 {
+			t.Errorf("release writer: %v", errno)
+		}
+	}()
+
+	for _, size := range []uint64{100, 4} {
+		in := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE, Size: size}}
+		var setAttrOut fuse.AttrOut
+		if errno := node.Setattr(ctx, h, in, &setAttrOut); errno != 0 {
+			t.Fatalf("Setattr size %d: %v", size, errno)
+		}
+		if setAttrOut.Size != size {
+			t.Fatalf("Setattr response size=%d, want %d", setAttrOut.Size, size)
+		}
+		var attr fuse.AttrOut
+		if errno := node.Getattr(ctx, h, &attr); errno != 0 {
+			t.Fatalf("same-handle Getattr after size %d: %v", size, errno)
+		}
+		if attr.Size != size {
+			t.Fatalf("same-handle Getattr size=%d after truncate to %d", attr.Size, size)
+		}
+		if size == 100 {
+			buf := make([]byte, 12)
+			result, errno := h.Read(ctx, buf, int64(len("prefix-data")))
+			if errno != 0 {
+				t.Fatalf("read extended hole: %v", errno)
+			}
+			got, status := result.Bytes(buf)
+			if status != fuse.OK || len(got) != len(buf) {
+				t.Fatalf("extended hole length=%d status=%v, want %d bytes", len(got), status, len(buf))
+			}
+			for i, b := range got {
+				if b != 0 {
+					t.Fatalf("extended hole byte %d=%d, want zero", i, b)
+				}
+			}
+		}
+	}
+
+	buf := make([]byte, 4)
+	result, errno := h.Read(ctx, buf, 0)
+	if errno != 0 {
+		t.Fatalf("read preserved prefix: %v", errno)
+	}
+	got, status := result.Bytes(buf)
+	if status != fuse.OK || string(got) != "pref" {
+		t.Fatalf("preserved prefix=%q status=%v, want %q", got, status, "pref")
+	}
+
+	if errno := h.Fsync(ctx, 0); errno != 0 {
+		t.Fatalf("Fsync: %v", errno)
+	}
+	if daemon.entry.Size != 4 || string(daemon.content) != "pref" {
+		t.Fatalf("committed size=%d content=%q, want size 4 and %q", daemon.entry.Size, daemon.content, "pref")
+	}
+
+	readHandle, _, errno := node.Open(ctx, uint32(os.O_RDONLY))
+	if errno != 0 {
+		t.Fatalf("reopen committed file: %v", errno)
+	}
+	reopened := mustFileHandle(t, readHandle)
+	defer func() {
+		if errno := reopened.Release(ctx); errno != 0 {
+			t.Errorf("release reopened handle: %v", errno)
+		}
+	}()
+	var reopenedAttr fuse.AttrOut
+	if errno := node.Getattr(ctx, reopened, &reopenedAttr); errno != 0 {
+		t.Fatalf("reopened Getattr: %v", errno)
+	}
+	if reopenedAttr.Size != 4 {
+		t.Fatalf("reopened Getattr size=%d, want 4", reopenedAttr.Size)
+	}
+	reopenedBuf := make([]byte, 8)
+	result, errno = reopened.Read(ctx, reopenedBuf, 0)
+	if errno != 0 {
+		t.Fatalf("read reopened file: %v", errno)
+	}
+	got, status = result.Bytes(reopenedBuf)
+	if status != fuse.OK || string(got) != "pref" {
+		t.Fatalf("reopened bytes=%q status=%v, want %q", got, status, "pref")
 	}
 }
 
@@ -790,6 +1008,9 @@ func TestUnlinkMarksIntentAndKeepsOpenHandlePrivate(t *testing.T) {
 	}
 	if errno := handle.Fsync(ctx, 0); errno != 0 {
 		t.Fatalf("fsync unlinked handle: %v", errno)
+	}
+	if errno := handle.Fsync(ctx, 0); errno != 0 {
+		t.Fatalf("repeated fsync on intentionally unlinked handle: %v", errno)
 	}
 	if daemon.commits != 0 || daemon.exists {
 		t.Fatalf("unlink resurrected or committed file: commits=%d exists=%v", daemon.commits, daemon.exists)
@@ -1010,11 +1231,84 @@ func TestErrnoMapsRevisionConflictAndMissingEntry(t *testing.T) {
 	if got := errnoFor(&controlrpc.RemoteError{Code: controlrpc.CodeEntryNotFound}); got != syscall.ENOENT {
 		t.Fatalf("not-found errno=%v, want ENOENT", got)
 	}
+	if got := errnoFor(&controlrpc.RemoteError{Code: controlrpc.CodeResourceSessionMissing}); got != syscall.ENOENT {
+		t.Fatalf("missing-session errno=%v, want ENOENT", got)
+	}
+	if got := errnoFor(&controlrpc.RemoteError{Code: controlrpc.CodeDetachedDiscardIncomplete}); got != syscall.EIO {
+		t.Fatalf("detached-discard-incomplete errno=%v, want EIO", got)
+	}
 	if got := errnoFor(&controlrpc.RemoteError{Code: controlrpc.CodeEntryExists}); got != syscall.EEXIST {
 		t.Fatalf("entry exists errno=%v", got)
 	}
 	if got := errnoFor(&controlrpc.RemoteError{Code: controlrpc.CodeDirectoryNotEmpty}); got != syscall.ENOTEMPTY {
 		t.Fatalf("directory-not-empty errno=%v", got)
+	}
+}
+
+func TestMissingWriteSessionIsNotClassifiedAsEntryDeletion(t *testing.T) {
+	ctx := context.Background()
+	daemon := newStub(t, []byte("old"))
+	adapter := New(daemon)
+	node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+	state, errno := adapter.startWrite(ctx, node, false)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	state.handles = 1
+	adapter.writes[node.entryID()] = state
+	handle := &fileHandle{node: node, write: state, writable: true}
+	if _, errno := handle.Write(ctx, []byte("bytes"), 0); errno != 0 {
+		t.Fatal(errno)
+	}
+	daemon.commitErr = &controlrpc.RemoteError{Code: controlrpc.CodeResourceSessionMissing, Message: "session missing"}
+	if errno := handle.Fsync(ctx, 0); errno != syscall.ENOENT {
+		t.Fatalf("Fsync errno=%v, want ENOENT", errno)
+	}
+	if state.unlinked || state.recoveryID == "" {
+		t.Fatalf("missing Resource session was misclassified as detached Entry: %+v", state)
+	}
+	if errno := handle.Release(ctx); errno != 0 {
+		t.Fatalf("Release: %v", errno)
+	}
+}
+
+func TestDetachedDiscardCleanupFailureIsVisibleOnFsyncAndRelease(t *testing.T) {
+	ctx := context.Background()
+	for _, operation := range []string{"fsync", "release"} {
+		t.Run(operation, func(t *testing.T) {
+			daemon := newStub(t, []byte("old"))
+			adapter := New(daemon)
+			node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+			state, errno := adapter.startWrite(ctx, node, false)
+			if errno != 0 {
+				t.Fatal(errno)
+			}
+			state.handles = 1
+			adapter.writes[node.entryID()] = state
+			handle := &fileHandle{node: node, write: state, writable: true}
+			if _, errno := handle.Write(ctx, []byte("still held locally"), 0); errno != 0 {
+				t.Fatal(errno)
+			}
+			daemon.commitErr = &controlrpc.RemoteError{Code: controlrpc.CodeDetachedDiscardIncomplete, Message: "discard cleanup pending"}
+			daemon.abortErr = errors.New("injected retry cleanup failure")
+			if operation == "fsync" {
+				if errno := handle.Fsync(ctx, 0); errno != syscall.EIO {
+					t.Fatalf("Fsync errno=%v want EIO", errno)
+				}
+				if _, errno := handle.Write(ctx, []byte("private continuation"), 0); errno != 0 {
+					t.Fatalf("write through detached open handle after cleanup failure: %v", errno)
+				}
+				if errno := handle.Fsync(ctx, 0); errno != syscall.EIO {
+					t.Fatalf("repeated Fsync errno=%v want sticky EIO while cleanup is pending", errno)
+				}
+			}
+			if errno := handle.Release(ctx); errno != syscall.EIO {
+				t.Fatalf("Release errno=%v want visible cleanup error EIO", errno)
+			}
+			if !state.unlinked || !state.discardCleanupPending || state.recoveryID != "" || state.sessionID == "" {
+				t.Fatalf("incomplete discard was treated as ordinary Recovery or success: %+v", state)
+			}
+		})
 	}
 }
 
@@ -1034,6 +1328,10 @@ func TestCASFailureMakesSharedWriterTerminal(t *testing.T) {
 		t.Fatal(errno)
 	}
 	daemon.commitErr = &controlrpc.RemoteError{Code: controlrpc.CodeEntryConflict, Message: "revision changed"}
+	// The namespace can be detached immediately after a concurrent revision
+	// conflict. The conflict remains recoverable; a follow-up visibility probe
+	// must not turn it into discard.
+	daemon.exists = false
 	if errno := handle.Fsync(ctx, 0); errno != syscall.EAGAIN {
 		t.Fatalf("CAS failure errno=%v", errno)
 	}

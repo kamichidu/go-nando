@@ -1,0 +1,1 @@
+{"target":"FUSE","mountpoint":"/tmp/nando-validation-tools/run/mount","mount_options":["allow_other"],"workload":"upstream xfstests-dev ltp/fsx; -N 10000","file":"/tmp/nando-validation-tools/run/mount/fsx.data","file_size":"1MiB","repository":"isolated local repository on XFS","other_workload":"idle except nando daemon and adapters"}

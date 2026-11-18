@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/kamichidu/go-nando/internal/content"
 	"github.com/kamichidu/go-nando/internal/metadata"
 	repositoryformat "github.com/kamichidu/go-nando/internal/repository/format"
@@ -220,14 +221,23 @@ func (s *Store) CheckMigrations(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil {
 		return fmt.Errorf("inspect SQLite schema tables: %w", err)
 	}
-	if tables != 4 {
-		return fmt.Errorf("%w: v1 schema has %d application tables, expected 4", ErrSchemaVersionUnsupported, tables)
+	if tables != 6 {
+		return fmt.Errorf("%w: v1 schema has %d application tables, expected 6", ErrSchemaVersionUnsupported, tables)
+	}
+	var objects int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(&objects); err != nil {
+		return fmt.Errorf("inspect SQLite schema objects: %w", err)
+	}
+	if objects != 6 {
+		return fmt.Errorf("%w: v1 schema has %d application schema objects, expected 6", ErrSchemaVersionUnsupported, objects)
 	}
 	for table, required := range map[string][]string{
 		"entries":           {"entry_id", "parent_id", "name", "kind", "object_id", "size", "mtime", "mode", "content_type", "revision", "created_at", "updated_at"},
 		"repository_format": {"singleton", "format_version", "content_algorithm", "content_id_format"},
 		"transfer_queue":    {"content_id", "enqueued_at"},
 		"content_metadata":  {"content_id", "md5"},
+		"dead_properties":   {"entry_id", "namespace_uri", "localname", "xml_value"},
+		"internal_buffers":  {"buffer_id", "root_entry_id", "expires_at", "fencing", "claimed"},
 	} {
 		columns, err := s.tableColumns(ctx, table)
 		if err != nil {
@@ -238,8 +248,219 @@ func (s *Store) CheckMigrations(ctx context.Context) error {
 				return fmt.Errorf("%w: v1 table %s is missing column %s", ErrSchemaVersionUnsupported, table, column)
 			}
 		}
+		if table == "dead_properties" {
+			if len(columns) != len(required) {
+				return fmt.Errorf("%w: v1 dead_properties has unexpected columns", ErrSchemaVersionUnsupported)
+			}
+			var ddl string
+			if err := s.db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='dead_properties'").Scan(&ddl); err != nil {
+				return err
+			}
+			normalize := func(v string) string {
+				v = strings.Join(strings.Fields(strings.ToLower(v)), " ")
+				v = strings.ReplaceAll(v, "( ", "(")
+				v = strings.ReplaceAll(v, " )", ")")
+				v = strings.ReplaceAll(v, ", ", ",")
+				return v
+			}
+			expected := "CREATE TABLE dead_properties (entry_id TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE, namespace_uri TEXT NOT NULL, localname TEXT NOT NULL, xml_value TEXT NOT NULL, PRIMARY KEY(entry_id, namespace_uri, localname))"
+			if normalize(ddl) != normalize(expected) {
+				return fmt.Errorf("%w: dead_properties has an unknown definition", ErrSchemaVersionUnsupported)
+			}
+		}
+		if table == "internal_buffers" {
+			if len(columns) != len(required) {
+				return fmt.Errorf("%w: v1 internal_buffers has unexpected columns", ErrSchemaVersionUnsupported)
+			}
+			var ddl string
+			if err := s.db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='internal_buffers'").Scan(&ddl); err != nil {
+				return err
+			}
+			normalize := func(v string) string {
+				v = strings.Join(strings.Fields(strings.ToLower(v)), " ")
+				v = strings.ReplaceAll(v, "( ", "(")
+				v = strings.ReplaceAll(v, " )", ")")
+				v = strings.ReplaceAll(v, ", ", ",")
+				return v
+			}
+			expected := "CREATE TABLE internal_buffers (buffer_id TEXT PRIMARY KEY, root_entry_id TEXT NOT NULL UNIQUE REFERENCES entries(entry_id) ON DELETE CASCADE, expires_at INTEGER NOT NULL DEFAULT 0, fencing INTEGER NOT NULL DEFAULT 1, claimed INTEGER NOT NULL DEFAULT 0)"
+			if normalize(ddl) != normalize(expected) {
+				return fmt.Errorf("%w: internal_buffers has an unknown definition", ErrSchemaVersionUnsupported)
+			}
+		}
 	}
 	return nil
+}
+
+// CompletePreReleaseV1 completes the exact known four-table or five-table
+// pre-release v1 baseline. Callers validate Repository Format and root first.
+func (s *Store) CompletePreReleaseV1(ctx context.Context) error {
+	var version, tables int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil {
+		return err
+	}
+	if version != 1 {
+		return fmt.Errorf("%w: completion requires v1", ErrSchemaVersionUnsupported)
+	}
+	if tables == 6 {
+		if err := s.CheckMigrations(ctx); err == nil {
+			return nil
+		}
+		cols, err := s.tableColumns(ctx, "internal_buffers")
+		if err != nil || len(cols) != 2 || !cols["buffer_id"] || !cols["root_entry_id"] {
+			return fmt.Errorf("%w: unknown six-table pre-release schema", ErrSchemaVersionUnsupported)
+		}
+		var ddl string
+		if err := s.db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='internal_buffers'").Scan(&ddl); err != nil {
+			return err
+		}
+		normalize := func(v string) string {
+			v = strings.Join(strings.Fields(strings.ToLower(v)), " ")
+			v = strings.ReplaceAll(v, "( ", "(")
+			v = strings.ReplaceAll(v, " )", ")")
+			v = strings.ReplaceAll(v, ", ", ",")
+			return v
+		}
+		want := "CREATE TABLE internal_buffers (buffer_id TEXT PRIMARY KEY, root_entry_id TEXT NOT NULL UNIQUE REFERENCES entries(entry_id) ON DELETE CASCADE)"
+		if normalize(ddl) != normalize(want) {
+			return fmt.Errorf("%w: unknown pre-release internal_buffers schema", ErrSchemaVersionUnsupported)
+		}
+		tx, err := s.beginTx(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		for _, stmt := range []string{
+			`ALTER TABLE internal_buffers ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE internal_buffers ADD COLUMN fencing INTEGER NOT NULL DEFAULT 1`,
+			`ALTER TABLE internal_buffers ADD COLUMN claimed INTEGER NOT NULL DEFAULT 0`,
+		} {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return s.CheckMigrations(ctx)
+	}
+	if tables != 4 && tables != 5 {
+		return fmt.Errorf("%w: pre-release v1 has %d tables", ErrSchemaVersionUnsupported, tables)
+	}
+	hasDeadProperties := tables == 5
+	var objects int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(&objects); err != nil {
+		return err
+	}
+	if objects != tables {
+		return fmt.Errorf("%w: pre-release v1 has extra schema objects", ErrSchemaVersionUnsupported)
+	}
+	format, found, err := s.RepositoryFormat(ctx)
+	if err != nil {
+		return err
+	}
+	if !found || format != repositoryformat.Current() {
+		return fmt.Errorf("%w: legacy Repository Format is invalid", ErrSchemaVersionUnsupported)
+	}
+	var roots int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM entries WHERE entry_id='root' AND parent_id IS NULL AND name='' AND kind='directory'`).Scan(&roots); err != nil || roots != 1 {
+		return fmt.Errorf("%w: legacy root entry is invalid", ErrSchemaVersionUnsupported)
+	}
+	expectedSQL := map[string]string{
+		"entries":           "CREATE TABLE entries (entry_id TEXT PRIMARY KEY, parent_id TEXT NULL, name TEXT NOT NULL, kind TEXT NOT NULL, object_id TEXT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, mode INTEGER NOT NULL, content_type TEXT NOT NULL, revision INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE (parent_id, name))",
+		"repository_format": "CREATE TABLE repository_format (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), format_version INTEGER NOT NULL, content_algorithm TEXT NOT NULL, content_id_format TEXT NOT NULL)",
+		"transfer_queue":    "CREATE TABLE transfer_queue (content_id TEXT PRIMARY KEY, enqueued_at INTEGER NOT NULL)",
+		"content_metadata":  "CREATE TABLE content_metadata (content_id TEXT PRIMARY KEY, md5 BLOB NOT NULL CHECK(length(md5) = 16))",
+	}
+	for name, expected := range expectedSQL {
+		var actual string
+		if err := s.db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&actual); err != nil {
+			return fmt.Errorf("%w: legacy table %s is missing", ErrSchemaVersionUnsupported, name)
+		}
+		normalize := func(v string) string {
+			v = strings.Join(strings.Fields(strings.ToLower(v)), " ")
+			v = strings.ReplaceAll(v, "( ", "(")
+			v = strings.ReplaceAll(v, " )", ")")
+			v = strings.ReplaceAll(v, ", ", ",")
+			return v
+		}
+		if normalize(actual) != normalize(expected) {
+			return fmt.Errorf("%w: legacy table %s has an unknown definition (%q != %q)", ErrSchemaVersionUnsupported, name, normalize(actual), normalize(expected))
+		}
+	}
+	for table, required := range map[string][]string{"entries": {"entry_id", "parent_id", "name", "kind", "object_id", "size", "mtime", "mode", "content_type", "revision", "created_at", "updated_at"}, "repository_format": {"singleton", "format_version", "content_algorithm", "content_id_format"}, "transfer_queue": {"content_id", "enqueued_at"}, "content_metadata": {"content_id", "md5"}} {
+		cols, err := s.tableColumns(ctx, table)
+		if err != nil {
+			return err
+		}
+		if len(cols) != len(required) {
+			return fmt.Errorf("%w: legacy table %s has unexpected columns", ErrSchemaVersionUnsupported, table)
+		}
+		for _, c := range required {
+			if !cols[c] {
+				return fmt.Errorf("%w: legacy table %s missing %s", ErrSchemaVersionUnsupported, table, c)
+			}
+		}
+	}
+	if hasDeadProperties {
+		cols, err := s.tableColumns(ctx, "dead_properties")
+		if err != nil || len(cols) != 4 || !cols["entry_id"] || !cols["namespace_uri"] || !cols["localname"] || !cols["xml_value"] {
+			return fmt.Errorf("%w: pre-release dead_properties columns are unknown", ErrSchemaVersionUnsupported)
+		}
+		var ddl string
+		if err := s.db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='dead_properties'").Scan(&ddl); err != nil {
+			return err
+		}
+		normalize := func(v string) string {
+			v = strings.Join(strings.Fields(strings.ToLower(v)), " ")
+			v = strings.ReplaceAll(v, "( ", "(")
+			v = strings.ReplaceAll(v, " )", ")")
+			v = strings.ReplaceAll(v, ", ", ",")
+			return v
+		}
+		want := "CREATE TABLE dead_properties (entry_id TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE, namespace_uri TEXT NOT NULL, localname TEXT NOT NULL, xml_value TEXT NOT NULL, PRIMARY KEY(entry_id, namespace_uri, localname))"
+		if normalize(ddl) != normalize(want) {
+			return fmt.Errorf("%w: pre-release dead_properties definition is unknown", ErrSchemaVersionUnsupported)
+		}
+	}
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if !hasDeadProperties {
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE dead_properties (entry_id TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE, namespace_uri TEXT NOT NULL, localname TEXT NOT NULL, xml_value TEXT NOT NULL, PRIMARY KEY(entry_id, namespace_uri, localname))`); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE internal_buffers (buffer_id TEXT PRIMARY KEY, root_entry_id TEXT NOT NULL UNIQUE REFERENCES entries(entry_id) ON DELETE CASCADE, expires_at INTEGER NOT NULL DEFAULT 0, fencing INTEGER NOT NULL DEFAULT 1, claimed INTEGER NOT NULL DEFAULT 0)`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) IsPreReleaseV1Candidate(ctx context.Context) bool {
+	var version, tables int
+	if s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version) != nil || version != 1 {
+		return false
+	}
+	if s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables) != nil || (tables != 4 && tables != 5 && tables != 6) {
+		return false
+	}
+	var objects int
+	if s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(&objects) != nil || objects != tables {
+		return false
+	}
+	if tables == 6 {
+		cols, err := s.tableColumns(ctx, "internal_buffers")
+		if err != nil || len(cols) != 2 || !cols["buffer_id"] || !cols["root_entry_id"] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) tableColumns(ctx context.Context, table string) (map[string]bool, error) {
@@ -359,8 +580,76 @@ func (s *Store) ContentMD5(ctx context.Context, id content.ID) ([]byte, error) {
 	return append([]byte(nil), sum...), nil
 }
 
+func (s *Store) GetDeadProperties(ctx context.Context, id metadata.EntryID) ([]metadata.DeadProperty, error) {
+	visible, err := s.isPublicEntry(ctx, s.db, id)
+	if err != nil {
+		return nil, err
+	}
+	if !visible {
+		return nil, metadata.ErrEntryNotFound
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT namespace_uri,localname,xml_value FROM dead_properties WHERE entry_id=? ORDER BY namespace_uri,localname`, id.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []metadata.DeadProperty
+	for rows.Next() {
+		var p metadata.DeadProperty
+		p.EntryID = id
+		if err := rows.Scan(&p.Namespace, &p.Name, &p.XML); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+func (s *Store) UpdateDeadProperties(ctx context.Context, id metadata.EntryID, changes []metadata.DeadPropertyChange) error {
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	visible, err := s.isPublicEntry(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if !visible {
+		return metadata.ErrEntryNotFound
+	}
+	var exists int
+	if err := tx.QueryRowContext(ctx, "SELECT 1 FROM entries WHERE entry_id=?", id.String()).Scan(&exists); err != nil {
+		return metadata.ErrEntryNotFound
+	}
+	for _, change := range changes {
+		p := change.Property
+		if p.Name == "" || p.XML == "" {
+			if !change.Remove || p.Name == "" {
+				return fmt.Errorf("invalid property value")
+			}
+		}
+		if change.Remove {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM dead_properties WHERE entry_id=? AND namespace_uri=? AND localname=?", id.String(), p.Namespace, p.Name); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO dead_properties(entry_id,namespace_uri,localname,xml_value) VALUES(?,?,?,?) ON CONFLICT(entry_id,namespace_uri,localname) DO UPDATE SET xml_value=excluded.xml_value`, id.String(), p.Namespace, p.Name, p.XML); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // Root retrieves the root entry of the logical repository.
 func (s *Store) Root(ctx context.Context) (metadata.Entry, error) {
+	visible, err := s.isPublicEntry(ctx, s.db, "root")
+	if err != nil {
+		return metadata.Entry{}, err
+	}
+	if !visible {
+		return metadata.Entry{}, metadata.ErrEntryNotFound
+	}
 	row := s.db.QueryRowContext(ctx, `
 		SELECT entry_id, parent_id, name, kind, object_id, (SELECT md5 FROM content_metadata WHERE content_id=entries.object_id), size, mtime, mode, content_type, revision, created_at, updated_at
 		FROM entries
@@ -386,7 +675,24 @@ func (s *Store) getByID(ctx context.Context, q dbtx, id metadata.EntryID) (metad
 
 // GetByID retrieves a single metadata entry by its ID.
 func (s *Store) GetByID(ctx context.Context, id metadata.EntryID) (metadata.Entry, error) {
+	visible, err := s.isPublicEntry(ctx, s.db, id)
+	if err != nil {
+		return metadata.Entry{}, err
+	}
+	if !visible {
+		return metadata.Entry{}, metadata.ErrEntryNotFound
+	}
 	return s.getByID(ctx, s.db, id)
+}
+
+func (s *Store) isPublicEntry(ctx context.Context, q dbtx, id metadata.EntryID) (bool, error) {
+	var visible int
+	err := q.QueryRowContext(ctx, `WITH RECURSIVE ancestry(entry_id,parent_id) AS (
+		SELECT entry_id,parent_id FROM entries WHERE entry_id=?
+		UNION ALL
+		SELECT parent.entry_id,parent.parent_id FROM entries AS parent JOIN ancestry ON parent.entry_id=ancestry.parent_id
+	) SELECT CASE WHEN EXISTS(SELECT 1 FROM ancestry WHERE entry_id='root') AND NOT EXISTS(SELECT 1 FROM ancestry JOIN internal_buffers ON internal_buffers.root_entry_id=ancestry.entry_id) THEN 1 ELSE 0 END`, id.String()).Scan(&visible)
+	return visible == 1, err
 }
 
 func (s *Store) getChild(ctx context.Context, q dbtx, parentID metadata.EntryID, name string) (metadata.Entry, error) {
@@ -400,11 +706,22 @@ func (s *Store) getChild(ctx context.Context, q dbtx, parentID metadata.EntryID,
 
 // GetChild retrieves a single metadata entry under parentID by its local name.
 func (s *Store) GetChild(ctx context.Context, parentID metadata.EntryID, name string) (metadata.Entry, error) {
+	visible, err := s.isPublicEntry(ctx, s.db, parentID)
+	if err != nil || !visible {
+		return metadata.Entry{}, metadata.ErrEntryNotFound
+	}
 	return s.getChild(ctx, s.db, parentID, name)
 }
 
 // ListChildren returns direct child entries under parentID.
 func (s *Store) ListChildren(ctx context.Context, parentID metadata.EntryID) ([]metadata.Entry, error) {
+	visible, err := s.isPublicEntry(ctx, s.db, parentID)
+	if err != nil {
+		return nil, err
+	}
+	if !visible {
+		return nil, metadata.ErrEntryNotFound
+	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT entry_id, parent_id, name, kind, object_id, (SELECT md5 FROM content_metadata WHERE content_id=entries.object_id), size, mtime, mode, content_type, revision, created_at, updated_at
 		FROM entries
@@ -444,7 +761,14 @@ func (s *Store) validateCreateInvariants(ctx context.Context, q dbtx, entry meta
 			if errors.Is(err, metadata.ErrEntryNotFound) {
 				return fmt.Errorf("%w: parent entry %s does not exist", metadata.ErrEntryConflict, *entry.ParentID)
 			}
-			return fmt.Errorf("failed to verify parent existence: %w", err)
+			return err
+		}
+		visible, err := s.isPublicEntry(ctx, q, *entry.ParentID)
+		if err != nil {
+			return err
+		}
+		if !visible {
+			return fmt.Errorf("%w: parent entry %s is not in the public namespace", metadata.ErrEntryConflict, *entry.ParentID)
 		}
 		if parent.Kind != metadata.EntryKindDirectory {
 			return fmt.Errorf("%w: parent entry %s must be a directory, but got %s", metadata.ErrEntryConflict, *entry.ParentID, parent.Kind)
@@ -588,6 +912,13 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 	defer tx.Rollback()
 
 	// Verify target entry existence and current revision for optimistic concurrency check
+	visible, err := s.isPublicEntry(ctx, tx, entry.ID)
+	if err != nil {
+		return metadata.Entry{}, err
+	}
+	if !visible {
+		return metadata.Entry{}, metadata.ErrEntryNotFound
+	}
 	existing, err := s.getByID(ctx, tx, entry.ID)
 	if err != nil {
 		if errors.Is(err, metadata.ErrEntryNotFound) {
@@ -674,7 +1005,7 @@ func (s *Store) Update(ctx context.Context, entry metadata.Entry) (metadata.Entr
 // CommitPut atomically creates or updates a file Entry and optionally enqueues
 // its content ID for asynchronous delivery. It is intentionally one semantic
 // MetadataStore operation so backends can preserve the same atomic boundary.
-func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTransfer bool) (metadata.Entry, error) {
+func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTransfer bool, requireExisting bool) (metadata.Entry, error) {
 	if entry.Kind != metadata.EntryKindFile || entry.ObjectID == nil {
 		return metadata.Entry{}, fmt.Errorf("%w: Put commit requires a file with content ID", metadata.ErrEntryConflict)
 	}
@@ -689,6 +1020,17 @@ func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTran
 
 	existing, getErr := s.getByID(ctx, tx, entry.ID)
 	if errors.Is(getErr, metadata.ErrEntryNotFound) {
+		if requireExisting {
+			return metadata.Entry{}, metadata.ErrEntryNotFound
+		}
+		if entry.ID != "" {
+			var exists int
+			if err := tx.QueryRowContext(ctx, `SELECT 1 FROM entries WHERE entry_id=?`, entry.ID.String()).Scan(&exists); err == nil {
+				return metadata.Entry{}, metadata.ErrEntryNotFound
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return metadata.Entry{}, err
+			}
+		}
 		if err := s.validateCreateInvariants(ctx, tx, entry); err != nil {
 			return metadata.Entry{}, err
 		}
@@ -707,6 +1049,13 @@ func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTran
 	} else if getErr != nil {
 		return metadata.Entry{}, fmt.Errorf("read Put target Entry: %w", getErr)
 	} else {
+		visible, err := s.isPublicEntry(ctx, tx, entry.ID)
+		if err != nil {
+			return metadata.Entry{}, err
+		}
+		if !visible {
+			return metadata.Entry{}, metadata.ErrEntryNotFound
+		}
 		if existing.Kind != metadata.EntryKindFile {
 			return metadata.Entry{}, fmt.Errorf("%w: cannot replace directory with file", metadata.ErrEntryConflict)
 		}
@@ -888,6 +1237,23 @@ func (s *Store) Move(ctx context.Context, entry metadata.Entry) (metadata.Entry,
 		}
 		return metadata.Entry{}, fmt.Errorf("failed to get entry inside transaction: %w", err)
 	}
+	visible, err := s.isPublicEntry(ctx, tx, entry.ID)
+	if err != nil {
+		return metadata.Entry{}, err
+	}
+	if !visible {
+		return metadata.Entry{}, metadata.ErrEntryNotFound
+	}
+	parentVisible, err := s.isPublicEntry(ctx, tx, copiedParentID)
+	if err != nil {
+		return metadata.Entry{}, err
+	}
+	if !parentVisible {
+		if _, err := s.getByID(ctx, tx, copiedParentID); errors.Is(err, metadata.ErrEntryNotFound) {
+			return metadata.Entry{}, fmt.Errorf("%w: destination parent %s does not exist", metadata.ErrEntryConflict, copiedParentID)
+		}
+		return metadata.Entry{}, fmt.Errorf("%w: destination parent is not in the public namespace", metadata.ErrEntryConflict)
+	}
 
 	if current.Revision != entry.Revision {
 		return metadata.Entry{}, fmt.Errorf("%w: expected revision %d, got %d", metadata.ErrEntryConflict, entry.Revision, current.Revision)
@@ -951,6 +1317,13 @@ func (s *Store) Delete(ctx context.Context, id metadata.EntryID) error {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
+	visible, err := s.isPublicEntry(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if !visible {
+		return metadata.ErrEntryNotFound
+	}
 
 	// Attempt atomic DELETE of the entry if it's not root and has no children referencing it as parent_id
 	res, err := tx.ExecContext(ctx, `
@@ -1023,8 +1396,13 @@ func (s *Store) ReferencedObjectIDs(ctx context.Context) ([]content.ID, error) {
 // ListAll lists all entries.
 func (s *Store) ListAll(ctx context.Context) ([]metadata.Entry, error) {
 	rows, err := s.db.QueryContext(ctx, `
+		WITH RECURSIVE visible(entry_id) AS (
+			SELECT 'root'
+			UNION ALL
+			SELECT entries.entry_id FROM entries JOIN visible ON entries.parent_id=visible.entry_id
+		)
 		SELECT entry_id, parent_id, name, kind, object_id, (SELECT md5 FROM content_metadata WHERE content_id=entries.object_id), size, mtime, mode, content_type, revision, created_at, updated_at
-		FROM entries
+		FROM entries WHERE entry_id IN (SELECT entry_id FROM visible)
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query all entries: %w", err)
@@ -1040,4 +1418,368 @@ func (s *Store) ListAll(ctx context.Context) ([]metadata.Entry, error) {
 		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+// DetachTree atomically removes a public subtree root from path lookup and
+// registers it as one private, independently reclaimable buffer.
+func (s *Store) CreateDetachedRoot(ctx context.Context, entry metadata.Entry, ttl time.Duration) (metadata.DetachedBuffer, error) {
+	if entry.ID == "" || entry.ID == "root" || entry.ParentID != nil || entry.Name != "" || entry.Kind != metadata.EntryKindDirectory || entry.Revision == 0 {
+		return metadata.DetachedBuffer{}, fmt.Errorf("invalid detached root entry")
+	}
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	defer tx.Rollback()
+	if err := insertEntry(ctx, tx, entry); err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	buffer := metadata.DetachedBuffer{ID: metadata.BufferID(uuid.NewString()), RootID: entry.ID, ExpiresAt: metadata.TimestampFromTime(time.Now().Add(ttl)), Fencing: 1}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO internal_buffers(buffer_id,root_entry_id,expires_at,fencing,claimed) VALUES(?,?,?,?,0)`, string(buffer.ID), entry.ID.String(), int64(buffer.ExpiresAt), buffer.Fencing); err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	return buffer, nil
+}
+
+func insertEntry(ctx context.Context, tx *sql.Tx, entry metadata.Entry) error {
+	var parentID, objectID any
+	if entry.ParentID != nil {
+		parentID = entry.ParentID.String()
+	}
+	if entry.ObjectID != nil {
+		if err := entry.ObjectID.Validate(); err != nil {
+			return err
+		}
+		objectID = entry.ObjectID.String()
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO entries(entry_id,parent_id,name,kind,object_id,size,mtime,mode,content_type,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, entry.ID.String(), parentID, entry.Name, string(entry.Kind), objectID, entry.Size, int64(entry.Mtime), entry.Mode, entry.ContentType, entry.Revision, int64(entry.CreatedAt), int64(entry.UpdatedAt))
+	if err != nil {
+		return err
+	}
+	if entry.ObjectID != nil {
+		return setContentMD5(ctx, tx, *entry.ObjectID, entry.MD5)
+	}
+	return nil
+}
+
+func (s *Store) CreateDetachedEntry(ctx context.Context, buffer metadata.BufferID, fence uint64, entry metadata.Entry) (metadata.Entry, error) {
+	if entry.ID == "" || entry.ParentID == nil || entry.Name == "" || entry.Revision == 0 || (entry.Kind != metadata.EntryKindFile && entry.Kind != metadata.EntryKindDirectory) {
+		return metadata.Entry{}, fmt.Errorf("invalid detached child entry")
+	}
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return metadata.Entry{}, err
+	}
+	defer tx.Rollback()
+	var belongs int
+	if err := tx.QueryRowContext(ctx, `WITH RECURSIVE tree(entry_id) AS (SELECT root_entry_id FROM internal_buffers WHERE buffer_id=? AND fencing=? AND claimed=0 AND expires_at>? UNION ALL SELECT entries.entry_id FROM entries JOIN tree ON entries.parent_id=tree.entry_id) SELECT EXISTS(SELECT 1 FROM tree WHERE entry_id=?)`, string(buffer), fence, int64(metadata.TimestampFromTime(time.Now())), entry.ParentID.String()).Scan(&belongs); err != nil {
+		return metadata.Entry{}, err
+	}
+	if belongs == 0 {
+		return metadata.Entry{}, metadata.ErrEntryNotFound
+	}
+	if entry.Kind == metadata.EntryKindFile && entry.ObjectID == nil {
+		return metadata.Entry{}, fmt.Errorf("detached file entry requires an object ID")
+	}
+	if entry.Kind == metadata.EntryKindDirectory && entry.ObjectID != nil {
+		return metadata.Entry{}, fmt.Errorf("detached directory entry cannot have an object ID")
+	}
+	if err := insertEntry(ctx, tx, entry); err != nil {
+		return metadata.Entry{}, fmt.Errorf("create detached child: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return metadata.Entry{}, err
+	}
+	return entry, nil
+}
+
+func (s *Store) SetDetachedDeadProperties(ctx context.Context, buffer metadata.BufferID, fence uint64, id metadata.EntryID, changes []metadata.DeadPropertyChange) error {
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var belongs int
+	if err := tx.QueryRowContext(ctx, `WITH RECURSIVE tree(entry_id) AS (SELECT root_entry_id FROM internal_buffers WHERE buffer_id=? AND fencing=? AND claimed=0 AND expires_at>? UNION ALL SELECT entries.entry_id FROM entries JOIN tree ON entries.parent_id=tree.entry_id) SELECT EXISTS(SELECT 1 FROM tree WHERE entry_id=?)`, string(buffer), fence, int64(metadata.TimestampFromTime(time.Now())), id.String()).Scan(&belongs); err != nil {
+		return err
+	}
+	if belongs == 0 {
+		return metadata.ErrEntryNotFound
+	}
+	for _, change := range changes {
+		p := change.Property
+		if p.Name == "" || (!change.Remove && p.XML == "") {
+			return fmt.Errorf("invalid property value")
+		}
+		if change.Remove {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM dead_properties WHERE entry_id=? AND namespace_uri=? AND localname=?`, id.String(), p.Namespace, p.Name); err != nil {
+				return err
+			}
+		} else if _, err := tx.ExecContext(ctx, `INSERT INTO dead_properties(entry_id,namespace_uri,localname,xml_value) VALUES(?,?,?,?) ON CONFLICT(entry_id,namespace_uri,localname) DO UPDATE SET xml_value=excluded.xml_value`, id.String(), p.Namespace, p.Name, p.XML); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) PublishDetachedRoot(ctx context.Context, buffer metadata.BufferID, fence uint64, parentID metadata.EntryID, name string) (metadata.Entry, error) {
+	if name == "" {
+		return metadata.Entry{}, metadata.ErrEntryConflict
+	}
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return metadata.Entry{}, err
+	}
+	defer tx.Rollback()
+	parentVisible, err := s.isPublicEntry(ctx, tx, parentID)
+	if err != nil {
+		return metadata.Entry{}, err
+	}
+	if !parentVisible {
+		return metadata.Entry{}, metadata.ErrEntryNotFound
+	}
+	parent, err := s.getByID(ctx, tx, parentID)
+	if err != nil {
+		return metadata.Entry{}, err
+	}
+	if parent.Kind != metadata.EntryKindDirectory {
+		return metadata.Entry{}, metadata.ErrEntryConflict
+	}
+	if _, err := s.getChild(ctx, tx, parentID, name); err == nil {
+		return metadata.Entry{}, metadata.ErrEntryConflict
+	} else if !errors.Is(err, metadata.ErrEntryNotFound) {
+		return metadata.Entry{}, err
+	}
+	var rootID string
+	var claimed int
+	if err := tx.QueryRowContext(ctx, `SELECT root_entry_id,claimed FROM internal_buffers WHERE buffer_id=? AND fencing=? AND expires_at>?`, string(buffer), fence, int64(metadata.TimestampFromTime(time.Now().UTC()))).Scan(&rootID, &claimed); err != nil {
+		return metadata.Entry{}, metadata.ErrEntryConflict
+	}
+	if claimed != 0 {
+		return metadata.Entry{}, metadata.ErrEntryConflict
+	}
+	root, err := s.getByID(ctx, tx, metadata.EntryID(rootID))
+	if err != nil {
+		return metadata.Entry{}, err
+	}
+	now := metadata.TimestampFromTime(time.Now().UTC())
+	res, err := tx.ExecContext(ctx, `UPDATE entries SET parent_id=?,name=?,revision=revision+1,updated_at=? WHERE entry_id=? AND parent_id IS NULL`, parentID.String(), name, int64(now), rootID)
+	if err != nil {
+		return metadata.Entry{}, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return metadata.Entry{}, fmt.Errorf("read published root row count: %w", err)
+	}
+	if n != 1 {
+		return metadata.Entry{}, metadata.ErrEntryConflict
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM internal_buffers WHERE buffer_id=?`, string(buffer)); err != nil {
+		return metadata.Entry{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return metadata.Entry{}, err
+	}
+	root.ParentID, root.Name, root.Revision, root.UpdatedAt = &parentID, name, root.Revision+1, now
+	return root, nil
+}
+
+func (s *Store) DetachTree(ctx context.Context, id metadata.EntryID, revision uint64, expectedParent metadata.EntryID) (metadata.DetachedBuffer, error) {
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	defer tx.Rollback()
+	visible, err := s.isPublicEntry(ctx, tx, id)
+	if err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	if !visible || id == "root" {
+		return metadata.DetachedBuffer{}, metadata.ErrEntryNotFound
+	}
+	entry, err := s.getByID(ctx, tx, id)
+	if err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	if entry.Revision != revision || entry.ParentID == nil || *entry.ParentID != expectedParent {
+		return metadata.DetachedBuffer{}, metadata.ErrEntryConflict
+	}
+	buffer := metadata.DetachedBuffer{ID: metadata.BufferID(uuid.NewString()), RootID: id, Fencing: 1, ExpiresAt: metadata.TimestampFromTime(time.Now())}
+	res, err := tx.ExecContext(ctx, `UPDATE entries SET parent_id=NULL,name='',revision=revision+1,updated_at=? WHERE entry_id=? AND revision=?`, int64(metadata.TimestampFromTime(time.Now().UTC())), id.String(), revision)
+	if err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return metadata.DetachedBuffer{}, fmt.Errorf("read detached root row count: %w", err)
+	}
+	if n != 1 {
+		return metadata.DetachedBuffer{}, metadata.ErrEntryConflict
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO internal_buffers(buffer_id,root_entry_id,expires_at,fencing,claimed) VALUES(?,?,?,?,0)`, buffer.ID, id.String(), int64(buffer.ExpiresAt), buffer.Fencing); err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	return buffer, nil
+}
+
+func (s *Store) DetachedBuffers(ctx context.Context) ([]metadata.DetachedBuffer, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT buffer_id,root_entry_id,expires_at,fencing,claimed FROM internal_buffers ORDER BY buffer_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var buffers []metadata.DetachedBuffer
+	for rows.Next() {
+		var buffer metadata.DetachedBuffer
+		var id, root string
+		var expires int64
+		var claimed int
+		if err := rows.Scan(&id, &root, &expires, &buffer.Fencing, &claimed); err != nil {
+			return nil, err
+		}
+		buffer.ID, buffer.RootID, buffer.ExpiresAt, buffer.Claimed = metadata.BufferID(id), metadata.EntryID(root), metadata.Timestamp(expires), claimed != 0
+		buffers = append(buffers, buffer)
+	}
+	return buffers, rows.Err()
+}
+
+func (s *Store) ListDetachedChildren(ctx context.Context, bufferID metadata.BufferID, fence uint64, parentID metadata.EntryID) ([]metadata.Entry, error) {
+	var belongs int
+	if err := s.db.QueryRowContext(ctx, `WITH RECURSIVE tree(entry_id) AS (
+		SELECT root_entry_id FROM internal_buffers WHERE buffer_id=? AND fencing=? AND claimed=1
+		UNION ALL SELECT entries.entry_id FROM entries JOIN tree ON entries.parent_id=tree.entry_id
+	) SELECT EXISTS(SELECT 1 FROM tree WHERE entry_id=?)`, string(bufferID), fence, parentID.String()).Scan(&belongs); err != nil {
+		return nil, err
+	}
+	if belongs == 0 {
+		return nil, metadata.ErrEntryNotFound
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT entry_id,parent_id,name,kind,object_id,(SELECT md5 FROM content_metadata WHERE content_id=entries.object_id),size,mtime,mode,content_type,revision,created_at,updated_at FROM entries WHERE parent_id=? ORDER BY name`, parentID.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var children []metadata.Entry
+	for rows.Next() {
+		entry, err := s.scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		children = append(children, entry)
+	}
+	return children, rows.Err()
+}
+
+func (s *Store) DeleteDetachedEntry(ctx context.Context, bufferID metadata.BufferID, fence uint64, id metadata.EntryID) error {
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var belongs int
+	if err := tx.QueryRowContext(ctx, `WITH RECURSIVE tree(entry_id) AS (
+		SELECT root_entry_id FROM internal_buffers WHERE buffer_id=? AND fencing=? AND claimed=1
+		UNION ALL SELECT entries.entry_id FROM entries JOIN tree ON entries.parent_id=tree.entry_id
+	) SELECT EXISTS(SELECT 1 FROM tree WHERE entry_id=?)`, string(bufferID), fence, id.String()).Scan(&belongs); err != nil {
+		return err
+	}
+	if belongs == 0 {
+		return metadata.ErrEntryNotFound
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM entries WHERE entry_id=? AND NOT EXISTS(SELECT 1 FROM entries child WHERE child.parent_id=entries.entry_id)`, id.String())
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read detached entry delete row count: %w", err)
+	}
+	if n != 1 {
+		return metadata.ErrEntryConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) RenewDetachedBuffer(ctx context.Context, id metadata.BufferID, fence uint64, ttl time.Duration) (metadata.DetachedBuffer, error) {
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	defer tx.Rollback()
+	now := metadata.TimestampFromTime(time.Now())
+	res, err := tx.ExecContext(ctx, `UPDATE internal_buffers SET expires_at=? WHERE buffer_id=? AND fencing=? AND claimed=0 AND expires_at>?`, int64(now)+int64(ttl), string(id), fence, int64(now))
+	if err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return metadata.DetachedBuffer{}, fmt.Errorf("read renewed buffer row count: %w", err)
+	}
+	if n != 1 {
+		return metadata.DetachedBuffer{}, metadata.ErrEntryConflict
+	}
+	var b metadata.DetachedBuffer
+	var root string
+	var expires int64
+	if err := tx.QueryRowContext(ctx, `SELECT buffer_id,root_entry_id,expires_at,fencing,claimed FROM internal_buffers WHERE buffer_id=?`, string(id)).Scan(&id, &root, &expires, &b.Fencing, &b.Claimed); err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	b.ID, b.RootID, b.ExpiresAt = id, metadata.EntryID(root), metadata.Timestamp(expires)
+	if err := tx.Commit(); err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	return b, nil
+}
+
+func (s *Store) ClaimExpiredDetachedBuffer(ctx context.Context, id metadata.BufferID, now metadata.Timestamp) (metadata.DetachedBuffer, error) {
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	defer tx.Rollback()
+	// Claim is durable GC ownership, not another time lease. The daemon holds
+	// the repository process lock, so only restart recovery may clear claimed.
+	res, err := tx.ExecContext(ctx, `UPDATE internal_buffers SET claimed=1,fencing=fencing+1,expires_at=0 WHERE buffer_id=? AND claimed=0 AND expires_at<=?`, string(id), int64(now))
+	if err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return metadata.DetachedBuffer{}, fmt.Errorf("read claimed buffer row count: %w", err)
+	}
+	if n != 1 {
+		return metadata.DetachedBuffer{}, metadata.ErrEntryConflict
+	}
+	var b metadata.DetachedBuffer
+	var root string
+	var expires int64
+	if err := tx.QueryRowContext(ctx, `SELECT buffer_id,root_entry_id,expires_at,fencing,claimed FROM internal_buffers WHERE buffer_id=?`, string(id)).Scan(&id, &root, &expires, &b.Fencing, &b.Claimed); err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	b.ID, b.RootID, b.ExpiresAt = id, metadata.EntryID(root), metadata.Timestamp(expires)
+	if err := tx.Commit(); err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	return b, nil
+}
+
+func (s *Store) ExpireDetachedBuffersAfterRestart(ctx context.Context, now metadata.Timestamp) error {
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE internal_buffers SET expires_at=?,fencing=fencing+1,claimed=0`, int64(now)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

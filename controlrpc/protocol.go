@@ -11,46 +11,51 @@ const (
 )
 
 const (
-	CodeParseError             = -32700
-	CodeInvalidRequest         = -32600
-	CodeMethodNotFound         = -32601
-	CodeInvalidParams          = -32602
-	CodeInternalError          = -32603
-	CodeEntryNotFound          = -32004
-	CodeEntryConflict          = -32009
-	CodeResourceSessionExpired = -32011
-	CodeEntryExists            = -32012
-	CodeDirectoryNotEmpty      = -32013
-	CodePermissionDenied       = -32014
+	CodeParseError                = -32700
+	CodeInvalidRequest            = -32600
+	CodeMethodNotFound            = -32601
+	CodeInvalidParams             = -32602
+	CodeInternalError             = -32603
+	CodeEntryNotFound             = -32004
+	CodeEntryConflict             = -32009
+	CodeResourceSessionExpired    = -32011
+	CodeEntryExists               = -32012
+	CodeDirectoryNotEmpty         = -32013
+	CodePermissionDenied          = -32014
+	CodeResourceSessionMissing    = -32015
+	CodeDetachedDiscardIncomplete = -32016
 )
 
 const (
-	MethodPing            = "daemon.ping"
-	MethodStat            = "repository.stat"
-	MethodResolveEntry    = "repository.resolveEntry"
-	MethodChmodEntry      = "repository.chmodEntry"
-	MethodList            = "repository.list"
-	MethodMkdir           = "repository.mkdir"
-	MethodMove            = "repository.move"
-	MethodMoveEntry       = "repository.moveEntry"
-	MethodRemove          = "repository.remove"
-	MethodRemoveEntry     = "repository.removeEntry"
-	MethodGC              = "repository.gc"
-	MethodMaintenance     = "repository.maintenanceOnce"
-	MethodDoctor          = "repository.doctor"
-	MethodSync            = "repository.sync"
-	MethodBeginRead       = "resource.beginRead"
-	MethodBeginWrite      = "resource.beginWrite"
-	MethodSetMode         = "resource.setMode"
-	MethodCommit          = "resource.commit"
-	MethodAbort           = "resource.abort"
-	MethodMarkUnlinked    = "resource.markUnlinked"
-	MethodRelease         = "resource.release"
-	MethodRenew           = "resource.renew"
-	MethodRevoke          = "resource.revoke"
-	MethodRecoveryList    = "resource.recovery.list"
-	MethodRecoveryRetry   = "resource.recovery.retry"
-	MethodRecoveryDiscard = "resource.recovery.discard"
+	MethodPing                 = "daemon.ping"
+	MethodStat                 = "repository.stat"
+	MethodResolveEntry         = "repository.resolveEntry"
+	MethodChmodEntry           = "repository.chmodEntry"
+	MethodList                 = "repository.list"
+	MethodMkdir                = "repository.mkdir"
+	MethodMove                 = "repository.move"
+	MethodMoveEntry            = "repository.moveEntry"
+	MethodCopyEntry            = "repository.copyEntry"
+	MethodDeadProperties       = "repository.deadProperties"
+	MethodUpdateDeadProperties = "repository.updateDeadProperties"
+	MethodRemove               = "repository.remove"
+	MethodRemoveEntry          = "repository.removeEntry"
+	MethodGC                   = "repository.gc"
+	MethodMaintenance          = "repository.maintenanceOnce"
+	MethodDoctor               = "repository.doctor"
+	MethodSync                 = "repository.sync"
+	MethodBeginRead            = "resource.beginRead"
+	MethodBeginWrite           = "resource.beginWrite"
+	MethodSetMode              = "resource.setMode"
+	MethodCommit               = "resource.commit"
+	MethodAbort                = "resource.abort"
+	MethodMarkUnlinked         = "resource.markUnlinked"
+	MethodRelease              = "resource.release"
+	MethodRenew                = "resource.renew"
+	MethodRevoke               = "resource.revoke"
+	MethodRecoveryList         = "resource.recovery.list"
+	MethodRecoveryRetry        = "resource.recovery.retry"
+	MethodRecoveryDiscard      = "resource.recovery.discard"
 )
 
 type BeginWriteResult struct {
@@ -85,6 +90,21 @@ type ResolveEntryParams struct {
 	EntryID string `json:"entry_id"`
 }
 
+type DeadProperty struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	XML       string `json:"xml"`
+}
+
+type DeadPropertyChange struct {
+	Property DeadProperty `json:"property"`
+	Remove   bool         `json:"remove,omitempty"`
+}
+type DeadPropertiesParams struct {
+	EntryID string               `json:"entry_id"`
+	Changes []DeadPropertyChange `json:"changes,omitempty"`
+}
+
 type ChmodEntryParams struct {
 	EntryID string `json:"entry_id"`
 	Mode    uint32 `json:"mode"`
@@ -93,6 +113,19 @@ type ChmodEntryParams struct {
 type MoveEntryParams struct {
 	EntryID     string `json:"entry_id"`
 	Destination string `json:"destination"`
+}
+
+type CopyEntryParams struct {
+	EntryID     string `json:"entry_id"`
+	SourcePath  string `json:"source_path"`
+	Revision    uint64 `json:"revision"`
+	Destination string `json:"destination"`
+	Depth       string `json:"depth"`
+	Overwrite   bool   `json:"overwrite"`
+}
+
+type CopyEntryResult struct {
+	Replaced bool `json:"replaced"`
 }
 
 type RemoveEntryParams struct {

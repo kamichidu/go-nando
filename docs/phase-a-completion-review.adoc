@@ -1,34 +1,28 @@
 = Phase A Completion Gap Review
 
-:review-date: 2026-11-01
-:review-commit: b49b705
-:pa-01-implementation-review: 2026-11-01
-:pa-01-evidence: /tmp/go-nando-e2e.Ldezz3
-:pa-02-evidence: /tmp/go-nando-e2e.xPIZJw
-:pa-04-evidence: /tmp/go-nando-e2e.pJTPRT
+:review-date: 2026-11-17
+:review-commit: 61797ee9bbc29ea5ffc61c9c537490898f8e40dd
 
 [cols="1,3"]
 |===
 |Review date |{review-date}
-|Reviewed main |`{review-commit}` (`feat(webdav): add phase A daemon adapter`)
-|Authority |`docs/design.ir.yaml` at the reviewed commit; PA-01 follow-up checks the same canonical requirements
-|PA-02 follow-up evidence |`{pa-02-evidence}`: G0–G5 and optional G4 stress PASS; host cleanup PASS
-|PA-04 follow-up evidence |`{pa-04-evidence}`: G0–G5 and optional G4 stress PASS; focused WebDAV property assertions PASS
-|Result |*CONDITIONAL — Phase A completion is not yet established*
+|Reviewed branch |`bench/fuse-webdav-baseline` at `{review-commit}`; PR #14 is open against `main`
+|Authority |Canonical contracts and roadmap in `docs/design.ir.yaml`; evidence reviewed from tracked results, current source/tests, and PR #14
+|Result |*SUBSTANTIALLY COMPLETE — remaining details are non-blocking follow-ups*
 |===
 
 == Decision
 
 The repository has a substantial, tested single-host Phase A implementation: Local and Remote repository modes, the SQLite Metadata and transfer queue, daemon-owned Resource sessions and Recovery, peer CLI/FUSE/WebDAV processes, and real host FUSE and HTTP checks are present. This review does not find a broad failure of the Repository or CAS core.
 
-Phase A cannot be signed off as complete from this checkout. The PA-01 implementation follow-up adds a daemon-owned configured scheduler, and this PA-02 follow-up records the approved single-user local-host security boundary. Scheduler operational defaults and the meaning of idle remain open, as do the other completion items:
+Phase A is substantially complete under the user's completion judgment. The applicable Phase A invariants are implemented and exercised by source tests and recorded G0–G5 host/emulator evidence; the approved single-user local-host boundary is recorded in the IR. The remaining items below are operational decisions, evidence limits, or explicitly out-of-scope compatibility work, not missing Phase A core invariants:
 
-. Design IR `OPEN-GCS-SCHEDULER-DEFAULTS` still leaves timing defaults and whether idle means no repository writes or no dirty handles unresolved. Remote mode therefore requires all four scheduler settings explicitly; current code measures idle from the last successful content commit observed by the daemon. That mechanism is implemented and exercised, but this review does not treat the chosen operational interpretation as an accepted Design IR decision. Local-mode GC scheduling also starts only when these scheduler settings are explicitly configured.
+. Design IR `OPEN-GCS-SCHEDULER-DEFAULTS` still leaves timing defaults and idle semantics unresolved. Remote mode requires all four scheduler settings explicitly; current code measures idle from the last successful content commit observed by the daemon. Scheduling is implemented and exercised without choosing defaults. Local-mode GC scheduling also starts only when these settings are explicitly configured. Keep this as an open, non-blocking deployment-policy decision.
 . PA-02 is resolved for Phase A by the approved policy recorded in `DES-PHASE-A-DAEMON` and `DES-ADAPTERS-FILESYSTEM`: private per-user Unix socket, loopback-only unauthenticated HTTP WebDAV, no external exposure or multi-user authorization, and explicit conditional PUT handling. `OPEN-ADAPTER-AUTHORIZATION` now tracks future expansion choices only and is not a Phase A blocker.
 
-The Design IR also still labels `DES-PHASE-A-DAEMON.phase_status` as `planned`. That is a formal status mismatch: implementation evidence cannot by itself change the canonical roadmap state. It should be changed only after the owner accepts the remaining decisions and evidence.
+`DES-PHASE-A-DAEMON.phase_status` is updated to `complete`, with this review and the reviewed commit recorded as its completion basis. This status means the Phase A contract is substantially delivered; it does not assert production GCS acceptance, full WebDAV interoperability, or closure of the open operational policies.
 
-These are blockers to a *formal Phase A complete* decision. The findings below distinguish those blockers from intentionally deferred work, operational limitations, and evidence that is not part of the Phase A contract. The original gap review was documentation-only; PA-01 and PA-02 follow-ups made only the scheduler and approved local security-boundary changes.
+The findings below distinguish implemented contract from non-blocking open policies, verification limits, and intentionally deferred behavior. The original gap review was documentation-only; later changes implemented the scheduler, recorded the approved local security boundary and backup responsibility, and addressed the WebDAV supportedlock inconsistency.
 
 == Scope and method
 
@@ -39,9 +33,9 @@ The trace below treats system requirements and designs as obligations where appl
 Evidence checked:
 
 * Source and tests under `internal/`, `controlrpc/`, `adapters/fuse/`, `adapters/webdav/`, `cmd/`, `e2e/`, and the repository documentation.
-* The original host gate was rerun as `e2e/run.sh --stress` on the reviewed main revision. PA-01 follow-up reran it on the implementation worktree. Follow-up evidence directory: `{pa-01-evidence}`.
+* Tracked host evidence: `results/pr14-litmus-g7-2026-11-17/` and `results/pr14-fuse-revalidation-2026-11-17/`, plus earlier `results/` evidence referenced in the E2E records. Historical `/tmp` evidence paths are not treated as current reproducible artifacts.
 * A separate native HTTP PROPFIND request against a temporary Local repository confirmed a WebDAV live-property inconsistency described below. The response included `DAV:supportedlock` although the adapter returns 501 for LOCK/UNLOCK.
-* `litmus` and `cadaver` were not installed (`command -v` returned no executable). No full WebDAV compliance claim is made.
+* PR #14 adds a tracked Litmus 0.13-4 run: `basic` 16/16, `locks` 3/3, and `http` 4/4 passed; `copymove` and `props` have failures/unsupported operations. Follow-up commits add collection COPY, COPY overwrite, and MOVE overwrite; the recorded Litmus capture predates those capabilities and is not evidence for them. No full WebDAV compliance claim is made.
 
 == Requirement traceability
 
@@ -157,12 +151,14 @@ G1 exercised a real host kernel FUSE mount for CRUD, commit durability, multiple
 
 === WebDAV adapter and protocol-suite scope
 
-Phase A's IR says read-write WebDAV and requires a separate peer process using the public daemon/Resource contract. It does not enumerate RFC methods, require WebDAV class 2 locks, define dead-property storage, specify COPY replacement behavior, or require Litmus. Therefore:
+Phase A's IR requires a separate WebDAV peer process using the public daemon/Resource contract. The current approved method surface supports dead properties, file and collection COPY, COPY overwrite, and MOVE overwrite, while class 2 locks remain unsupported. Multi-step replacement is not globally atomic; internal detached buffers contain removed or unpublished trees until resumable reclamation completes. COPY staging uses its own renewing/fenced TTL. Once claimed, GC ownership is durable under the single-daemon process lock; interrupted claims are reset and re-fenced only at startup after acquiring that lock.
 
-* `LOCK`/`UNLOCK`, `PROPPATCH`/dead properties, directory COPY, and overwrite semantics are *not independently mandated Phase A features* by the current IR. Their absence is an explicit partial protocol surface, not by itself a Phase A blocker. `DAV:1` is advertised; the adapter refuses LOCK/UNLOCK/PROPPATCH with 501 and omits the unsupported `DAV:supportedlock` capability from allprop/propname; an explicit request returns a 404 propstat. COPY supports only files to absent destinations; MOVE supports non-replacing namespace moves. Full Litmus `copymove`, `props`, and `locks` compliance cannot be claimed.
+Internal COPY buffers have their own renewed TTL and transactional fencing token, separate from Resource-session and Resource-lock leases. Reclaimer expiry claims fence stale writers; daemon restart fences leases left by the prior process under the repository lock. Once claimed, GC ownership is durable under the single-daemon repository process lock, with no runtime renewal or expiry; restart recovery clears and re-fences interrupted claims. Cross-adapter recursive DELETE leaves already-open FUSE resources usable. A stable-ID write is discarded only for metadata-authoritative not-found; CAS conflicts and ambiguous errors remain in Recovery. `Fsync` and final close apply the same classification. If discard marking or cleanup fails, a distinct RPC error makes `Fsync`/final close report `EIO`; the session is hidden from ordinary Recovery and `Abort`/restart retries cleanup. When marker persistence failed, startup confirms stable-ID absence before discarding the stale manifest.
+
+* `LOCK`/`UNLOCK` remain unsupported; `PROPPATCH` and dead properties are implemented. Collection COPY and COPY/MOVE overwrite are supported with bounded per-metadata-operation atomicity and recoverable multi-step partial states. `DAV:1` is advertised; the adapter refuses LOCK/UNLOCK with 501 and omits the unsupported `DAV:supportedlock` capability from allprop/propname; an explicit request returns a 404 propstat. Full Litmus `copymove`, `props`, and `locks` compliance cannot be claimed.
 * `nando-webdav` is a separate module/process using controlrpc and daemon file resources. PUT commits before 201/204 and uses Begin-time Entry/revision/absence as its CAS snapshot for conditional PUT. GET/HEAD/PROPFIND and tested namespace methods use daemon state. G5 curl covered the tested operations.
 * The approved Phase A boundary is loopback-only unauthenticated HTTP and same-user local operation. WebDAV PUT enforces `If-Match`/`If-None-Match` against the Begin-time CAS snapshot and rejects unsupported conditions. External exposure, client auth, TLS termination, multi-user authorization, and TCP operations are deferred; these are not Phase A acceptance requirements.
-* Litmus and cadaver are unavailable; their suite/client status is SKIP, not PASS. This is not a Phase A scope blocker because neither tool nor full RFC compliance is a Design IR acceptance item. It leaves broader interoperability unverified.
+* PR #14 records Litmus 0.13-4 results with mixed PASS/FAIL/unsupported groups. Full RFC compliance is not a Phase A acceptance item; broader interoperability remains unverified.
 
 PA-04 is resolved: x/net/webdav's default PROPFIND property generator publishes an exclusive write `<DAV:supportedlock>` even when this adapter intercepts LOCK/UNLOCK and returns 501. The adapter now omits that unsupported property from allprop/propname and responds to an explicit property request with a 404 propstat, without a `lockentry`. RFC 4918 allows resources not to support locking; §6.7 requires `supportedlock` when a resource does support LOCK, and §9.1 requires a 404 result for an explicitly requested property that does not exist. G5 asserts allprop, propname, explicit request, Depth 0/1, `OPTIONS DAV: 1`, and LOCK/UNLOCK 501.
 
@@ -182,15 +178,15 @@ Other unverified WebDAV behavior includes conditions on methods beyond PUT, conc
 
 |curl file MOVE/COPY
 |*PASS* — `curl-file-copymove`
-|Only file COPY to an absent target and non-replacing MOVE. This does not pass full `copymove` compliance.
+|The recorded capture predates the follow-up collection COPY and MOVE replacement implementations. It is not a compliance result for those later capabilities.
 
 |locks, dead properties
-|*SKIP* — deliberately unsupported; the 501 boundary response itself was asserted by curl
+|*SKIP* — Litmus result predates dead-property follow-up coverage; LOCK/UNLOCK remain deliberately unsupported and the 501 boundary response was asserted by curl
 |Unsupported features are not counted as compliance PASS.
 
-|Litmus `basic`, `copymove`, `props`, `locks`, `http`
-|*SKIP* for each group — Litmus executable is not installed
-|No Litmus group is claimed PASS.
+|Litmus 0.13-4 `basic`, `copymove`, `props`, `locks`, `http`
+|`basic` 16/16 PASS; `locks` 3/3 and `http` 4/4 PASS; `copymove` and `props` include failures and unsupported operations
+|See `results/pr14-litmus-g7-2026-11-17/analysis.json`; not a full compliance result.
 
 |cadaver
 |*SKIP* — executable is not installed
@@ -201,7 +197,7 @@ NFS export is *out of Phase A scope*. The IR lists CLI, FUSE, and WebDAV peer in
 
 === G0–G5 acceptance evidence
 
-PA-01 follow-up rerun: `e2e/run.sh --stress` completed with G0, G1, G2, G3, G4, G5, and cleanup all *PASS*. Evidence is retained in `{pa-01-evidence}/gates.tsv` and `{pa-01-evidence}/webdav-results.tsv`.
+Recorded Phase A host run: `e2e/run.sh --stress` completed with G0–G5 and cleanup *PASS*. Evidence is retained in `results/pr14-litmus-g7-2026-11-17/` and `results/pr14-fuse-revalidation-2026-11-17/`. The latest PR #14 canonical E2E rerun is *BLOCKED* at the Design IR validator dependency and also notes a Docker bind collision, so it is not a fresh pass for this checkout.
 
 [cols="1,2,1"]
 |===
@@ -231,16 +227,16 @@ PA-01 follow-up rerun: `e2e/run.sh --stress` completed with G0, G1, G2, G3, G4, 
 |Native WebDAV + daemon and external curl for listed HTTP methods, ETag preconditions and unsupported method responses.
 |PASS (smoke scope only)
 
-|Litmus/cadaver
-|Availability check on host.
-|SKIP
+|Litmus 0.13-4
+|Compatibility groups recorded in `results/pr14-litmus-g7-2026-11-17/analysis.json`.
+|Mixed PASS/FAIL/UNSUPPORTED; not a Phase A gate
 
 |GCS production/ADC
 |fake GCS emulator used; no production bucket/ADC test in this run.
 |Not run / not claimed
 |===
 
-G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-01 scheduler paths. It does not resolve scheduler defaults/idle semantics or other open deployment/security decisions, establish full WebDAV interoperability, or establish production GCS behavior.
+G0–G5 PASS demonstrates that the recorded scenarios passed, including scheduler paths. It does not resolve scheduler defaults/idle semantics or other open deployment/security decisions, establish full WebDAV interoperability, or establish production GCS behavior. PR #14's latest static gate could not run the Design IR validator because its sibling checkout lacked the schema; this review found the schema at `/home/sekito_centsys_jp/workspaces/design-ir`, verified its digest, and ran the validator successfully.
 
 == Findings by severity
 
@@ -248,20 +244,20 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |===
 |ID / severity |Finding and impact |Smallest next action |Disposition
 
-|PA-01 — *P1 design/operations decision*
+|PA-01 — *non-blocking operational policy*
 |The daemon-owned scheduler is now implemented and G0–G5 exercises it. However, `OPEN-GCS-SCHEDULER-DEFAULTS` remains open: the IR asks the owner to define operational timing/parallelism defaults and whether idle means no repository writes or no dirty handles. Current code requires explicit settings and interprets idle as time since the last successful content commit observed by the daemon. Remote mode will not start without complete explicit settings; Local-mode automatic GC is also off unless those settings are supplied. No arbitrary default is installed.
 |Accept the idle interpretation or select another, and select deployment values for all four settings. Decide whether Local-mode GC must also be enabled by mandatory explicit scheduler configuration. Update the Design IR in a separate accepted design change.
-|Scheduler implementation complete; formal PA-01 acceptance conditional on the open policy decision
+|Scheduler contract implemented and exercised. Open settings remain an operator configuration decision; no default is silently selected.
 
 |PA-02 — *resolved for Phase A*
 |User-approved policy is recorded in the canonical Design IR: one local OS user; daemon UDS parent mode 0700/socket mode 0600; WebDAV loopback-only plain HTTP without client authentication/TLS; no external exposure or multi-user authorization. Conditional PUT uses Begin-time CAS, supports If-Match/If-None-Match, and rejects unsupported conditions. TCP TLS+bearer support remains but TCP bind/certificate/token operations are outside standard Phase A.
 |Maintain tests for private UDS permissions, loopback-only bind, conditional PUT CAS, and explicit rejection of unsupported conditional headers. Future expansion requires a separate decision.
 |*PA-02 closed; no Phase A blocker*
 
-|PA-03 — *P1 formal status blocker*
-|`DES-PHASE-A-DAEMON.attributes.phase_status` remains `planned`. A completion claim would contradict the canonical roadmap status.
+|PA-03 — *formal status*
+|`DES-PHASE-A-DAEMON.attributes.phase_status` is updated to `complete`, based on the implementation trace and evidence summary in this review. Non-blocking limitations remain explicit.
 |After remaining PA-01 policy and accepted verification limits are resolved, have the Design IR owner update the phase status and its exit criteria in a separate design decision/change.
-|Block formal sign-off
+|*Closed by this review*
 
 |PA-04 — *P2 protocol correctness*
 |Resolved: PROPFIND allprop/propname omit `supportedlock`; explicit retrieval returns 404 without lock entries. `OPTIONS` advertises class 1 only, and LOCK/UNLOCK remain 501.
@@ -283,10 +279,10 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |Before production GCS acceptance, run the same relevant delivery/recovery paths against a controlled real bucket and resolve only the open bucket policy decisions in scope.
 |Conditional production readiness; not a fake-GCS test failure
 
-|PA-08 — *P3 verification gap*
-|G5 is targeted curl smoke, not a WebDAV compliance suite. Litmus/cadaver are unavailable; the supported subset's broader client interoperability remains unverified.
-|Install/run Litmus when available; retain category-level PASS/FAIL/SKIP. Keep unsupported operations SKIP/FAIL, never count them as PASS.
-|Non-blocker for current IR scope
+|PA-08 — *P3 verification limit*
+|G5 is targeted curl smoke. The recorded Litmus `copymove`/`props` run predates the collection COPY, overwrite, and dead-property follow-up implementations; it does not verify those changes. Full Litmus compatibility remains unverified.
+|Run the relevant Litmus categories against the current implementation and classify failures against the approved bounded partial-success contract before making broad client-compatibility claims.
+|Non-blocker for current IR scope; no full compatibility claim
 
 |PA-09 — *P3 unresolved semantics*
 |`OPEN-GCS-GENERATION-AND-BUCKET-POLICY`, `OPEN-READ-FAILURE-AND-DOCTOR-SEMANTICS`, `OPEN-GCS-SCHEDULER-DEFAULTS`, and `OPEN-READ-REVISION-CHANGE` remain open. Formal v1 has no pre-v1 compatibility guarantee and does not silently change repository settings.
@@ -300,8 +296,8 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |===
 |Question |Design-rooted ruling |Completion effect
 
-|Litmus/cadaver SKIP
-|Neither is an IR requirement; Phase A requires a read-write peer adapter, not full RFC compliance. The tool absence is a verification limitation. Preserve the category SKIPs and targeted curl PASS evidence separately.
+|Litmus compatibility results
+|Full Litmus compliance is not an IR requirement. PR #14 records group outcomes; unsupported operations and failures remain visible and are not counted as Phase A contract failures absent a corresponding IR MUST.
 |Non-blocker; no full interoperability claim
 
 |LOCK/UNLOCK
@@ -309,12 +305,12 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |Intentional partial surface; PA-04 resolved
 
 |PROPPATCH/dead properties
-|No authoritative dead-property store/persistence contract exists in Metadata or Repository design.
-|Intentionally deferred; not a Phase A blocker
+|Properties are persisted by Entry ID; PROPPATCH batch is atomic. COPY cloning/overwrite propagation is a later bounded step and can leave committed content with incomplete property propagation.
+|Implemented with observable partial-success behavior; not globally atomic with COPY content
 
 |COPY/MOVE constraints
-|MOVE delegates namespace mutation and refuses replacement; file COPY to absent target uses daemon Resource/Commit. The IR does not specify WebDAV recursive COPY or replacement behavior. Existing-target, directory-copy, and MOVE replacement limitations are explicit and must remain out of full compliance claims.
-|Partial/unspecified behavior; not a core Phase A blocker
+|The approved IR supports recursive collection COPY and COPY/MOVE overwrite. It defines per-metadata-operation atomicity and resumable internal buffers, not global rollback for multi-step replacement. Litmus evidence in this report predates the later implementation.
+|Implemented with bounded partial-success semantics; full RFC compliance remains unverified
 
 |WebDAV auth/TLS
 |The approved Phase A boundary excludes external exposure, WebDAV client authentication, TLS termination, and multi-user authorization. `OPEN-ADAPTER-AUTHORIZATION` tracks future expansion only. TCP TLS+bearer remains available but its operating lifecycle is not standard Phase A acceptance.
@@ -329,10 +325,10 @@ G0–G5 PASS demonstrates that the exercised scenarios passed, including the PA-
 |Intentionally deferred; no action for Phase A
 |===
 
-== Next actions
+== Non-blocking follow-ups
 
-. Complete PA-01 acceptance by resolving `OPEN-GCS-SCHEDULER-DEFAULTS`; implementation and no-manual-RPC G2 evidence are now present.
-. Keep PA-05 user-service lifecycle evidence current on supported systemd hosts; system-scope operation remains experimental and is not a Phase A gate.
-. Choose the GCS deployment evidence threshold (PA-07).
-. Re-run G0–G5 after any fixes; run Litmus/cadaver only when available and retain strict per-group results. Then update `DES-PHASE-A-DAEMON` from `planned` only through an accepted Design IR change.
+. Resolve `OPEN-GCS-SCHEDULER-DEFAULTS` when selecting an operational deployment profile; keep requiring explicit configuration until policy is decided.
+. Choose the production GCS evidence threshold (PA-07) before claiming production readiness.
+. Keep supported user-service lifecycle evidence current; system-scope runtime remains experimental and outside Phase A acceptance.
+. Preserve Litmus per-group outcomes and investigate failures only within the intended WebDAV subset; full RFC compatibility remains unclaimed.
 

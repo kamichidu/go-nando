@@ -43,6 +43,23 @@ func TestPreconditionsUseBeginSnapshot(t *testing.T) {
 	}
 }
 
+func TestOverwriteHeaderDefaultAndValidation(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+		bad   bool
+	}{{"", true, false}, {"T", true, false}, {"F", false, false}, {"true", false, true}, {"t", false, true}} {
+		r := httptest.NewRequest("COPY", "/source", nil)
+		if tc.value != "" {
+			r.Header.Set("Overwrite", tc.value)
+		}
+		got, err := overwriteAllowed(r)
+		if (err != nil) != tc.bad || (!tc.bad && got != tc.want) {
+			t.Errorf("Overwrite %q = (%t, %v), want (%t, bad=%t)", tc.value, got, err, tc.want, tc.bad)
+		}
+	}
+}
+
 func TestUnsupportedPUTConditionalHeadersAreRejected(t *testing.T) {
 	for _, header := range []string{"If", "If-Modified-Since", "If-Range"} {
 		r := httptest.NewRequest("PUT", "/x", nil)

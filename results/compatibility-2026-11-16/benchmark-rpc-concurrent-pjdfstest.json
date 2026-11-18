@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "kind": "interface_benchmark",
+  "interface": "rpc",
+  "started_at": "2026-11-16T13:59:18.910023+00:00",
+  "finished_at": "2026-11-16T13:59:21.999641+00:00",
+  "repository_sha": "bd12fbe8654fb3165ff359048e44ae64b74fd80b",
+  "tool": {
+    "name": "go-nando",
+    "version": "bd12fbe8654f"
+  },
+  "measurement_scope": "end_to_end",
+  "adapter_cost_isolation": "not_measured; cross-interface latency differences are not attributable to adapter-only cost",
+  "comparison_policy": "Do not interpret simple RPC/FUSE/WebDAV latency deltas as adapter thinness or overhead.",
+  "interface_conditions": {
+    "rpc": {
+      "connection": "new Unix HTTP connection for each JSON-RPC request; no connection reuse",
+      "cache": "daemon/resource behavior included; harness adds no cache",
+      "write_commit_boundary": "beginWrite + local Resource write/fsync + commit + release",
+      "read_boundary": "beginRead + local Resource read + release"
+    },
+    "fuse": {
+      "connection": "kernel FUSE requests; adapter RPC behavior included",
+      "cache": "adapter sets zero entry/attribute/negative lookup TTL and uses FOPEN_DIRECT_IO",
+      "write_commit_boundary": "write + fsync; adapter commit performed by fsync",
+      "read_boundary": "open/read/close through FUSE adapter"
+    },
+    "webdav": {
+      "connection": "one urllib HTTP request per operation; no explicit persistent session reuse",
+      "cache": "HTTP client and adapter behavior included; harness adds no cache",
+      "write_commit_boundary": "PUT response completion",
+      "read_boundary": "GET response body consumed"
+    }
+  },
+  "configuration": {
+    "iterations": 10,
+    "payload_bytes": 4096,
+    "rpc_endpoint": "unix:///tmp/nando-validation-tools/run/nando.sock",
+    "mountpoint": null,
+    "webdav_url": null
+  },
+  "environment": {
+    "platform": "Linux-6.8.0-1070-gcp-x86_64-with-glibc2.35",
+    "kernel": "6.8.0-1070-gcp",
+    "machine": "x86_64",
+    "python": "3.11.9",
+    "go_toolchain": "go version go1.25.1 linux/amd64",
+    "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline"
+  },
+  "completed": 10,
+  "failed": 0,
+  "cleanup_failed": 0,
+  "status": "completed",
+  "run_conditions": {
+    "delivery_mode": "local",
+    "cache_state": "fresh unique paths; immediate read; host page cache not cleared",
+    "storage": "isolated local repository on workspace XFS filesystem",
+    "repository_filesystem": "xfs",
+    "other_workload": "pjdfstest compatibility suite active concurrently; not used for cross-interface comparison",
+    "mount_options": [
+      "allow_other"
+    ],
+    "host_uid": 736972916,
+    "payload_bytes": 4096,
+    "iterations": 10
+  },
+  "percentile_method": "nearest-rank: sorted sample at ceil(p*n)-1 (1-indexed)",
+  "classification": "unclassified",
+  "summary_successful_iterations": {
+    "create_write_ns": {
+      "samples": 10,
+      "median_ns": 118078549.0,
+      "p95_ns": 135432344,
+      "p99_ns": 135432344,
+      "min_ns": 99116555,
+      "max_ns": 135432344
+    },
+    "read_ns": {
+      "samples": 10,
+      "median_ns": 47162076.0,
+      "p95_ns": 70179111,
+      "p99_ns": 70179111,
+      "min_ns": 37282227,
+      "max_ns": 70179111
+    },
+    "stat_ns": {
+      "samples": 10,
+      "median_ns": 5169390.5,
+      "p95_ns": 20470192,
+      "p99_ns": 20470192,
+      "min_ns": 2122330,
+      "max_ns": 20470192
+    },
+    "list_ns": {
+      "samples": 10,
+      "median_ns": 4182451.5,
+      "p95_ns": 11180974,
+      "p99_ns": 11180974,
+      "min_ns": 3083152,
+      "max_ns": 11180974
+    },
+    "rename_ns": {
+      "samples": 10,
+      "median_ns": 18726127.0,
+      "p95_ns": 36681105,
+      "p99_ns": 36681105,
+      "min_ns": 15133026,
+      "max_ns": 36681105
+    },
+    "delete_ns": {
+      "samples": 10,
+      "median_ns": 19702287.0,
+      "p95_ns": 32189515,
+      "p99_ns": 32189515,
+      "min_ns": 12754575,
+      "max_ns": 32189515
+    }
+  },
+  "summary_failed_partial_observations": {},
+  "iterations": [
+    {
+      "iteration": 0,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 114984153,
+        "read_ns": 43401319,
+        "stat_ns": 20470192,
+        "list_ns": 5345240,
+        "rename_ns": 26847814,
+        "delete_ns": 19131261
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 1,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 135054867,
+        "read_ns": 49067225,
+        "stat_ns": 6597977,
+        "list_ns": 6581529,
+        "rename_ns": 17100456,
+        "delete_ns": 12754575
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 2,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 135432344,
+        "read_ns": 45105284,
+        "stat_ns": 2122330,
+        "list_ns": 3601530,
+        "rename_ns": 29502573,
+        "delete_ns": 20273313
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 3,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 130322243,
+        "read_ns": 63537850,
+        "stat_ns": 3507357,
+        "list_ns": 4014782,
+        "rename_ns": 16938170,
+        "delete_ns": 16396882
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 4,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 110054529,
+        "read_ns": 70179111,
+        "stat_ns": 2315275,
+        "list_ns": 5665881,
+        "rename_ns": 36681105,
+        "delete_ns": 27230947
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 5,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 99116555,
+        "read_ns": 47232890,
+        "stat_ns": 3955084,
+        "list_ns": 3083152,
+        "rename_ns": 17374571,
+        "delete_ns": 32189515
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 6,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 107808341,
+        "read_ns": 40987265,
+        "stat_ns": 8807300,
+        "list_ns": 3909100,
+        "rename_ns": 15366847,
+        "delete_ns": 20987266
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 7,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 122941252,
+        "read_ns": 37282227,
+        "stat_ns": 3623365,
+        "list_ns": 4131634,
+        "rename_ns": 26788877,
+        "delete_ns": 17448590
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 8,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 106895452,
+        "read_ns": 47091262,
+        "stat_ns": 6383697,
+        "list_ns": 4233269,
+        "rename_ns": 15133026,
+        "delete_ns": 22557973
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 9,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 121172945,
+        "read_ns": 69541087,
+        "stat_ns": 10501524,
+        "list_ns": 11180974,
+        "rename_ns": 20077683,
+        "delete_ns": 19036740
+      },
+      "status": "ok"
+    }
+  ],
+  "errors": [],
+  "harness_sources_sha256": {
+    "tools/interface_benchmark.py": "1d6b8075997a1b55d8c29422b067ba0742076a069adf55af3fd5ceb3484b7bd4",
+    "tools/validation_capture.py": "76409607b16b0d7356524a549238cbc250d9f55e0d256a02d32884f554467ee6",
+    "tools/validation_tooling.py": "9326a6a6637c6b0affcdb6b1bec2a45eb3511daa23063df5995ae95cc39fcc19"
+  },
+  "working_tree_modified_during_run": true
+}

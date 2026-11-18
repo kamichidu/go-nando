@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "tool_name": "litmus",
+  "version": "0.13-4",
+  "version_check": {
+    "command": [
+      "dpkg-query",
+      "-W",
+      "-f=${Version}",
+      "litmus"
+    ],
+    "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline",
+    "exit_code": 0,
+    "stdout": "0.13-4",
+    "stdout_sha256": "50414a8fdc9ed0c1fc8f044289b73188edc757f66ce398a0d8ff9ab818d160bc",
+    "stderr": "",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "source_revision": "",
+  "installation_notes": "Separate preparation: Ubuntu 22.04 package litmus 0.13-4 installed via apt; no runtime updates.",
+  "prepared_at": "2026-11-16T13:45:04.727884+00:00",
+  "preconditions": {
+    "target": "real loopback nando WebDAV server",
+    "auth": "none"
+  },
+  "executables": [
+    {
+      "name": "/usr/bin/litmus",
+      "path": "/usr/bin/litmus",
+      "sha256": "c48fd902ddd4464605f2f5bda2f54ee8d634431886c7ed16c4681c5d3a0f2704"
+    },
+    {
+      "name": "/usr/bin/dpkg-query",
+      "path": "/usr/bin/dpkg-query",
+      "sha256": "11b7055ec6ec739838f171182ced296ca75ec2da2d32e4331e9926021d6f8d08"
+    }
+  ],
+  "source_trees": [],
+  "environment": {
+    "platform": "Linux-6.8.0-1070-gcp-x86_64-with-glibc2.35",
+    "kernel": "6.8.0-1070-gcp",
+    "machine": "x86_64",
+    "python": "3.11.9",
+    "cwd": "/home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline"
+  }
+}

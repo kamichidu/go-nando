@@ -1,0 +1,47 @@
+{
+  "suite": "Litmus 0.13-4",
+  "groups": [
+    {
+      "name": "basic",
+      "tests_run": 16,
+      "passed": 16,
+      "failed": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "copymove",
+      "tests_run": 13,
+      "passed": 8,
+      "failed": 5,
+      "status": "FAIL"
+    },
+    {
+      "name": "props",
+      "tests_run": 14,
+      "passed": 10,
+      "failed": 4,
+      "status": "FAIL"
+    },
+    {
+      "name": "locks",
+      "tests_run": 3,
+      "passed": 3,
+      "failed": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "http",
+      "tests_run": 4,
+      "passed": 4,
+      "failed": 0,
+      "status": "PASS"
+    }
+  ],
+  "g7": "FAIL",
+  "classification": {
+    "fixed": "file COPY overwrite default T now returns 204; missing destination parent returns 409; no unexpected copy success",
+    "unsupported": "collection COPY including Depth 0/infinity; MOVE replacement; these return 501 by Phase A boundary",
+    "remaining": "PROPFIND invalid namespace expectation and dead-property cases unrelated to COPY/MOVE"
+  },
+  "evidence": "litmus-capture-final/"
+}

@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "analysis_date": "2026-11-16",
+  "input": {
+    "suite": "pjdfstest",
+    "source_revision": "85a8aea9e685999ef0540392fd80535f873d7ff7",
+    "analysis_json": "pjdfstest-fuse/analysis.json",
+    "raw_stdout": "pjdfstest-fuse/stdout.log",
+    "raw_stderr": "pjdfstest-fuse/stderr.log",
+    "baseline_started_sha": "bd12fbe8654fb3165ff359048e44ae64b74fd80b"
+  },
+  "coverage": {
+    "upstream_files_total": 238,
+    "started": 237,
+    "passed_files": 120,
+    "failed_files": 117,
+    "skipped_files": 0,
+    "not_started": 1,
+    "assertions_reported": 8791,
+    "passed": 3357,
+    "failed": 5434,
+    "bailout": true
+  },
+  "failure_record_partition": {
+    "unit": "failure_reasons rows / failed TAP assertions; mutually exclusive by recorded output form",
+    "counts": {
+      "explicit_EOPNOTSUPP": 903,
+      "unexpected_ENOENT": 2114,
+      "no_command_detail": 1285,
+      "other_parsed_mismatches": 1132
+    },
+    "sum": 5434,
+    "interpretation": "Only explicit EOPNOTSUPP rows establish an operation refusal directly. Unexpected ENOENT rows are cascade candidates, not all proven descendants: a subset may instead be independent pathname/errno mismatches. no_command_detail rows cannot be assigned a syscall cause from this report. Other parsed mismatches mix direct and downstream effects."
+  },
+  "explicit_EOPNOTSUPP_by_operation": {
+    "mknod": 330,
+    "symlink": 232,
+    "mkfifo": 172,
+    "bind": 148,
+    "link": 21,
+    "sum": 903,
+    "primary_status": "direct observed operation refusals; root cause is capability coverage (unimplemented) unless product scope/spec excludes the operation"
+  },
+  "test_path_family_counts": {
+    "unit": "all failed TAP assertions in the corresponding source test directory; categories overlap by cause and are not additive",
+    "families": {
+      "symlink": {
+        "files_in_suite": 13,
+        "files_with_failures": 7,
+        "failed_assertions": 48
+      },
+      "mkfifo": {
+        "files_in_suite": 13,
+        "files_with_failures": 7,
+        "failed_assertions": 78
+      },
+      "mknod": {
+        "files_in_suite": 12,
+        "files_with_failures": 8,
+        "failed_assertions": 128
+      },
+      "link": {
+        "files_in_suite": 18,
+        "files_with_failures": 9,
+        "failed_assertions": 232
+      },
+      "rename": {
+        "files_in_suite": 25,
+        "files_with_failures": 14,
+        "failed_assertions": 2834
+      },
+      "chmod": {
+        "files_in_suite": 13,
+        "files_with_failures": 9,
+        "failed_assertions": 224
+      },
+      "chown": {
+        "files_in_suite": 11,
+        "files_with_failures": 7,
+        "failed_assertions": 1259
+      },
+      "open": {
+        "files_in_suite": 27,
+        "files_with_failures": 15,
+        "failed_assertions": 168
+      },
+      "ftruncate": {
+        "files_in_suite": 15,
+        "files_with_failures": 5,
+        "failed_assertions": 28
+      },
+      "truncate": {
+        "files_in_suite": 15,
+        "files_with_failures": 5,
+        "failed_assertions": 17
+      },
+      "utimensat": {
+        "files_in_suite": 9,
+        "files_with_failures": 8,
+        "failed_assertions": 53
+      },
+      "mkdir": {
+        "files_in_suite": 13,
+        "files_with_failures": 7,
+        "failed_assertions": 43
+      },
+      "unlink": {
+        "files_in_suite": 15,
+        "files_with_failures": 8,
+        "failed_assertions": 271
+      },
+      "rmdir": {
+        "files_in_suite": 16,
+        "files_with_failures": 8,
+        "failed_assertions": 51
+      }
+    }
+  },
+  "focused_observations": [
+    {
+      "category": "regular-file truncate/read/write metadata",
+      "primary_count": "not isolated exactly from aggregate",
+      "path": "ftruncate/00.t",
+      "raw_log_line_range": [
+        1954,
+        1982
+      ],
+      "evidence": "ftruncate returns success, but expected lstat sizes 1234567/567/23456/1 remain 0/1234567/12345/23456; subsequent unlink returns EAGAIN and later create gets EEXIST, a concrete sequence of primary size mismatch followed by dependent residue. Independent fsx reproduction confirms open-handle fstat size stays stale after successful extension."
+    },
+    {
+      "category": "special object creation",
+      "primary_count": 903,
+      "path": "chmod/00.t; mknod/00.t; symlink/00.t; mkfifo/00.t; link/00.t",
+      "evidence": "EOPNOTSUPP rows enumerated above. chmod/00.t shows symlink EOPNOTSUPP followed by chmod/stat/unlink ENOENT for the absent link target."
+    },
+    {
+      "category": "permission/ownership/mode",
+      "primary_count": "not isolated exactly; family totals in test_path_family_counts",
+      "path": "chmod/00.t, chmod/11.t, chown/00.t, utimensat/06.t",
+      "evidence": "chown family has 1259 failed assertions in 7/11 files and chmod has 224 in 9/13. Mixture includes missing-object dependencies. Direct examples include chmod/00.t stat expected mode 0222, got 0111; utimensat/06.t expects EACCES but gets 0. Totals must not be read as unique primary permission defects."
+    },
+    {
+      "category": "rename/link",
+      "primary_count": "not isolated exactly; family totals in test_path_family_counts",
+      "path": "rename/10.t and link/00.t",
+      "evidence": "rename directory totals 2834 failed assertions (14/25 files), link 232 (9/18). rename/10.t is a 2,099-assertion nested matrix over regular/fifo/block/char/socket/symlink and owner combinations; early EEXIST plus inode mismatches and unsupported object creation contaminate later assertions. Do not equate 2,834 with independent rename defects."
+    },
+    {
+      "category": "path length/errno and harness",
+      "primary_count": "19 assertions expected ENAMETOOLONG (not all share one cause)",
+      "path": "tests/misc.sh:138-160; e.g. ftruncate/02.t and rename/02.t",
+      "evidence": "Raw stderr contains 53,248 GNU cut \"invalid decreasing range\" diagnostics. dirgen_max obtains _PC_PATH_MAX via pjdfstest pathconf then subtracts one and feeds it to cut; the actual FUSE pathconf values were not captured, so the bad argument origin (FUSE pathconf vs script/environment interaction) remains unresolved. Some ENAMETOOLONG expectations instead got ENOENT/EOPNOTSUPP/EEXIST, mixing path behavior with prior missing/unsupported objects."
+    },
+    {
+      "category": "timestamps/utimensat",
+      "primary_count": "directory total 53 failures in 8/9 files; 17 parsed timestamp-value mismatches",
+      "path": "utimensat/00.t, utimensat/02.t, utimensat/05.t, utimensat/08.t, utimensat/09.t",
+      "evidence": "Requested times commonly remain at mount-time/current timestamps; utimensat/05.t also has ENOENT after symlink creation fails. The Setattr implementation reads only GetSize/GetMode and routes requests without either to Getattr, so atime/mtime flags are not handled in this adapter path. Raw run ends in bailout after utimensat/08; analysis marks utimensat/09 incomplete, consistent with its Y2038 probe but exact bailout attribution is not asserted."
+    }
+  ],
+  "priorities": [
+    {
+      "priority": "P0 investigate as implementation defect",
+      "classification": "likely FUSE metadata/Setattr response or cache-invalidation defect",
+      "evidence": "upstream fsx unconditional check_trunc_hack exits 130 only when fstat size differs after successful ftruncate; independent FUSE probe reproduces old fstat size after ftruncate succeeds; see fsx-truncate-repro/."
+    },
+    {
+      "priority": "P1 capability/product-scope decision",
+      "classification": "unimplemented operations",
+      "evidence": "903 direct EOPNOTSUPP results for mknod, symlink, FIFO, bind, hardlink."
+    },
+    {
+      "priority": "P1 compatibility/semantics",
+      "classification": "likely unimplemented timestamp semantics and permission/ownership rules",
+      "evidence": "FUSE Setattr ignores atime/mtime; raw utimensat and chmod/chown families; many counts overlap with cascades."
+    },
+    {
+      "priority": "P1 WebDAV compatibility",
+      "classification": "confirmed collection DELETE/setup incompatibility; original MKCOL 405 is secondary",
+      "evidence": "baseline DELETE /litmus/ returns 409 because non-empty, then MKCOL existing path returns 405. RFC 4918 9.3.1 says 405 for MKCOL is only on mapped URL; 9.6.1 requires collection DELETE to act recursively. Fresh isolated Litmus run begins successfully, then shows COPY/MOVE failures; details in litmus-isolated-repro/."
+    },
+    {
+      "priority": "P2 isolate with targeted clean tests",
+      "classification": "rename/link/error mapping and path-length behavior unresolved",
+      "evidence": "large directory totals include object-type matrix and dependency failures; unexpected ENOENT 2,114 records are cascade candidates, not confirmed descendants."
+    },
+    {
+      "priority": "P2 environment/harness follow-up",
+      "classification": "test input generation/environment interaction",
+      "evidence": "53,248 invalid-range diagnostics from upstream name/path generator; actual FUSE pathconf output absent, so separate from semantic failure counts."
+    }
+  ],
+  "constraints": "This report changes no Core, daemon, adapter, or upstream suite implementation/source. New files are analysis metadata and isolated reproduction evidence only.",
+  "observed_errno_subsets": {
+    "expected_permission_denied_but_got_success": 121,
+    "meaning": "Failures expecting EPERM/EACCES (including accepted errno alternatives) that report success; direct permission-check mismatches, though an unsupported test object can still be a contributing setup condition.",
+    "rename_or_link_parsed_non_ENOENT_non_EOPNOTSUPP": 147,
+    "meaning_rename_link": "Observed mismatch records for rename/link commands outside the ENOENT dependency-candidate and EOPNOTSUPP buckets; not all are independent root causes.",
+    "expected_ENAMETOOLONG": 19,
+    "meaning_path": "Observed path-length errno mismatches, with several test setup or unsupported-object alternatives in the same records."
+  }
+}

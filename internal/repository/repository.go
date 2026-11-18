@@ -22,12 +22,16 @@ import (
 // Repository coordinates the interactions between MetadataStore and ObjectStore.
 type Repository struct {
 	metaStore   metadata.MetadataStore
+	bufferStore metadata.InternalBufferStore
 	objectStore objectstore.ObjectStore
 	remoteStore objectstore.RemoteObjectStore
 	hasher      content.Hasher
 	coordinator Coordinator
 	settings    Settings
 }
+
+const internalBufferLeaseTTL = 30 * time.Second
+const internalBufferLeaseHeartbeat = 5 * time.Second
 
 // NewRepository creates a Repository whose protected operations use the
 // repository-wide coordinator shared by every process and instance.
@@ -42,8 +46,12 @@ func NewRepositoryWithSettings(metaStore metadata.MetadataStore, objStore object
 
 // NewRepositoryWithRemoteObjectStore installs the repository's selected remote backend.
 func NewRepositoryWithRemoteObjectStore(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, remote objectstore.RemoteObjectStore, hasher content.Hasher, coordinator Coordinator, settings Settings) *Repository {
+	// MetadataStore embeds InternalBufferStore, so this conversion is required
+	// by the constructor's type contract rather than an optional capability.
+	bufferStore := metadata.InternalBufferStore(metaStore)
 	return &Repository{
 		metaStore:   metaStore,
+		bufferStore: bufferStore,
 		objectStore: objStore,
 		remoteStore: remote,
 		hasher:      hasher,
@@ -82,6 +90,13 @@ func (r *Repository) ResolvePath(ctx context.Context, repoPath string) (metadata
 	}
 
 	return current, nil
+}
+
+func (r *Repository) DeadProperties(ctx context.Context, id metadata.EntryID) ([]metadata.DeadProperty, error) {
+	return r.metaStore.GetDeadProperties(ctx, id)
+}
+func (r *Repository) SetDeadProperties(ctx context.Context, id metadata.EntryID, changes []metadata.DeadPropertyChange) error {
+	return r.metaStore.UpdateDeadProperties(ctx, id, changes)
 }
 
 // DeriveCanonicalPath reconstructs the logical path of an entry by walking up its ancestry.
@@ -309,11 +324,103 @@ func (r *Repository) cat(ctx context.Context, repoPath string, w io.Writer) erro
 
 // GC deletes unreferenced objects from the object store.
 func (r *Repository) GC(ctx context.Context) (int, error) {
+	bufferErr := r.ReclaimDetached(ctx)
 	if err := r.cleanupExpiredStaging(ctx); err != nil {
 		return 0, fmt.Errorf("clean expired Put staging before GC: %w", err)
 	}
 	deletedCount, err := r.gc(ctx)
-	return deletedCount, err
+	return deletedCount, errors.Join(bufferErr, err)
+}
+
+// ReclaimDetached resumes deletion of internal namespace buffers. Each entry
+// deletion is one transaction; interrupted trees remain registered for retry.
+func (r *Repository) ReclaimDetached(ctx context.Context) error {
+	if r.bufferStore == nil {
+		return errors.New("metadata store does not support internal buffers")
+	}
+	buffers, err := r.bufferStore.DetachedBuffers(ctx)
+	if err != nil {
+		return err
+	}
+	var failures []error
+	for _, buffer := range buffers {
+		if !buffer.Claimed && time.Now().Before(buffer.ExpiresAt.Time()) {
+			continue
+		}
+		claimed := buffer
+		if !buffer.Claimed {
+			var err error
+			claimed, err = r.bufferStore.ClaimExpiredDetachedBuffer(ctx, buffer.ID, metadata.TimestampFromTime(time.Now()))
+			if errors.Is(err, metadata.ErrEntryConflict) {
+				continue
+			}
+			if err != nil {
+				failures = append(failures, fmt.Errorf("claim detached buffer %s: %w", buffer.ID, err))
+				continue
+			}
+		}
+		if err := r.reclaimDetachedBuffer(ctx, claimed); err != nil && !errors.Is(err, metadata.ErrEntryNotFound) {
+			failures = append(failures, fmt.Errorf("reclaim detached buffer %s: %w", buffer.ID, err))
+		}
+	}
+	return errors.Join(failures...)
+}
+
+// RecoverDetachedAfterRestart fences any COPY owner from the prior daemon
+// process. Serve holds the repository process lock, so no old writer is live.
+func (r *Repository) RecoverDetachedAfterRestart(ctx context.Context) error {
+	if err := r.bufferStore.ExpireDetachedBuffersAfterRestart(ctx, metadata.TimestampFromTime(time.Now())); err != nil {
+		return err
+	}
+	return r.ReclaimDetached(ctx)
+}
+
+func (r *Repository) reclaimDetachedBuffer(ctx context.Context, buffer metadata.DetachedBuffer) error {
+	children, err := r.bufferStore.ListDetachedChildren(ctx, buffer.ID, buffer.Fencing, buffer.RootID)
+	if err != nil {
+		return err
+	}
+	for _, child := range children {
+		if err := r.reclaimDetachedBranch(ctx, buffer, child.ID); err != nil {
+			return err
+		}
+	}
+	return r.bufferStore.DeleteDetachedEntry(ctx, buffer.ID, buffer.Fencing, buffer.RootID)
+}
+
+func (r *Repository) reclaimDetachedBranch(ctx context.Context, buffer metadata.DetachedBuffer, id metadata.EntryID) error {
+	children, err := r.bufferStore.ListDetachedChildren(ctx, buffer.ID, buffer.Fencing, id)
+	if err != nil {
+		return err
+	}
+	for _, child := range children {
+		if err := r.reclaimDetachedBranch(ctx, buffer, child.ID); err != nil {
+			return err
+		}
+	}
+	return r.bufferStore.DeleteDetachedEntry(ctx, buffer.ID, buffer.Fencing, id)
+}
+
+func (r *Repository) renewDetachedBuffer(ctx context.Context, initial metadata.DetachedBuffer) (context.Context, func()) {
+	leaseCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(internalBufferLeaseHeartbeat)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-leaseCtx.Done():
+				return
+			case <-ticker.C:
+				if _, err := r.bufferStore.RenewDetachedBuffer(leaseCtx, initial.ID, initial.Fencing, internalBufferLeaseTTL); err != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return leaseCtx, func() { cancel(); <-done }
 }
 
 // RestoreRemoteOrphans recreates Metadata Entries for remote objects whose

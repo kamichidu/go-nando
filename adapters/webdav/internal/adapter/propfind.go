@@ -22,7 +22,7 @@ var (
 // every Handler. Its multistatus encoder uses the documented D: DAV prefix.
 // This adapter does not implement LOCK/UNLOCK, so an unrequested supportedlock
 // property is omitted and an explicitly requested one is reported as 404.
-func (h *Handler) propfind(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) legacyPropfind(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "read PROPFIND body: "+err.Error(), http.StatusBadRequest)

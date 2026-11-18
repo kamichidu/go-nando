@@ -173,6 +173,20 @@ func InitRepositoryWithSettings(ctx context.Context, repoDir string, settings re
 	if err := repoFormat.Validate(); err != nil {
 		return err
 	}
+	// Before first release, complete only the exact known four-table v1 baseline.
+	// The format and root checks precede this narrowly scoped transactional DDL.
+	if checkErr := store.CheckMigrations(ctx); errors.Is(checkErr, sqlite.ErrSchemaVersionUnsupported) && store.IsPreReleaseV1Candidate(ctx) {
+		persisted, found, formatErr := store.RepositoryFormat(ctx)
+		if formatErr != nil {
+			return formatErr
+		}
+		root, rootErr := store.GetByID(ctx, "root")
+		if found && persisted == repoFormat && rootErr == nil && root.Name == "" && root.Kind == "directory" && root.ParentID == nil {
+			if err := store.CompletePreReleaseV1(ctx); err != nil {
+				return fmt.Errorf("complete pre-release v1 metadata baseline: %w", err)
+			}
+		}
+	}
 	if err := store.CheckMigrations(ctx); errors.Is(err, sqlite.ErrSchemaUninitialized) {
 		// Publish the selected settings before initializing Metadata. If the
 		// process stops after this point, a retry can recover the same settings

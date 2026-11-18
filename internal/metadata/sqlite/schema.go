@@ -31,6 +31,20 @@ CREATE TABLE content_metadata (
     content_id TEXT PRIMARY KEY,
     md5 BLOB NOT NULL CHECK(length(md5) = 16)
 );
+CREATE TABLE dead_properties (
+    entry_id TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
+    namespace_uri TEXT NOT NULL,
+    localname TEXT NOT NULL,
+    xml_value TEXT NOT NULL,
+    PRIMARY KEY(entry_id, namespace_uri, localname)
+);
+CREATE TABLE internal_buffers (
+    buffer_id TEXT PRIMARY KEY,
+    root_entry_id TEXT NOT NULL UNIQUE REFERENCES entries(entry_id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL DEFAULT 0,
+    fencing INTEGER NOT NULL DEFAULT 1,
+    claimed INTEGER NOT NULL DEFAULT 0
+);
 `
 
 const CurrentSchemaVersion = 1

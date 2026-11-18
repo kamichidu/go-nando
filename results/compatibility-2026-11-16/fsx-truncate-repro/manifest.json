@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "purpose": "Independent minimal reproduction of the unmodified upstream fsx startup failure",
+  "target": "real FUSE mount of the PR branch build",
+  "repository": "fresh isolated Local repository on the host XFS workspace",
+  "kernel": "Linux 6.8.0-1070-gcp x86_64",
+  "uid": 736972916,
+  "mount_options": [],
+  "fsx": {
+    "source_repository": "https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git",
+    "source_revision": "d07dca72d2455f4ba8c660ad4c008541ccccb707",
+    "binary_sha256": "e49c3ebc31795123e3f2d92bfe033f1b7fed77533940b6698e0ef1d255dd79dc",
+    "command": "/tmp/nando-validation-tools/xfstests/ltp/fsx -N 10000 -l 1048576 /tmp/nando-analysis-repro/mount/fsx.data",
+    "exit_code": 130,
+    "stdout": "Seed set to 1\nno extend on truncate! not posix!\n",
+    "stderr": ""
+  },
+  "minimal_probe": {
+    "script": "reproduce.py",
+    "observations": "observations.json",
+    "sequence": [
+      "write and fsync a prefix",
+      "ftruncate to current size, then extend by 100000 bytes",
+      "fstat and read the hole",
+      "shrink to 4 bytes, re-extend to 100 bytes",
+      "read preserved prefix and re-extended range",
+      "write across byte 100 and inspect fstat/read before fsync",
+      "fsync and inspect path stat"
+    ],
+    "note": "ftruncate returned success but fstat continued reporting the old size 11; reads through the still-stale open handle returned zero bytes at offsets beyond that size. After the later fsync, path stat reported 101. This points to FUSE-visible size metadata/invalidation or Setattr response handling; it does not establish whether uncommitted staged bytes were lost."
+  },
+  "adapter_source": "adapters/fuse/filesystem.go:743-747, 909-945",
+  "adapter_log_scope": "The baseline fuse-adapter.log has only final-close commit/release errors and no per-Setattr trace, so it cannot correlate an individual fsx request.",
+  "repository_sha_at_probe": "a40ef69b59bb23dde7860270d64504490bb3db2a",
+  "adapter_binary_sha256": "b8bed2911699a9ac8693bc4910d620bc5e34883280f802a8116d567e48e65342",
+  "daemon_binary_sha256": "cfd2ada6f0efa563328dc1daa1045fdd0bceb13a1519053b34cd99cabfc936cb",
+  "observation_capture_note": "The committed observations.json was emitted by the equivalent inline Python probe used for this run. reproduce.py records the same operation sequence for repeat runs."
+}

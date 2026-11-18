@@ -1,0 +1,10 @@
+G0	PASS	native module checks, workspace install targets, lint and pinned Design IR validation
+G1	PASS	host-native real FUSE CRUD/fsync/rename/unlink/writers/CAS
+G2	PASS	host-native real FUSE with fake GCS outage/retry/idempotency
+G3	PASS	native daemon/FUSE crash, restart and recovery
+G6	PASS	real host FUSE truncate repro and pinned fsx captured through validation_capture
+G4	PASS	optional bounded native FUSE concurrent writer stress
+G5	PASS	host-native WebDAV HTTP methods, validators, and contract-boundary responses
+G7	PASS	full prepared Litmus suite against HEAD-built daemon and WebDAV over loopback HTTP
+EVIDENCE	PASS	validation_capture output copied to /home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline/results/pr14-fuse-revalidation-2026-11-17/evidence
+EVIDENCE	PASS	Litmus validation_capture output copied to /home/sekito_centsys_jp/workspaces/ab2ff4d685ef04e391a9d9364ea28675d6a37b3b/github.com/kamichidu/go-nando/bench%2Ffuse-webdav-baseline/results/pr14-litmus-g7-2026-11-17/evidence
