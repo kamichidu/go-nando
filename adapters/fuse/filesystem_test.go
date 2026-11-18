@@ -1009,6 +1009,9 @@ func TestUnlinkMarksIntentAndKeepsOpenHandlePrivate(t *testing.T) {
 	if errno := handle.Fsync(ctx, 0); errno != 0 {
 		t.Fatalf("fsync unlinked handle: %v", errno)
 	}
+	if errno := handle.Fsync(ctx, 0); errno != 0 {
+		t.Fatalf("repeated fsync on intentionally unlinked handle: %v", errno)
+	}
 	if daemon.commits != 0 || daemon.exists {
 		t.Fatalf("unlink resurrected or committed file: commits=%d exists=%v", daemon.commits, daemon.exists)
 	}
@@ -1292,11 +1295,17 @@ func TestDetachedDiscardCleanupFailureIsVisibleOnFsyncAndRelease(t *testing.T) {
 				if errno := handle.Fsync(ctx, 0); errno != syscall.EIO {
 					t.Fatalf("Fsync errno=%v want EIO", errno)
 				}
+				if _, errno := handle.Write(ctx, []byte("private continuation"), 0); errno != 0 {
+					t.Fatalf("write through detached open handle after cleanup failure: %v", errno)
+				}
+				if errno := handle.Fsync(ctx, 0); errno != syscall.EIO {
+					t.Fatalf("repeated Fsync errno=%v want sticky EIO while cleanup is pending", errno)
+				}
 			}
 			if errno := handle.Release(ctx); errno != syscall.EIO {
 				t.Fatalf("Release errno=%v want visible cleanup error EIO", errno)
 			}
-			if !state.unlinked || state.recoveryID != "" || state.sessionID == "" {
+			if !state.unlinked || !state.discardCleanupPending || state.recoveryID != "" || state.sessionID == "" {
 				t.Fatalf("incomplete discard was treated as ordinary Recovery or success: %+v", state)
 			}
 		})

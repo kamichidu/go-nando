@@ -56,17 +56,18 @@ type renewer struct {
 }
 
 type writeState struct {
-	mu               sync.Mutex
-	node             *entryNode
-	sessionID        string
-	pendingReleaseID string
-	recoveryID       string
-	resource         string
-	file             *os.File
-	lease            *renewer
-	handles          int
-	dirty            bool
-	unlinked         bool
+	mu                    sync.Mutex
+	node                  *entryNode
+	sessionID             string
+	pendingReleaseID      string
+	recoveryID            string
+	resource              string
+	file                  *os.File
+	lease                 *renewer
+	handles               int
+	dirty                 bool
+	unlinked              bool
+	discardCleanupPending bool
 	// unlinkIntent means the daemon has durably tombstoned this write session.
 	// It blocks Commit even if namespace removal has not succeeded yet.
 	unlinkIntent bool
@@ -640,6 +641,20 @@ func (h *fileHandle) Fsync(ctx context.Context, _ uint32) syscall.Errno {
 	if state.closed {
 		return syscall.ESTALE
 	}
+	// Keep a detached-discard cleanup failure visible until final Abort
+	// confirms cleanup. Ordinary FUSE Unlink still only syncs private staging.
+	if state.discardCleanupPending {
+		if state.file == nil {
+			return syscall.ESTALE
+		}
+		if err := state.file.Sync(); err != nil {
+			return errnoFor(err)
+		}
+		if state.lastErr != nil {
+			return errnoFor(state.lastErr)
+		}
+		return syscall.EIO
+	}
 	if state.unlinked || state.unlinkIntent {
 		if state.file == nil {
 			return syscall.ESTALE
@@ -681,6 +696,7 @@ func (h *fileHandle) Fsync(ctx context.Context, _ uint32) syscall.Errno {
 		}
 		if discardIncomplete {
 			state.lastErr = errno
+			state.discardCleanupPending = true
 			state.unlinked, state.dirty = true, false
 			state.recoveryID = ""
 			if state.lease != nil {
@@ -752,6 +768,7 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 									h.modeState.mu.Unlock()
 								}
 							} else if discardIncomplete {
+								state.discardCleanupPending = true
 								state.unlinked, state.dirty = true, false
 								state.recoveryID = ""
 								if h.modeState != nil {
@@ -781,6 +798,9 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 						if result == 0 {
 							result = errno
 						}
+					} else if method == controlrpc.MethodAbort && state.discardCleanupPending {
+						state.discardCleanupPending = false
+						state.lastErr = nil
 					}
 				}
 				if state.pendingReleaseID != "" {
