@@ -25,10 +25,11 @@ import (
 const defaultResourceSessionTTL = controlrpc.ResourceSessionTTL
 
 var (
-	errSessionNotFound = errors.New("resource session not found")
-	errSessionBusy     = errors.New("resource session operation in progress")
-	errSessionClosed   = errors.New("resource session is closed")
-	errSessionExpired  = errors.New("resource session expired")
+	errSessionNotFound           = errors.New("resource session not found")
+	errSessionBusy               = errors.New("resource session operation in progress")
+	errSessionClosed             = errors.New("resource session is closed")
+	errSessionExpired            = errors.New("resource session expired")
+	errDetachedDiscardIncomplete = errors.New("detached Resource discard cleanup incomplete")
 )
 
 type recoveryRecord struct {
@@ -48,6 +49,7 @@ type recoveryRecord struct {
 	CreatedAt        time.Time                 `json:"created_at"`
 	UpdatedAt        time.Time                 `json:"updated_at"`
 	inFlight         bool                      `json:"-"`
+	discardPending   bool                      `json:"-"`
 }
 
 type writeSession struct {
@@ -398,17 +400,23 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 			if err := m.markDiscarding(&session.recoveryRecord, "stable FUSE Entry was detached before Commit"); err != nil {
 				m.mu.Lock()
 				session.inFlight = false
+				session.discardPending = true
 				m.mu.Unlock()
-				return errors.Join(commitErr, err)
+				return detachedDiscardIncomplete(commitErr, err)
 			}
 			discardErr := m.finishDiscardedRecord(&session.recoveryRecord)
 			m.mu.Lock()
 			session.inFlight = false
 			if discardErr == nil {
 				delete(m.sessions, id)
+			} else {
+				session.discardPending = true
 			}
 			m.mu.Unlock()
-			return errors.Join(commitErr, discardErr)
+			if discardErr != nil {
+				return detachedDiscardIncomplete(commitErr, discardErr)
+			}
+			return commitErr
 		}
 		preserveErr := m.preserve(&session.recoveryRecord, commitErr.Error())
 		m.mu.Lock()
@@ -499,8 +507,13 @@ func (m *sessionManager) abort(id string) error {
 		return errors.Join(errSessionExpired, m.finishExpiredWrite(id, session))
 	}
 	session.inFlight = true
+	detachedDiscardPending := session.discardPending
 	m.mu.Unlock()
-	if err := m.markDiscarding(&session.recoveryRecord, "explicit resource abort"); err != nil {
+	reason := "explicit resource abort"
+	if detachedDiscardPending {
+		reason = "stable FUSE Entry detached; retry discard cleanup"
+	}
+	if err := m.markDiscarding(&session.recoveryRecord, reason); err != nil {
 		m.mu.Lock()
 		session.inFlight = false
 		m.mu.Unlock()
@@ -552,7 +565,21 @@ func (m *sessionManager) release(id string) error {
 			return nil
 		}
 		session.inFlight = true
+		detachedDiscardPending := session.discardPending
 		m.mu.Unlock()
+		if detachedDiscardPending {
+			err := m.finishDetachedDiscard(&session.recoveryRecord)
+			m.mu.Lock()
+			session.inFlight = false
+			if err == nil {
+				delete(m.sessions, id)
+			}
+			m.mu.Unlock()
+			if err != nil {
+				return detachedDiscardIncomplete(err)
+			}
+			return nil
+		}
 		err := m.preserve(&session.recoveryRecord, "session released before successful commit")
 		m.mu.Lock()
 		session.inFlight = false
@@ -565,14 +592,20 @@ func (m *sessionManager) release(id string) error {
 		m.mu.Unlock()
 		return err
 	}
-	if record, ok := m.recoveries[id]; ok && record.Discarding {
+	if record, ok := m.recoveries[id]; ok && (record.Discarding || record.discardPending) {
 		if record.inFlight {
 			m.mu.Unlock()
 			return errSessionBusy
 		}
 		record.inFlight = true
 		m.mu.Unlock()
-		if err := m.finishDiscardedRecord(record); err != nil {
+		var err error
+		if record.discardPending {
+			err = m.finishDetachedDiscard(record)
+		} else {
+			err = m.finishDiscardedRecord(record)
+		}
+		if err != nil {
 			m.mu.Lock()
 			record.inFlight = false
 			m.mu.Unlock()
@@ -660,14 +693,14 @@ func (m *sessionManager) listRecoveries() []controlrpc.RecoveryRecord {
 	result := make([]controlrpc.RecoveryRecord, 0, len(m.recoveries))
 	seen := make(map[string]struct{}, len(m.recoveries))
 	for _, record := range m.recoveries {
-		if record.Discarding {
+		if record.Discarding || record.discardPending {
 			continue
 		}
 		result = append(result, protocolRecovery(*record))
 		seen[record.SessionID] = struct{}{}
 	}
 	for id, session := range m.sessions {
-		if !session.expired || session.inFlight || session.Discarding {
+		if !session.expired || session.inFlight || session.Discarding || session.discardPending {
 			continue
 		}
 		if _, exists := seen[id]; exists {
@@ -745,6 +778,24 @@ func (m *sessionManager) retryRecovery(ctx context.Context, id string) error {
 			return nil
 		}
 		err = fmt.Errorf("recovery repository commit succeeded but completion record failed: %w", err)
+	}
+	if record.FollowEntryID && errors.Is(err, metadata.ErrEntryNotFound) {
+		discardErr := m.markDiscarding(record, "stable FUSE Entry detached before Recovery retry")
+		if discardErr == nil {
+			discardErr = m.finishDiscardedRecord(record)
+		}
+		m.mu.Lock()
+		if discardErr == nil {
+			delete(m.recoveries, id)
+		} else {
+			record.inFlight = false
+			record.discardPending = true
+		}
+		m.mu.Unlock()
+		if discardErr != nil {
+			return detachedDiscardIncomplete(err, discardErr)
+		}
+		return err
 	}
 	return m.updateRecoveryFailure(record, err)
 }
@@ -872,8 +923,13 @@ func (m *sessionManager) finishExpiredWrite(id string, session *writeSession) er
 		}
 		return nil
 	}
-	if session.Discarding {
-		err := m.finishDiscardedRecord(&session.recoveryRecord)
+	if session.Discarding || session.discardPending {
+		var err error
+		if session.discardPending {
+			err = m.finishDetachedDiscard(&session.recoveryRecord)
+		} else {
+			err = m.finishDiscardedRecord(&session.recoveryRecord)
+		}
 		m.mu.Lock()
 		session.inFlight = false
 		if err == nil {
@@ -957,6 +1013,7 @@ func (m *sessionManager) markDiscarding(record *recoveryRecord, reason string) e
 	}
 	m.mu.Lock()
 	record.Discarding = true
+	record.discardPending = false
 	record.FailureReason = updated.FailureReason
 	record.UpdatedAt = updated.UpdatedAt
 	m.mu.Unlock()
@@ -988,6 +1045,34 @@ func (m *sessionManager) finishDiscardedRecord(record *recoveryRecord) error {
 		}
 	}
 	return m.cleanupDiscardedRecord(record)
+}
+
+func detachedDiscardIncomplete(causes ...error) error {
+	all := []error{metadata.ErrEntryNotFound, errDetachedDiscardIncomplete}
+	for _, err := range causes {
+		if err != nil {
+			all = append(all, err)
+		}
+	}
+	return errors.Join(all...)
+}
+
+func (m *sessionManager) finishDetachedDiscard(record *recoveryRecord) error {
+	if !record.Discarding {
+		if err := m.markDiscarding(record, "stable FUSE Entry detached; discard cleanup pending"); err != nil {
+			m.mu.Lock()
+			record.discardPending = true
+			m.mu.Unlock()
+			return err
+		}
+	}
+	if err := m.finishDiscardedRecord(record); err != nil {
+		m.mu.Lock()
+		record.discardPending = true
+		m.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func (m *sessionManager) markCommitted(record *recoveryRecord) error {
@@ -1069,6 +1154,18 @@ func (m *sessionManager) loadRecoveries() error {
 				return fmt.Errorf("finish discarded Resource cleanup %s: %w", record.SessionID, err)
 			}
 			continue
+		}
+		if record.FollowEntryID {
+			_, _, resolveErr := m.app.ResolveEntry(context.Background(), record.Expectation.EntryID)
+			if errors.Is(resolveErr, metadata.ErrEntryNotFound) {
+				if err := m.finishDetachedDiscard(&record); err != nil {
+					return fmt.Errorf("finish detached Resource cleanup %s: %w", record.SessionID, err)
+				}
+				continue
+			}
+			if resolveErr != nil {
+				return fmt.Errorf("resolve stable Entry for Resource Recovery %s: %w", record.SessionID, resolveErr)
+			}
 		}
 		if record.FailureReason == "" {
 			if err := m.preserve(&record, "daemon stopped before session completed"); err != nil {
@@ -1186,8 +1283,14 @@ func (m *sessionManager) close() error {
 		if session == nil {
 			continue
 		}
-		if session.Discarding {
-			if err := m.finishDiscardedRecord(&session.recoveryRecord); err != nil {
+		if session.Discarding || session.discardPending {
+			var err error
+			if session.discardPending {
+				err = m.finishDetachedDiscard(&session.recoveryRecord)
+			} else {
+				err = m.finishDiscardedRecord(&session.recoveryRecord)
+			}
+			if err != nil {
 				failures = append(failures, err)
 				continue
 			}
@@ -1195,7 +1298,25 @@ func (m *sessionManager) close() error {
 			delete(m.sessions, id)
 			m.mu.Unlock()
 			continue
-		} else if err := m.preserve(&session.recoveryRecord, "daemon stopped before session completed"); err != nil {
+		}
+		if session.FollowEntryID {
+			_, _, resolveErr := m.app.ResolveEntry(context.Background(), session.Expectation.EntryID)
+			if errors.Is(resolveErr, metadata.ErrEntryNotFound) {
+				if err := m.finishDetachedDiscard(&session.recoveryRecord); err != nil {
+					failures = append(failures, err)
+					continue
+				}
+				m.mu.Lock()
+				delete(m.sessions, id)
+				m.mu.Unlock()
+				continue
+			}
+			if resolveErr != nil && session.discardPending {
+				failures = append(failures, fmt.Errorf("resolve detached Entry before session shutdown: %w", resolveErr))
+				continue
+			}
+		}
+		if err := m.preserve(&session.recoveryRecord, "daemon stopped before session completed"); err != nil {
 			failures = append(failures, err)
 			m.mu.Lock()
 			session.expired = true

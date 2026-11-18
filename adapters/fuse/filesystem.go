@@ -141,14 +141,15 @@ func (f *FileSystem) call(ctx context.Context, method string, params, result any
 // commitSession reports whether ENOENT came specifically from stable Entry
 // visibility. A missing/expired Resource session is distinct and must not be
 // mistaken for namespace deletion.
-func (f *FileSystem) commitSession(ctx context.Context, id string) (syscall.Errno, bool) {
+func (f *FileSystem) commitSession(ctx context.Context, id string) (syscall.Errno, bool, bool) {
 	err := f.client.Call(ctx, controlrpc.MethodCommit, map[string]string{"session_id": id}, nil)
 	if err == nil {
-		return 0, false
+		return 0, false, false
 	}
 	var remote *controlrpc.RemoteError
 	entryDetached := errors.As(err, &remote) && remote.Code == controlrpc.CodeEntryNotFound
-	return errnoFor(err), entryDetached
+	discardIncomplete := errors.As(err, &remote) && remote.Code == controlrpc.CodeDetachedDiscardIncomplete
+	return errnoFor(err), entryDetached, discardIncomplete
 }
 
 func (f *FileSystem) cleanupSession(ctx context.Context, id string, primary syscall.Errno) syscall.Errno {
@@ -192,6 +193,8 @@ func errnoFor(err error) syscall.Errno {
 			return syscall.ESTALE
 		case controlrpc.CodeResourceSessionMissing:
 			return syscall.ENOENT
+		case controlrpc.CodeDetachedDiscardIncomplete:
+			return syscall.EIO
 		case -32010:
 			return syscall.EOPNOTSUPP
 		}
@@ -661,7 +664,7 @@ func (h *fileHandle) Fsync(ctx context.Context, _ uint32) syscall.Errno {
 	if err := state.lease.failure(); err != nil {
 		return errnoFor(err)
 	}
-	if errno, entryDetached := state.node.owner.commitSession(ctx, state.sessionID); errno != 0 {
+	if errno, entryDetached, discardIncomplete := state.node.owner.commitSession(ctx, state.sessionID); errno != 0 {
 		if entryDetached {
 			state.unlinked, state.dirty = true, false
 			state.sessionID, state.recoveryID = "", ""
@@ -675,6 +678,21 @@ func (h *fileHandle) Fsync(ctx context.Context, _ uint32) syscall.Errno {
 				h.modeState.mu.Unlock()
 			}
 			return 0
+		}
+		if discardIncomplete {
+			state.lastErr = errno
+			state.unlinked, state.dirty = true, false
+			state.recoveryID = ""
+			if state.lease != nil {
+				state.lease.close()
+				state.lease = nil
+			}
+			if h.modeState != nil {
+				h.modeState.mu.Lock()
+				h.modeState.deleted = true
+				h.modeState.mu.Unlock()
+			}
+			return errno
 		}
 		state.lastErr = errno
 		state.recoveryID = state.sessionID
@@ -718,7 +736,7 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 						result = errnoFor(err)
 						log.Printf("final-close lease check failed for Entry %s session %s: %v", state.node.entryID(), state.sessionID, result)
 					} else {
-						commitErrno, entryDetached := state.node.owner.commitSession(ctx, state.sessionID)
+						commitErrno, entryDetached, discardIncomplete := state.node.owner.commitSession(ctx, state.sessionID)
 						result = commitErrno
 						if result != 0 {
 							state.lastErr = result
@@ -727,6 +745,14 @@ func (h *fileHandle) Release(ctx context.Context) syscall.Errno {
 								state.unlinked = true
 								state.dirty = false
 								state.sessionID = ""
+								state.recoveryID = ""
+								if h.modeState != nil {
+									h.modeState.mu.Lock()
+									h.modeState.deleted = true
+									h.modeState.mu.Unlock()
+								}
+							} else if discardIncomplete {
+								state.unlinked, state.dirty = true, false
 								state.recoveryID = ""
 								if h.modeState != nil {
 									h.modeState.mu.Lock()

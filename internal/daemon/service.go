@@ -444,6 +444,8 @@ func decodeParams(raw json.RawMessage, target any) error {
 
 func mapMethodError(err error) error {
 	switch {
+	case errors.Is(err, errDetachedDiscardIncomplete):
+		return &methodError{Code: controlrpc.CodeDetachedDiscardIncomplete, Err: err}
 	case errors.Is(err, metadata.ErrEntryNotFound):
 		return &methodError{Code: jsonRPCEntryNotFound, Err: err}
 	case errors.Is(err, errSessionNotFound):

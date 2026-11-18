@@ -11,18 +11,19 @@ const (
 )
 
 const (
-	CodeParseError             = -32700
-	CodeInvalidRequest         = -32600
-	CodeMethodNotFound         = -32601
-	CodeInvalidParams          = -32602
-	CodeInternalError          = -32603
-	CodeEntryNotFound          = -32004
-	CodeEntryConflict          = -32009
-	CodeResourceSessionExpired = -32011
-	CodeEntryExists            = -32012
-	CodeDirectoryNotEmpty      = -32013
-	CodePermissionDenied       = -32014
-	CodeResourceSessionMissing = -32015
+	CodeParseError                = -32700
+	CodeInvalidRequest            = -32600
+	CodeMethodNotFound            = -32601
+	CodeInvalidParams             = -32602
+	CodeInternalError             = -32603
+	CodeEntryNotFound             = -32004
+	CodeEntryConflict             = -32009
+	CodeResourceSessionExpired    = -32011
+	CodeEntryExists               = -32012
+	CodeDirectoryNotEmpty         = -32013
+	CodePermissionDenied          = -32014
+	CodeResourceSessionMissing    = -32015
+	CodeDetachedDiscardIncomplete = -32016
 )
 
 const (

@@ -59,6 +59,7 @@ type stubDaemon struct {
 	begins     int
 	commitErr  error
 	releaseErr error
+	abortErr   error
 	resolveErr error
 	chmodErr   error
 	removeErr  error
@@ -208,6 +209,9 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 		}
 		return nil
 	case controlrpc.MethodAbort:
+		if d.abortErr != nil {
+			return d.abortErr
+		}
 		if s := d.sessions[id]; s != nil {
 			_ = os.Remove(s.file)
 			delete(d.sessions, id)
@@ -1227,6 +1231,9 @@ func TestErrnoMapsRevisionConflictAndMissingEntry(t *testing.T) {
 	if got := errnoFor(&controlrpc.RemoteError{Code: controlrpc.CodeResourceSessionMissing}); got != syscall.ENOENT {
 		t.Fatalf("missing-session errno=%v, want ENOENT", got)
 	}
+	if got := errnoFor(&controlrpc.RemoteError{Code: controlrpc.CodeDetachedDiscardIncomplete}); got != syscall.EIO {
+		t.Fatalf("detached-discard-incomplete errno=%v, want EIO", got)
+	}
 	if got := errnoFor(&controlrpc.RemoteError{Code: controlrpc.CodeEntryExists}); got != syscall.EEXIST {
 		t.Fatalf("entry exists errno=%v", got)
 	}
@@ -1259,6 +1266,40 @@ func TestMissingWriteSessionIsNotClassifiedAsEntryDeletion(t *testing.T) {
 	}
 	if errno := handle.Release(ctx); errno != 0 {
 		t.Fatalf("Release: %v", errno)
+	}
+}
+
+func TestDetachedDiscardCleanupFailureIsVisibleOnFsyncAndRelease(t *testing.T) {
+	ctx := context.Background()
+	for _, operation := range []string{"fsync", "release"} {
+		t.Run(operation, func(t *testing.T) {
+			daemon := newStub(t, []byte("old"))
+			adapter := New(daemon)
+			node := adapter.nodeFor(ctx, daemon.entry, daemon.path)
+			state, errno := adapter.startWrite(ctx, node, false)
+			if errno != 0 {
+				t.Fatal(errno)
+			}
+			state.handles = 1
+			adapter.writes[node.entryID()] = state
+			handle := &fileHandle{node: node, write: state, writable: true}
+			if _, errno := handle.Write(ctx, []byte("still held locally"), 0); errno != 0 {
+				t.Fatal(errno)
+			}
+			daemon.commitErr = &controlrpc.RemoteError{Code: controlrpc.CodeDetachedDiscardIncomplete, Message: "discard cleanup pending"}
+			daemon.abortErr = errors.New("injected retry cleanup failure")
+			if operation == "fsync" {
+				if errno := handle.Fsync(ctx, 0); errno != syscall.EIO {
+					t.Fatalf("Fsync errno=%v want EIO", errno)
+				}
+			}
+			if errno := handle.Release(ctx); errno != syscall.EIO {
+				t.Fatalf("Release errno=%v want visible cleanup error EIO", errno)
+			}
+			if !state.unlinked || state.recoveryID != "" || state.sessionID == "" {
+				t.Fatalf("incomplete discard was treated as ordinary Recovery or success: %+v", state)
+			}
+		})
 	}
 }
 
