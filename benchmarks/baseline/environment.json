@@ -1,0 +1,14 @@
+{
+  "runner_os": "Linux",
+  "runner_architecture": "X64",
+  "runner_image_os": "ubuntu26",
+  "runner_image_version": "20261111.196.1",
+  "kernel": "7.0.0-1019-azure",
+  "cpu": "AMD EPYC 9V74 80-Core Processor",
+  "vcpus": 4,
+  "go_toolchain": "go version go1.25.1 linux/amd64",
+  "python": "3.14.4",
+  "git": "2.56.1",
+  "storage": "hosted runner workspace filesystem (ext4)",
+  "note": "Hosted runner hardware and shared workload can vary between runs. No intentional concurrent workload was used; contention is uncontrolled."
+}

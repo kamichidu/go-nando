@@ -1,0 +1,1419 @@
+{
+  "schema_version": 1,
+  "kind": "interface_benchmark",
+  "interface": "webdav",
+  "started_at": "2026-11-18T22:17:26.358126+00:00",
+  "finished_at": "2026-11-18T22:17:29.543250+00:00",
+  "repository_sha": "5826d1d1b29c13d77f22a8519cb3d5c25c70ce5d",
+  "tool": {
+    "name": "go-nando",
+    "version": "5826d1d1b29c"
+  },
+  "measurement_scope": "end_to_end",
+  "adapter_cost_isolation": "not_measured; cross-interface latency differences are not attributable to adapter-only cost",
+  "comparison_policy": "Do not interpret simple RPC/FUSE/WebDAV latency deltas as adapter thinness or overhead.",
+  "interface_conditions": {
+    "rpc": {
+      "connection": "new Unix HTTP connection for each JSON-RPC request; no connection reuse",
+      "cache": "daemon/resource behavior included; harness adds no cache",
+      "write_commit_boundary": "beginWrite + local Resource write/fsync + commit + release",
+      "read_boundary": "beginRead + local Resource read + release"
+    },
+    "fuse": {
+      "connection": "kernel FUSE requests; adapter RPC behavior included",
+      "cache": "adapter sets zero entry/attribute/negative lookup TTL and uses FOPEN_DIRECT_IO",
+      "write_commit_boundary": "write + fsync; adapter commit performed by fsync",
+      "read_boundary": "open/read/close through FUSE adapter"
+    },
+    "webdav": {
+      "connection": "one urllib HTTP request per operation; no explicit persistent session reuse",
+      "cache": "HTTP client and adapter behavior included; harness adds no cache",
+      "write_commit_boundary": "PUT response completion",
+      "read_boundary": "GET response body consumed"
+    }
+  },
+  "configuration": {
+    "iterations": 100,
+    "payload_bytes": 4096,
+    "rpc_endpoint": null,
+    "mountpoint": null,
+    "webdav_url": null
+  },
+  "environment": {
+    "platform": "Linux-7.0.0-1019-azure-x86_64-with-glibc2.43",
+    "kernel": "7.0.0-1019-azure",
+    "machine": "x86_64",
+    "python": "3.14.4",
+    "go_toolchain": "go version go1.25.1 linux/amd64"
+  },
+  "completed": 100,
+  "failed": 0,
+  "cleanup_failed": 0,
+  "status": "completed",
+  "run_conditions": {
+    "delivery_mode": "local",
+    "cache_state": "unique random paths; read immediately after write; host page cache not cleared",
+    "storage": "ubuntu-latest hosted runner workspace filesystem (see runner-details.txt)",
+    "repository_filesystem": "runner workspace filesystem",
+    "other_workload": "no intentional concurrent workload; shared hosted runner contention is uncontrolled",
+    "mount_options": [],
+    "webdav_url": "http://127.0.0.1:47145",
+    "comparison_note": "End-to-end operation observations include protocol/client/kernel/daemon/storage paths. Cross-interface deltas do not isolate adapter-only overhead."
+  },
+  "percentile_method": "nearest-rank: sorted sample at ceil(p*n)-1 (1-indexed)",
+  "classification": "unclassified",
+  "summary_successful_iterations": {
+    "create_write_ns": {
+      "samples": 100,
+      "median_ns": 9411953.5,
+      "p95_ns": 27656904,
+      "p99_ns": 41195833,
+      "min_ns": 8315082,
+      "max_ns": 47904926
+    },
+    "read_ns": {
+      "samples": 100,
+      "median_ns": 3519664.0,
+      "p95_ns": 4869882,
+      "p99_ns": 19006261,
+      "min_ns": 2699885,
+      "max_ns": 21759046
+    },
+    "stat_ns": {
+      "samples": 100,
+      "median_ns": 1427283.5,
+      "p95_ns": 1552265,
+      "p99_ns": 1688760,
+      "min_ns": 1173033,
+      "max_ns": 1737091
+    },
+    "list_ns": {
+      "samples": 100,
+      "median_ns": 2589440.5,
+      "p95_ns": 3132140,
+      "p99_ns": 3288760,
+      "min_ns": 2072304,
+      "max_ns": 3761845
+    },
+    "rename_ns": {
+      "samples": 100,
+      "median_ns": 4447802.0,
+      "p95_ns": 16099326,
+      "p99_ns": 23317081,
+      "min_ns": 3540760,
+      "max_ns": 222075825
+    },
+    "delete_ns": {
+      "samples": 100,
+      "median_ns": 2429548.0,
+      "p95_ns": 3407054,
+      "p99_ns": 22874596,
+      "min_ns": 2030302,
+      "max_ns": 182019577
+    }
+  },
+  "summary_failed_partial_observations": {},
+  "iterations": [
+    {
+      "iteration": 0,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 17001786,
+        "read_ns": 3682397,
+        "stat_ns": 1433254,
+        "list_ns": 2504728,
+        "rename_ns": 4668816,
+        "delete_ns": 2496045
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 1,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 27656904,
+        "read_ns": 3636730,
+        "stat_ns": 1494865,
+        "list_ns": 2677843,
+        "rename_ns": 4480459,
+        "delete_ns": 2405833
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 2,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10220128,
+        "read_ns": 3541451,
+        "stat_ns": 1450170,
+        "list_ns": 2525118,
+        "rename_ns": 7465273,
+        "delete_ns": 2346596
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 3,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9098581,
+        "read_ns": 3321418,
+        "stat_ns": 1412524,
+        "list_ns": 2541402,
+        "rename_ns": 4172207,
+        "delete_ns": 2316422
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 4,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9070500,
+        "read_ns": 3412371,
+        "stat_ns": 1370312,
+        "list_ns": 2471349,
+        "rename_ns": 4302809,
+        "delete_ns": 2689840
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 5,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9106012,
+        "read_ns": 3298539,
+        "stat_ns": 1390291,
+        "list_ns": 2411866,
+        "rename_ns": 4236210,
+        "delete_ns": 2384602
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 6,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8847483,
+        "read_ns": 3416667,
+        "stat_ns": 1472312,
+        "list_ns": 2438331,
+        "rename_ns": 4123104,
+        "delete_ns": 2403194
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 7,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8923279,
+        "read_ns": 3572586,
+        "stat_ns": 1397592,
+        "list_ns": 2619066,
+        "rename_ns": 4471877,
+        "delete_ns": 4248118
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 8,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8574682,
+        "read_ns": 3902070,
+        "stat_ns": 1356421,
+        "list_ns": 3132140,
+        "rename_ns": 23317081,
+        "delete_ns": 2472351
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 9,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10220729,
+        "read_ns": 3478248,
+        "stat_ns": 1378474,
+        "list_ns": 2421125,
+        "rename_ns": 4269860,
+        "delete_ns": 2286648
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 10,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8913218,
+        "read_ns": 2705063,
+        "stat_ns": 1331516,
+        "list_ns": 2441124,
+        "rename_ns": 4143845,
+        "delete_ns": 2418962
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 11,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8968029,
+        "read_ns": 3390199,
+        "stat_ns": 1417341,
+        "list_ns": 2437519,
+        "rename_ns": 4296109,
+        "delete_ns": 2358884
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 12,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9246278,
+        "read_ns": 3345232,
+        "stat_ns": 1369621,
+        "list_ns": 2525989,
+        "rename_ns": 4372170,
+        "delete_ns": 2395578
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 13,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9178097,
+        "read_ns": 3388512,
+        "stat_ns": 1434197,
+        "list_ns": 2485710,
+        "rename_ns": 4215330,
+        "delete_ns": 2444820
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 14,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9359815,
+        "read_ns": 3480501,
+        "stat_ns": 1440570,
+        "list_ns": 2567205,
+        "rename_ns": 5022115,
+        "delete_ns": 2450238
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 15,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10414213,
+        "read_ns": 3446211,
+        "stat_ns": 1352436,
+        "list_ns": 2507317,
+        "rename_ns": 4364219,
+        "delete_ns": 2403659
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 16,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8511970,
+        "read_ns": 3332744,
+        "stat_ns": 1394177,
+        "list_ns": 2491108,
+        "rename_ns": 16099326,
+        "delete_ns": 2478760
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 17,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9352168,
+        "read_ns": 2699885,
+        "stat_ns": 1362280,
+        "list_ns": 2636472,
+        "rename_ns": 4384088,
+        "delete_ns": 2348819
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 18,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10097208,
+        "read_ns": 3486991,
+        "stat_ns": 1436505,
+        "list_ns": 2766457,
+        "rename_ns": 4476684,
+        "delete_ns": 2444119
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 19,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8492091,
+        "read_ns": 3536123,
+        "stat_ns": 1416840,
+        "list_ns": 3069358,
+        "rename_ns": 4290841,
+        "delete_ns": 2473999
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 20,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9693835,
+        "read_ns": 5958329,
+        "stat_ns": 1351008,
+        "list_ns": 3166440,
+        "rename_ns": 4356397,
+        "delete_ns": 2393485
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 21,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9706939,
+        "read_ns": 3363429,
+        "stat_ns": 1362531,
+        "list_ns": 2553424,
+        "rename_ns": 4350023,
+        "delete_ns": 2425582
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 22,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10535000,
+        "read_ns": 3679208,
+        "stat_ns": 1362170,
+        "list_ns": 2569653,
+        "rename_ns": 4343318,
+        "delete_ns": 2625525
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 23,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9852689,
+        "read_ns": 3499599,
+        "stat_ns": 1382099,
+        "list_ns": 2474404,
+        "rename_ns": 4974525,
+        "delete_ns": 2558086
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 24,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 27453264,
+        "read_ns": 3752220,
+        "stat_ns": 1485552,
+        "list_ns": 2713335,
+        "rename_ns": 4358210,
+        "delete_ns": 2412102
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 25,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10354635,
+        "read_ns": 3521281,
+        "stat_ns": 1480944,
+        "list_ns": 2621559,
+        "rename_ns": 4408995,
+        "delete_ns": 2308470
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 26,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10722566,
+        "read_ns": 7666438,
+        "stat_ns": 1525941,
+        "list_ns": 2636822,
+        "rename_ns": 4495362,
+        "delete_ns": 2414255
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 27,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 20981811,
+        "read_ns": 3646485,
+        "stat_ns": 1456299,
+        "list_ns": 2651169,
+        "rename_ns": 4561418,
+        "delete_ns": 2473122
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 28,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9751951,
+        "read_ns": 3627592,
+        "stat_ns": 1406010,
+        "list_ns": 2588240,
+        "rename_ns": 4344731,
+        "delete_ns": 2310113
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 29,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9250929,
+        "read_ns": 3438950,
+        "stat_ns": 1409175,
+        "list_ns": 2497237,
+        "rename_ns": 4252835,
+        "delete_ns": 2293763
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 30,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8872599,
+        "read_ns": 3453311,
+        "stat_ns": 1442708,
+        "list_ns": 2611865,
+        "rename_ns": 4228996,
+        "delete_ns": 2328219
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 31,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 27455869,
+        "read_ns": 3731009,
+        "stat_ns": 1444841,
+        "list_ns": 2603063,
+        "rename_ns": 5169716,
+        "delete_ns": 2480508
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 32,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9511231,
+        "read_ns": 2723479,
+        "stat_ns": 1425539,
+        "list_ns": 3087634,
+        "rename_ns": 4335437,
+        "delete_ns": 2472901
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 33,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9759457,
+        "read_ns": 2839059,
+        "stat_ns": 1552265,
+        "list_ns": 2676330,
+        "rename_ns": 4415574,
+        "delete_ns": 2436839
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 34,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9301679,
+        "read_ns": 3470941,
+        "stat_ns": 1394317,
+        "list_ns": 2649591,
+        "rename_ns": 4319874,
+        "delete_ns": 2301139
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 35,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9277594,
+        "read_ns": 3361346,
+        "stat_ns": 1409359,
+        "list_ns": 2670632,
+        "rename_ns": 4397637,
+        "delete_ns": 7032927
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 36,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10185778,
+        "read_ns": 6634462,
+        "stat_ns": 1458481,
+        "list_ns": 2626227,
+        "rename_ns": 4421082,
+        "delete_ns": 2352164
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 37,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9294008,
+        "read_ns": 3283752,
+        "stat_ns": 1394929,
+        "list_ns": 2520701,
+        "rename_ns": 4528820,
+        "delete_ns": 2518358
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 38,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9517085,
+        "read_ns": 19006261,
+        "stat_ns": 1688760,
+        "list_ns": 2664513,
+        "rename_ns": 12959270,
+        "delete_ns": 2548402
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 39,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9967237,
+        "read_ns": 3511687,
+        "stat_ns": 1456969,
+        "list_ns": 2576774,
+        "rename_ns": 5379369,
+        "delete_ns": 2448726
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 40,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 12519254,
+        "read_ns": 3292665,
+        "stat_ns": 1494114,
+        "list_ns": 2595180,
+        "rename_ns": 4675186,
+        "delete_ns": 2409949
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 41,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10735024,
+        "read_ns": 3865697,
+        "stat_ns": 1468196,
+        "list_ns": 2548813,
+        "rename_ns": 4455363,
+        "delete_ns": 2454394
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 42,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9470908,
+        "read_ns": 3456677,
+        "stat_ns": 1485362,
+        "list_ns": 2654529,
+        "rename_ns": 4616190,
+        "delete_ns": 2396599
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 43,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9069711,
+        "read_ns": 3676269,
+        "stat_ns": 1459734,
+        "list_ns": 2559359,
+        "rename_ns": 5080832,
+        "delete_ns": 2351384
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 44,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8499693,
+        "read_ns": 3523055,
+        "stat_ns": 1476929,
+        "list_ns": 2488865,
+        "rename_ns": 4514420,
+        "delete_ns": 2378683
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 45,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8323375,
+        "read_ns": 3603833,
+        "stat_ns": 1531148,
+        "list_ns": 2715708,
+        "rename_ns": 18236934,
+        "delete_ns": 2653297
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 46,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 14729953,
+        "read_ns": 3838837,
+        "stat_ns": 1487835,
+        "list_ns": 2543456,
+        "rename_ns": 4398049,
+        "delete_ns": 2415287
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 47,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9887942,
+        "read_ns": 3675398,
+        "stat_ns": 1421928,
+        "list_ns": 2569243,
+        "rename_ns": 4411069,
+        "delete_ns": 2427365
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 48,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8782097,
+        "read_ns": 3581420,
+        "stat_ns": 1452994,
+        "list_ns": 2614700,
+        "rename_ns": 4628288,
+        "delete_ns": 2391422
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 49,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9362190,
+        "read_ns": 3387665,
+        "stat_ns": 1425003,
+        "list_ns": 2638806,
+        "rename_ns": 4705762,
+        "delete_ns": 2431731
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 50,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9505340,
+        "read_ns": 3637893,
+        "stat_ns": 1429028,
+        "list_ns": 2659796,
+        "rename_ns": 4533679,
+        "delete_ns": 2439773
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 51,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9183978,
+        "read_ns": 3636611,
+        "stat_ns": 1515716,
+        "list_ns": 2646997,
+        "rename_ns": 4680864,
+        "delete_ns": 2486993
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 52,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8895265,
+        "read_ns": 3664812,
+        "stat_ns": 1460194,
+        "list_ns": 2698133,
+        "rename_ns": 4497596,
+        "delete_ns": 2307128
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 53,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 28441411,
+        "read_ns": 3706533,
+        "stat_ns": 1574452,
+        "list_ns": 2636943,
+        "rename_ns": 4583992,
+        "delete_ns": 2436449
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 54,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9375600,
+        "read_ns": 3498589,
+        "stat_ns": 1451451,
+        "list_ns": 2565708,
+        "rename_ns": 4542962,
+        "delete_ns": 2784299
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 55,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 41195833,
+        "read_ns": 3778520,
+        "stat_ns": 1513133,
+        "list_ns": 2852910,
+        "rename_ns": 4849713,
+        "delete_ns": 2707516
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 56,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8623706,
+        "read_ns": 2823907,
+        "stat_ns": 1516573,
+        "list_ns": 3288760,
+        "rename_ns": 4746346,
+        "delete_ns": 2599102
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 57,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9300884,
+        "read_ns": 3524927,
+        "stat_ns": 1385941,
+        "list_ns": 2528588,
+        "rename_ns": 4619515,
+        "delete_ns": 2432873
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 58,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9311331,
+        "read_ns": 2795045,
+        "stat_ns": 1458196,
+        "list_ns": 2662190,
+        "rename_ns": 4575891,
+        "delete_ns": 2446903
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 59,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 27754322,
+        "read_ns": 3666114,
+        "stat_ns": 1398614,
+        "list_ns": 3761845,
+        "rename_ns": 4577082,
+        "delete_ns": 2593649
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 60,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9029791,
+        "read_ns": 3281670,
+        "stat_ns": 1320249,
+        "list_ns": 2072304,
+        "rename_ns": 3834592,
+        "delete_ns": 2072063
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 61,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8614722,
+        "read_ns": 4869882,
+        "stat_ns": 1225910,
+        "list_ns": 2274310,
+        "rename_ns": 3890354,
+        "delete_ns": 2137650
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 62,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9295942,
+        "read_ns": 3237695,
+        "stat_ns": 1256766,
+        "list_ns": 2225819,
+        "rename_ns": 3725681,
+        "delete_ns": 2143848
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 63,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8340931,
+        "read_ns": 3378291,
+        "stat_ns": 1308742,
+        "list_ns": 2269503,
+        "rename_ns": 3739682,
+        "delete_ns": 2030302
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 64,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8608183,
+        "read_ns": 3187311,
+        "stat_ns": 1290556,
+        "list_ns": 2153703,
+        "rename_ns": 3551676,
+        "delete_ns": 2061047
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 65,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8816108,
+        "read_ns": 3489485,
+        "stat_ns": 1272238,
+        "list_ns": 2200527,
+        "rename_ns": 3756477,
+        "delete_ns": 2115798
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 66,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9678509,
+        "read_ns": 3361247,
+        "stat_ns": 1290651,
+        "list_ns": 2319957,
+        "rename_ns": 3669990,
+        "delete_ns": 2132937
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 67,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8475467,
+        "read_ns": 3225382,
+        "stat_ns": 1173033,
+        "list_ns": 2170783,
+        "rename_ns": 15644216,
+        "delete_ns": 2230065
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 68,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8320435,
+        "read_ns": 3202654,
+        "stat_ns": 1279008,
+        "list_ns": 2257675,
+        "rename_ns": 3540760,
+        "delete_ns": 2171009
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 69,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10457293,
+        "read_ns": 3286802,
+        "stat_ns": 1403200,
+        "list_ns": 2505180,
+        "rename_ns": 4131152,
+        "delete_ns": 2831719
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 70,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9824739,
+        "read_ns": 3516976,
+        "stat_ns": 1351390,
+        "list_ns": 2559619,
+        "rename_ns": 4240879,
+        "delete_ns": 2484964
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 71,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 33109597,
+        "read_ns": 3707741,
+        "stat_ns": 1453815,
+        "list_ns": 2645330,
+        "rename_ns": 4408795,
+        "delete_ns": 2470764
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 72,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9238297,
+        "read_ns": 3359073,
+        "stat_ns": 1377743,
+        "list_ns": 2572458,
+        "rename_ns": 4857394,
+        "delete_ns": 2327098
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 73,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9163693,
+        "read_ns": 3523375,
+        "stat_ns": 1469158,
+        "list_ns": 2552118,
+        "rename_ns": 4301198,
+        "delete_ns": 2449016
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 74,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9319628,
+        "read_ns": 21759046,
+        "stat_ns": 1440190,
+        "list_ns": 2704552,
+        "rename_ns": 4602715,
+        "delete_ns": 2369289
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 75,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9468276,
+        "read_ns": 3435435,
+        "stat_ns": 1342662,
+        "list_ns": 2412613,
+        "rename_ns": 4310781,
+        "delete_ns": 2330217
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 76,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8346678,
+        "read_ns": 3279346,
+        "stat_ns": 1408444,
+        "list_ns": 2617655,
+        "rename_ns": 4514840,
+        "delete_ns": 2384357
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 77,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9249875,
+        "read_ns": 3484918,
+        "stat_ns": 1406891,
+        "list_ns": 2625617,
+        "rename_ns": 222075825,
+        "delete_ns": 182019577
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 78,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 47904926,
+        "read_ns": 3581350,
+        "stat_ns": 1430040,
+        "list_ns": 2575032,
+        "rename_ns": 4339093,
+        "delete_ns": 2408717
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 79,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9015311,
+        "read_ns": 3507271,
+        "stat_ns": 1476829,
+        "list_ns": 2668679,
+        "rename_ns": 4505908,
+        "delete_ns": 3407054
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 80,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10939256,
+        "read_ns": 3792600,
+        "stat_ns": 1477059,
+        "list_ns": 3266618,
+        "rename_ns": 4440241,
+        "delete_ns": 2440494
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 81,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9173903,
+        "read_ns": 3688637,
+        "stat_ns": 1413746,
+        "list_ns": 2496536,
+        "rename_ns": 4263291,
+        "delete_ns": 2356682
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 82,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8335011,
+        "read_ns": 3343220,
+        "stat_ns": 1341360,
+        "list_ns": 2646707,
+        "rename_ns": 4613907,
+        "delete_ns": 2368419
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 83,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8315082,
+        "read_ns": 3806090,
+        "stat_ns": 1475567,
+        "list_ns": 2744130,
+        "rename_ns": 4853287,
+        "delete_ns": 2469578
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 84,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 11031581,
+        "read_ns": 3698517,
+        "stat_ns": 1509237,
+        "list_ns": 2735888,
+        "rename_ns": 4160540,
+        "delete_ns": 2485195
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 85,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10117920,
+        "read_ns": 3763457,
+        "stat_ns": 1495957,
+        "list_ns": 2626418,
+        "rename_ns": 19280322,
+        "delete_ns": 3990411
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 86,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9448307,
+        "read_ns": 3820070,
+        "stat_ns": 1480860,
+        "list_ns": 2558928,
+        "rename_ns": 4367735,
+        "delete_ns": 2369430
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 87,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10511704,
+        "read_ns": 3438540,
+        "stat_ns": 1423836,
+        "list_ns": 2472447,
+        "rename_ns": 4153520,
+        "delete_ns": 2327699
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 88,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 8446780,
+        "read_ns": 3396207,
+        "stat_ns": 1412155,
+        "list_ns": 3059183,
+        "rename_ns": 4337000,
+        "delete_ns": 2358564
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 89,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10611199,
+        "read_ns": 2835814,
+        "stat_ns": 1360729,
+        "list_ns": 2589268,
+        "rename_ns": 4328843,
+        "delete_ns": 2470809
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 90,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10002846,
+        "read_ns": 3584054,
+        "stat_ns": 1415790,
+        "list_ns": 2590209,
+        "rename_ns": 4478748,
+        "delete_ns": 2460614
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 91,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10006767,
+        "read_ns": 3518047,
+        "stat_ns": 1495827,
+        "list_ns": 2535274,
+        "rename_ns": 4586786,
+        "delete_ns": 2445412
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 92,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10632045,
+        "read_ns": 3578856,
+        "stat_ns": 1422660,
+        "list_ns": 2548753,
+        "rename_ns": 4313785,
+        "delete_ns": 2355249
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 93,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 27529932,
+        "read_ns": 3664607,
+        "stat_ns": 1569805,
+        "list_ns": 2657583,
+        "rename_ns": 4567448,
+        "delete_ns": 2551988
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 94,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 11917202,
+        "read_ns": 3583132,
+        "stat_ns": 1398885,
+        "list_ns": 2586133,
+        "rename_ns": 4570282,
+        "delete_ns": 2531108
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 95,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9250786,
+        "read_ns": 3851561,
+        "stat_ns": 1467505,
+        "list_ns": 2676381,
+        "rename_ns": 4424038,
+        "delete_ns": 2419383
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 96,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10577765,
+        "read_ns": 3774269,
+        "stat_ns": 1579710,
+        "list_ns": 2726499,
+        "rename_ns": 4715395,
+        "delete_ns": 2545689
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 97,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9202947,
+        "read_ns": 3562532,
+        "stat_ns": 1480955,
+        "list_ns": 2589613,
+        "rename_ns": 4506774,
+        "delete_ns": 22874596
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 98,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 10216019,
+        "read_ns": 4393659,
+        "stat_ns": 1737091,
+        "list_ns": 2914240,
+        "rename_ns": 4571724,
+        "delete_ns": 2539330
+      },
+      "status": "ok"
+    },
+    {
+      "iteration": 99,
+      "payload_bytes": 4096,
+      "operations": {
+        "create_write_ns": 9781981,
+        "read_ns": 3608160,
+        "stat_ns": 1450029,
+        "list_ns": 3281775,
+        "rename_ns": 16613300,
+        "delete_ns": 2550300
+      },
+      "status": "ok"
+    }
+  ],
+  "errors": []
+}
