@@ -58,6 +58,7 @@ jobs:
           ART="$GITHUB_WORKSPACE/results/benchmark-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           BIN="$RUNNER_TEMP/nando-bin"
           mkdir -p "$ART" "$RUNNER_TEMP/nando-bench/repository" "$RUNNER_TEMP/nando-bench/mount"
+          chmod 0700 "$RUNNER_TEMP/nando-bench"
           REPO="$RUNNER_TEMP/nando-bench/repository"
           SOCK="$RUNNER_TEMP/nando-bench/nando.sock"
           WEBDAV_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
