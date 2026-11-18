@@ -1310,7 +1310,11 @@ func TestDetachedDiscardCleanupFailuresHaveDistinctRPCOutcomeAndConverge(t *test
 			if err != nil {
 				t.Fatalf("restart did not converge detached discard: %v", err)
 			}
-			defer restarted.close()
+			t.Cleanup(func() {
+				if err := restarted.close(); err != nil {
+					t.Errorf("close restarted session manager: %v", err)
+				}
+			})
 			if records := restarted.listRecoveries(); len(records) != 0 {
 				t.Fatalf("restart exposed detached bytes as Recovery: %+v", records)
 			}

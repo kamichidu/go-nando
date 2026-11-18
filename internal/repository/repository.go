@@ -46,7 +46,9 @@ func NewRepositoryWithSettings(metaStore metadata.MetadataStore, objStore object
 
 // NewRepositoryWithRemoteObjectStore installs the repository's selected remote backend.
 func NewRepositoryWithRemoteObjectStore(metaStore metadata.MetadataStore, objStore objectstore.ObjectStore, remote objectstore.RemoteObjectStore, hasher content.Hasher, coordinator Coordinator, settings Settings) *Repository {
-	bufferStore, _ := metaStore.(metadata.InternalBufferStore)
+	// MetadataStore embeds InternalBufferStore, so this conversion is required
+	// by the constructor's type contract rather than an optional capability.
+	bufferStore := metadata.InternalBufferStore(metaStore)
 	return &Repository{
 		metaStore:   metaStore,
 		bufferStore: bufferStore,

@@ -2848,7 +2848,10 @@ func TestPreReleaseV1CompletionAddsMissingInternalBufferRegistry(t *testing.T) {
 
 func TestPreReleaseV1CompletionAddsInternalBufferLeaseColumns(t *testing.T) {
 	ctx := context.Background()
-	store, _ := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
+	store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
+	if err != nil {
+		t.Fatalf("open metadata store: %v", err)
+	}
 	defer store.Close()
 	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
 		t.Fatal(err)

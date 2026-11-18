@@ -1570,7 +1570,11 @@ func (s *Store) PublishDetachedRoot(ctx context.Context, buffer metadata.BufferI
 	if err != nil {
 		return metadata.Entry{}, err
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return metadata.Entry{}, fmt.Errorf("read published root row count: %w", err)
+	}
+	if n != 1 {
 		return metadata.Entry{}, metadata.ErrEntryConflict
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM internal_buffers WHERE buffer_id=?`, string(buffer)); err != nil {
@@ -1608,7 +1612,11 @@ func (s *Store) DetachTree(ctx context.Context, id metadata.EntryID, revision ui
 	if err != nil {
 		return metadata.DetachedBuffer{}, err
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return metadata.DetachedBuffer{}, fmt.Errorf("read detached root row count: %w", err)
+	}
+	if n != 1 {
 		return metadata.DetachedBuffer{}, metadata.ErrEntryConflict
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO internal_buffers(buffer_id,root_entry_id,expires_at,fencing,claimed) VALUES(?,?,?,?,0)`, buffer.ID, id.String(), int64(buffer.ExpiresAt), buffer.Fencing); err != nil {
@@ -1688,7 +1696,11 @@ func (s *Store) DeleteDetachedEntry(ctx context.Context, bufferID metadata.Buffe
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read detached entry delete row count: %w", err)
+	}
+	if n != 1 {
 		return metadata.ErrEntryConflict
 	}
 	if err := tx.Commit(); err != nil {
@@ -1708,7 +1720,11 @@ func (s *Store) RenewDetachedBuffer(ctx context.Context, id metadata.BufferID, f
 	if err != nil {
 		return metadata.DetachedBuffer{}, err
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return metadata.DetachedBuffer{}, fmt.Errorf("read renewed buffer row count: %w", err)
+	}
+	if n != 1 {
 		return metadata.DetachedBuffer{}, metadata.ErrEntryConflict
 	}
 	var b metadata.DetachedBuffer
@@ -1736,7 +1752,11 @@ func (s *Store) ClaimExpiredDetachedBuffer(ctx context.Context, id metadata.Buff
 	if err != nil {
 		return metadata.DetachedBuffer{}, err
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return metadata.DetachedBuffer{}, fmt.Errorf("read claimed buffer row count: %w", err)
+	}
+	if n != 1 {
 		return metadata.DetachedBuffer{}, metadata.ErrEntryConflict
 	}
 	var b metadata.DetachedBuffer
