@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -19,6 +21,19 @@ func TestRunUsesExplicitSharedConfigAndRejectsMissingMountpoint(t *testing.T) {
 	err = (&command{options: flags{Mountpoint: t.TempDir(), Config: "/definitely/missing/nando-config.toml"}}).Run(context.Background(), nil)
 	if err == nil || !strings.Contains(err.Error(), "load configuration") {
 		t.Fatalf("explicit missing config error=%v", err)
+	}
+}
+
+func TestClassifyMountFailure(t *testing.T) {
+	for _, errno := range []syscall.Errno{syscall.EPERM, syscall.ENODEV, syscall.ENOSYS} {
+		if got := classifyMountFailure(fmt.Errorf("mount failed: %w", errno)); got != "runner-unsupported" {
+			t.Errorf("classifyMountFailure(%v)=%q, want runner-unsupported", errno, got)
+		}
+	}
+	for _, err := range []error{syscall.EINVAL, fmt.Errorf("unexpected mount error")} {
+		if got := classifyMountFailure(err); got != "unknown" {
+			t.Errorf("classifyMountFailure(%v)=%q, want unknown", err, got)
+		}
 	}
 }
 

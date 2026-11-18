@@ -111,7 +111,7 @@ jobs:
             }
             run_one rpc --rpc-endpoint "unix://$SOCK"
             "$BIN/nando-webdav" --repository "$REPO" --daemon-listen "unix://$SOCK" --webdav-listen "127.0.0.1:$WEBDAV_PORT" >"$ART/webdav-server.log" 2>&1 & WEBDAV_PID=$!
-            for _ in $(seq 1 100); do curl --connect-timeout 1 --max-time 2 --silent --fail "$WEBDAV_URL/" -o /dev/null && break; kill -0 "$WEBDAV_PID" 2>/dev/null || break; sleep 0.1; done
+            for _ in $(seq 1 100); do curl --connect-timeout 1 --max-time 2 --silent --output /dev/null "$WEBDAV_URL/" && break; kill -0 "$WEBDAV_PID" 2>/dev/null || break; sleep 0.1; done
             if ! kill -0 "$WEBDAV_PID" 2>/dev/null || ! curl --connect-timeout 1 --max-time 2 --silent --output /dev/null "$WEBDAV_URL/"; then echo 'WebDAV server failed preflight' | tee -a "$ART/failure.txt"; fail=1; else run_one webdav --webdav-url "$WEBDAV_URL"; fi
             {
               echo "device: $(test -e /dev/fuse && echo present || echo absent)"
@@ -123,7 +123,21 @@ jobs:
               "$BIN/nando-fuse" --repository "$REPO" --daemon-listen "unix://$SOCK" --fuse-mountpoint "$RUNNER_TEMP/nando-bench/mount" >"$ART/fuse-server.log" 2>&1 & FUSE_PID=$!
               mounted=0
               for _ in $(seq 1 100); do mountpoint -q "$RUNNER_TEMP/nando-bench/mount" && { mounted=1; break; }; kill -0 "$FUSE_PID" 2>/dev/null || break; sleep 0.1; done
-              if (( mounted )); then run_one fuse --mountpoint "$RUNNER_TEMP/nando-bench/mount"; else echo 'SKIP: /dev/fuse access existed but the actual mount preflight failed; hosted runner does not support this FUSE mount' | tee "$ART/fuse-status.txt"; kill "$FUSE_PID" 2>/dev/null || true; wait "$FUSE_PID" 2>/dev/null || true; FUSE_PID=; fi
+              if (( mounted )); then
+                run_one fuse --mountpoint "$RUNNER_TEMP/nando-bench/mount"
+              else
+                kill -0 "$FUSE_PID" 2>/dev/null || true
+                wait "$FUSE_PID" 2>/dev/null; fuse_exit=$?
+                FUSE_PID=
+                if [[ $fuse_exit -ne 0 ]] && grep -Fxq 'nando-fuse startup-stage: mount' "$ART/fuse-server.log" && grep -Fxq 'nando-fuse mount-classification: runner-unsupported' "$ART/fuse-server.log"; then
+                  { echo 'classification: runner-unsupported'; echo 'evidence:'; grep -E '^nando-fuse (startup-stage|mount-classification):' "$ART/fuse-server.log"; echo 'diagnostic:'; cat "$ART/fuse-server.log"; } > "$ART/fuse-status.txt"
+                  echo 'FUSE skipped: runner explicitly rejected mount during mount startup' >> "$ART/fuse-status.txt"
+                else
+                  { echo "FUSE startup failed (exit $fuse_exit) or mount failure was not classified as runner unsupported"; cat "$ART/fuse-server.log"; } | tee "$ART/failure.txt"
+                  cp "$ART/failure.txt" "$ART/fuse-status.txt"
+                  fail=1
+                fi
+              fi
             else
               echo 'SKIP: /dev/fuse is absent or not readable/writable by the runner, or fusermount helper is unavailable' | tee "$ART/fuse-status.txt"
             fi
