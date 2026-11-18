@@ -45,12 +45,16 @@ type MetadataStore interface {
 // part of the public repository namespace. Each metadata operation is atomic;
 // reclaiming a complete tree is resumable but not one global transaction.
 type InternalBufferStore interface {
-	CreateDetachedRoot(context.Context, Entry) (DetachedBuffer, error)
-	CreateDetachedEntry(context.Context, BufferID, Entry) (Entry, error)
-	SetDetachedDeadProperties(context.Context, BufferID, EntryID, []DeadPropertyChange) error
-	PublishDetachedRoot(context.Context, BufferID, EntryID, string) (Entry, error)
+	CreateDetachedRoot(context.Context, Entry, time.Duration) (DetachedBuffer, error)
+	RenewDetachedBuffer(context.Context, BufferID, uint64, time.Duration) (DetachedBuffer, error)
+	ClaimExpiredDetachedBuffer(context.Context, BufferID, Timestamp, time.Duration) (DetachedBuffer, error)
+	ReleaseDetachedBuffer(context.Context, BufferID, uint64) error
+	ExpireDetachedBuffersAfterRestart(context.Context, Timestamp) error
+	CreateDetachedEntry(context.Context, BufferID, uint64, Entry) (Entry, error)
+	SetDetachedDeadProperties(context.Context, BufferID, uint64, EntryID, []DeadPropertyChange) error
+	PublishDetachedRoot(context.Context, BufferID, uint64, EntryID, string) (Entry, error)
 	DetachTree(context.Context, EntryID, uint64, EntryID) (DetachedBuffer, error)
 	DetachedBuffers(context.Context) ([]DetachedBuffer, error)
-	ListDetachedChildren(context.Context, BufferID, EntryID) ([]Entry, error)
-	DeleteDetachedEntry(context.Context, BufferID, EntryID) error
+	ListDetachedChildren(context.Context, BufferID, uint64, EntryID) ([]Entry, error)
+	DeleteDetachedEntry(context.Context, BufferID, uint64, EntryID) error
 }

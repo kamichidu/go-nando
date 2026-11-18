@@ -167,6 +167,8 @@ func (d *stubDaemon) Call(_ context.Context, method string, params, result any) 
 		}
 		if s.followID {
 			if !d.exists || d.entry.ID != "entry-1" {
+				_ = os.Remove(s.file)
+				delete(d.sessions, id)
 				return &controlrpc.RemoteError{Code: controlrpc.CodeEntryConflict, Message: "identity changed"}
 			}
 			s.path = d.path
@@ -642,6 +644,74 @@ func TestReadHandleGetattrRefreshesLinkedMetadata(t *testing.T) {
 	}
 	if got := out.Mode & 0o7777; got != 0o604 {
 		t.Fatalf("linked read-handle mode=%o, want external mode 604", got)
+	}
+}
+
+func TestOpenHandlesSurviveExternalRecursiveDeleteWithoutWriteResurrection(t *testing.T) {
+	ctx := context.Background()
+	d := newStub(t, []byte("original"))
+	f := New(d)
+	root := &entryNode{owner: f, entry: controlrpc.Entry{ID: "root", Kind: "directory", Mode: 0o755}, path: "/"}
+	_ = fs.NewNodeFS(root, &fs.Options{})
+	var ent fuse.EntryOut
+	if _, errno := root.Lookup(ctx, "file", &ent); errno != 0 {
+		t.Fatal(errno)
+	}
+	node := f.byID[d.entry.ID]
+	rh, _, errno := node.Open(ctx, uint32(os.O_RDONLY))
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	wh, _, errno := node.Open(ctx, uint32(os.O_RDWR))
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	reader, writer := mustFileHandle(t, rh), mustFileHandle(t, wh)
+	if _, errno := writer.Write(ctx, []byte("changed"), 0); errno != 0 {
+		t.Fatal(errno)
+	}
+	d.mu.Lock()
+	d.exists = false
+	d.mu.Unlock() // another adapter atomically detached the parent subtree
+	var attr fuse.AttrOut
+	if errno := node.Getattr(ctx, rh, &attr); errno != 0 {
+		t.Fatalf("read getattr after external detach: %v", errno)
+	}
+	if errno := reader.Getattr(ctx, &attr); errno != 0 {
+		t.Fatalf("read handle getattr after external detach: %v", errno)
+	}
+	size := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE, Size: 3}}
+	if errno := node.Setattr(ctx, wh, size, &attr); errno != 0 {
+		t.Fatalf("write setattr/truncate after external detach: %v", errno)
+	}
+	if attr.Size != 3 {
+		t.Fatalf("detached staging size=%d, want 3", attr.Size)
+	}
+	data, errno := reader.Read(ctx, make([]byte, 8), 0)
+	if errno != 0 {
+		t.Fatalf("read after external detach: %v", errno)
+	}
+	buf := make([]byte, 8)
+	got, status := data.Bytes(buf)
+	if status != fuse.OK || string(got) != "original" {
+		t.Fatalf("read after external detach=%q status=%v", got, status)
+	}
+	if errno := writer.Fsync(ctx, 0); errno != 0 {
+		t.Fatalf("fsync detached writer: %v", errno)
+	}
+	if errno := writer.Release(ctx); errno != 0 {
+		t.Fatalf("release detached writer: %v", errno)
+	}
+	if errno := reader.Release(ctx); errno != 0 {
+		t.Fatalf("release detached reader: %v", errno)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.commits != 0 {
+		t.Fatalf("detached write committed %d times", d.commits)
+	}
+	if len(d.sessions) != 0 {
+		t.Fatalf("detached sessions remain: %+v", d.sessions)
 	}
 }
 

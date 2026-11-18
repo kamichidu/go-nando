@@ -2739,7 +2739,17 @@ func TestDetachedBuffersArePrivateAndResumable(t *testing.T) {
 	if buffers, err := store.DetachedBuffers(ctx); err != nil || len(buffers) != 2 {
 		t.Fatalf("buffer registry=%+v err=%v", buffers, err)
 	}
-	if err := store.DeleteDetachedEntry(ctx, buffer.ID, "leaf"); err != nil {
+	claimed, err := store.ClaimExpiredDetachedBuffer(ctx, buffer.ID, metadata.TimestampFromTime(time.Now().Add(25*time.Hour)), time.Minute)
+	if err != nil || !claimed.Claimed || claimed.Fencing == buffer.Fencing {
+		t.Fatalf("expired claim=%+v err=%v", claimed, err)
+	}
+	if _, err := store.RenewDetachedBuffer(ctx, buffer.ID, buffer.Fencing, time.Minute); !errors.Is(err, metadata.ErrEntryConflict) {
+		t.Fatalf("stale lease renewal after claim=%v, want conflict", err)
+	}
+	if _, err := store.PublishDetachedRoot(ctx, buffer.ID, buffer.Fencing, root, "published"); !errors.Is(err, metadata.ErrEntryConflict) {
+		t.Fatalf("stale publish after claim=%v, want conflict", err)
+	}
+	if err := store.DeleteDetachedEntry(ctx, buffer.ID, claimed.Fencing, "leaf"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -2753,15 +2763,61 @@ func TestDetachedBuffersArePrivateAndResumable(t *testing.T) {
 	if err != nil || len(buffers) != 2 {
 		t.Fatalf("detached buffer not durable after restart: buffers=%+v err=%v", buffers, err)
 	}
-	if err := store.DeleteDetachedEntry(ctx, buffer.ID, tree); err != nil {
+	if err := store.DeleteDetachedEntry(ctx, buffer.ID, claimed.Fencing, tree); err != nil {
 		t.Fatalf("resume root reclamation: %v", err)
 	}
-	if err := store.DeleteDetachedEntry(ctx, secondBuffer.ID, other); err != nil {
+	secondClaim, err := store.ClaimExpiredDetachedBuffer(ctx, secondBuffer.ID, metadata.TimestampFromTime(time.Now().Add(25*time.Hour)), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteDetachedEntry(ctx, secondBuffer.ID, secondClaim.Fencing, other); err != nil {
 		t.Fatalf("reclaim second independent buffer: %v", err)
 	}
 	buffers, err = store.DetachedBuffers(ctx)
 	if err != nil || len(buffers) != 0 {
 		t.Fatalf("completed buffer remains registered: buffers=%+v err=%v", buffers, err)
+	}
+}
+
+func TestActiveDetachedCopyLeaseBlocksClaimAndFencesAfterExpiry(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
+		t.Fatal(err)
+	}
+	now := metadata.TimestampFromTime(time.Now())
+	buffer, err := store.CreateDetachedRoot(ctx, metadata.Entry{ID: "copy-stage", Kind: metadata.EntryKindDirectory, Mode: 0o700, Revision: 1, CreatedAt: now, UpdatedAt: now}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClaimExpiredDetachedBuffer(ctx, buffer.ID, now, time.Minute); !errors.Is(err, metadata.ErrEntryConflict) {
+		t.Fatalf("claim active copy=%v", err)
+	}
+	renewed, err := store.RenewDetachedBuffer(ctx, buffer.ID, buffer.Fencing, time.Minute)
+	if err != nil || renewed.Fencing != buffer.Fencing {
+		t.Fatalf("renew=%+v err=%v", renewed, err)
+	}
+	claimed, err := store.ClaimExpiredDetachedBuffer(ctx, buffer.ID, metadata.TimestampFromTime(time.Now().Add(2*time.Minute)), time.Minute)
+	if err != nil || !claimed.Claimed || claimed.Fencing == buffer.Fencing {
+		t.Fatalf("claim expired copy=%+v err=%v", claimed, err)
+	}
+	if _, err := store.RenewDetachedBuffer(ctx, buffer.ID, buffer.Fencing, time.Minute); !errors.Is(err, metadata.ErrEntryConflict) {
+		t.Fatalf("stale renewal=%v", err)
+	}
+	rootID := buffer.RootID
+	child := metadata.Entry{ID: "stale-child", ParentID: &rootID, Name: "child", Kind: metadata.EntryKindDirectory, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if _, err := store.CreateDetachedEntry(ctx, buffer.ID, buffer.Fencing, child); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("stale mutation=%v", err)
+	}
+	if _, err := store.PublishDetachedRoot(ctx, buffer.ID, buffer.Fencing, "root", "copy"); !errors.Is(err, metadata.ErrEntryConflict) {
+		t.Fatalf("stale publish=%v", err)
+	}
+	if err := store.DeleteDetachedEntry(ctx, buffer.ID, claimed.Fencing, buffer.RootID); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -2787,6 +2843,27 @@ func TestPreReleaseV1CompletionAddsMissingInternalBufferRegistry(t *testing.T) {
 	}
 	if err := store.CheckMigrations(ctx); err != nil {
 		t.Fatalf("completed schema is invalid: %v", err)
+	}
+}
+
+func TestPreReleaseV1CompletionAddsInternalBufferLeaseColumns(t *testing.T) {
+	ctx := context.Background()
+	store, _ := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
+	defer store.Close()
+	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `DROP TABLE internal_buffers; CREATE TABLE internal_buffers (buffer_id TEXT PRIMARY KEY, root_entry_id TEXT NOT NULL UNIQUE REFERENCES entries(entry_id) ON DELETE CASCADE)`); err != nil {
+		t.Fatal(err)
+	}
+	if !store.IsPreReleaseV1Candidate(ctx) {
+		t.Fatal("lease-less six-table schema not recognized")
+	}
+	if err := store.CompletePreReleaseV1(ctx); err != nil {
+		t.Fatalf("migrate internal buffer lease columns: %v", err)
+	}
+	if err := store.CheckMigrations(ctx); err != nil {
+		t.Fatalf("migrated schema invalid: %v", err)
 	}
 }
 
@@ -2848,5 +2925,34 @@ func TestCommitPutTransferQueue(t *testing.T) {
 	ids, err = store.PendingTransfers(ctx)
 	if err != nil || len(ids) != 0 {
 		t.Fatalf("failed Put leaked transfer queue state: %v, err %v", ids, err)
+	}
+}
+
+func TestCommitPutCannotResurrectDetachedExpectedEntry(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewStore(filepath.Join(t.TempDir(), "metadata.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Initialize(ctx, repositoryformat.Current()); err != nil {
+		t.Fatal(err)
+	}
+	objectID, err := content.ParseID("sha256-07e23ede2756aa3f5f7cc9759117c4910875e032c27b8556a1e20626224f10ec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := metadata.EntryID("root")
+	now := metadata.TimestampFromTime(time.Now())
+	entry := metadata.Entry{ID: "expected", ParentID: &root, Name: "file", Kind: metadata.EntryKindFile, ObjectID: &objectID, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if _, err := store.CommitPut(ctx, entry, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DetachTree(ctx, entry.ID, 1, root); err != nil {
+		t.Fatal(err)
+	}
+	entry.Revision = 1
+	if _, err := store.CommitPut(ctx, entry, false); !errors.Is(err, metadata.ErrEntryNotFound) {
+		t.Fatalf("CommitPut resurrected detached Entry: %v", err)
 	}
 }

@@ -20,3 +20,7 @@ func (a *App) RemoveEntry(ctx context.Context, id metadata.EntryID) error {
 func (a *App) ReclaimDetached(ctx context.Context) error {
 	return a.repo.ReclaimDetached(ctx)
 }
+
+func (a *App) RecoverDetachedAfterRestart(ctx context.Context) error {
+	return a.repo.RecoverDetachedAfterRestart(ctx)
+}

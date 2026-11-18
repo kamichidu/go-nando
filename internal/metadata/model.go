@@ -22,8 +22,11 @@ type BufferID string
 
 // DetachedBuffer identifies the detached root of one independently reclaimable subtree.
 type DetachedBuffer struct {
-	ID     BufferID
-	RootID EntryID
+	ID        BufferID
+	RootID    EntryID
+	ExpiresAt Timestamp
+	Fencing   uint64
+	Claimed   bool
 }
 
 // DeadProperty is an opaque WebDAV property value keyed by an Entry and expanded name.

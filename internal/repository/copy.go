@@ -76,35 +76,40 @@ func (r *Repository) CopyEntry(ctx context.Context, id metadata.EntryID, sourceP
 			return false, fmt.Errorf("destination exists: %w", metadata.ErrEntryConflict)
 		}
 		now := metadata.TimestampFromTime(time.Now().UTC())
-		tmp, err := r.bufferStore.CreateDetachedRoot(ctx, metadata.Entry{ID: metadata.EntryID(uuid.NewString()), Kind: metadata.EntryKindDirectory, Mtime: snapshot.entry.Mtime, Mode: snapshot.entry.Mode, Revision: 1, CreatedAt: now, UpdatedAt: now})
+		tmp, err := r.bufferStore.CreateDetachedRoot(ctx, metadata.Entry{ID: metadata.EntryID(uuid.NewString()), Kind: metadata.EntryKindDirectory, Mtime: snapshot.entry.Mtime, Mode: snapshot.entry.Mode, Revision: 1, CreatedAt: now, UpdatedAt: now}, internalBufferLeaseTTL)
 		if err != nil {
 			return false, err
 		}
 		published := false
 		return r.withBufferedCopyCleanup(tmp, &published, func() (bool, error) {
-			if err := r.cloneDeadProperties(ctx, tmp.ID, snapshot.entry.ID, tmp.RootID); err != nil {
+			leaseCtx, stopLease := r.renewDetachedBuffer(ctx, tmp)
+			defer stopLease()
+			if err := r.cloneDeadProperties(leaseCtx, tmp, snapshot.entry.ID, tmp.RootID); err != nil {
 				return false, err
 			}
 			if depth == "infinity" {
-				if err := r.copySnapshotChildren(ctx, tmp.ID, snapshot, metadata.Entry{ID: tmp.RootID}); err != nil {
+				if err := r.copySnapshotChildren(leaseCtx, tmp, snapshot, metadata.Entry{ID: tmp.RootID}); err != nil {
 					return false, err
 				}
 			}
-			if err := r.verifyCopySnapshot(ctx, snapshot); err != nil {
+			if err := r.verifyCopySnapshot(leaseCtx, snapshot); err != nil {
 				return false, err
 			}
-			currentParent, err := r.ResolvePath(ctx, path.Dir(dst))
+			if _, err := r.bufferStore.RenewDetachedBuffer(leaseCtx, tmp.ID, tmp.Fencing, internalBufferLeaseTTL); err != nil {
+				return false, err
+			}
+			currentParent, err := r.ResolvePath(leaseCtx, path.Dir(dst))
 			if err != nil || currentParent.ID != parent.ID || currentParent.Kind != metadata.EntryKindDirectory {
 				return false, fmt.Errorf("COPY destination parent changed: %w", metadata.ErrEntryConflict)
 			}
 			backupPath := ""
 			if exists {
 				backupPath = "/.nando-copy-old-" + uuid.NewString()
-				if err := r.MoveEntry(ctx, existing.ID, backupPath); err != nil {
+				if err := r.MoveEntry(leaseCtx, existing.ID, backupPath); err != nil {
 					return false, err
 				}
 			}
-			if _, err := r.bufferStore.PublishDetachedRoot(ctx, tmp.ID, parent.ID, name); err != nil {
+			if _, err := r.bufferStore.PublishDetachedRoot(leaseCtx, tmp.ID, tmp.Fencing, parent.ID, name); err != nil {
 				if backupPath != "" {
 					return false, errors.Join(err, fmt.Errorf("displaced destination remains at %s", backupPath))
 				}
@@ -129,7 +134,15 @@ func (r *Repository) withBufferedCopyCleanup(buffer metadata.DetachedBuffer, pub
 		}
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), putCleanupTimeout)
 		defer cancel()
-		if err := r.reclaimDetachedBuffer(cleanupCtx, buffer); err != nil {
+		if _, err := r.bufferStore.RenewDetachedBuffer(cleanupCtx, buffer.ID, buffer.Fencing, -time.Second); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("expire COPY lease for cleanup: %w", err))
+			return
+		}
+		claimed, err := r.bufferStore.ClaimExpiredDetachedBuffer(cleanupCtx, buffer.ID, metadata.TimestampFromTime(time.Now()), internalBufferLeaseTTL)
+		if err == nil {
+			err = r.reclaimDetachedBuffer(cleanupCtx, claimed)
+		}
+		if err != nil {
 			retErr = errors.Join(retErr, fmt.Errorf("COPY staging remains in internal buffer %s for retry: %w", buffer.ID, err))
 		}
 	}()
@@ -191,7 +204,7 @@ func (r *Repository) captureCopySnapshot(ctx context.Context, entry metadata.Ent
 	return snapshot, nil
 }
 
-func (r *Repository) copySnapshotChildren(ctx context.Context, buffer metadata.BufferID, snapshot copySnapshot, target metadata.Entry) error {
+func (r *Repository) copySnapshotChildren(ctx context.Context, buffer metadata.DetachedBuffer, snapshot copySnapshot, target metadata.Entry) error {
 	for _, childSnapshot := range snapshot.children {
 		child := childSnapshot.entry
 		copyEntry := child
@@ -200,7 +213,10 @@ func (r *Repository) copySnapshotChildren(ctx context.Context, buffer metadata.B
 		copyEntry.Revision = 1
 		copyEntry.CreatedAt = metadata.TimestampFromTime(time.Now().UTC())
 		copyEntry.UpdatedAt = copyEntry.CreatedAt
-		created, err := r.bufferStore.CreateDetachedEntry(ctx, buffer, copyEntry)
+		if _, err := r.bufferStore.RenewDetachedBuffer(ctx, buffer.ID, buffer.Fencing, internalBufferLeaseTTL); err != nil {
+			return err
+		}
+		created, err := r.bufferStore.CreateDetachedEntry(ctx, buffer.ID, buffer.Fencing, copyEntry)
 		if err != nil {
 			return err
 		}
@@ -216,7 +232,7 @@ func (r *Repository) copySnapshotChildren(ctx context.Context, buffer metadata.B
 	return nil
 }
 
-func (r *Repository) cloneDeadProperties(ctx context.Context, buffer metadata.BufferID, source, target metadata.EntryID) error {
+func (r *Repository) cloneDeadProperties(ctx context.Context, buffer metadata.DetachedBuffer, source, target metadata.EntryID) error {
 	properties, err := r.metaStore.GetDeadProperties(ctx, source)
 	if err != nil {
 		return err
@@ -228,7 +244,10 @@ func (r *Repository) cloneDeadProperties(ctx context.Context, buffer metadata.Bu
 	for _, p := range properties {
 		changes = append(changes, metadata.DeadPropertyChange{Property: p})
 	}
-	return r.bufferStore.SetDetachedDeadProperties(ctx, buffer, target, changes)
+	if _, err := r.bufferStore.RenewDetachedBuffer(ctx, buffer.ID, buffer.Fencing, internalBufferLeaseTTL); err != nil {
+		return err
+	}
+	return r.bufferStore.SetDetachedDeadProperties(ctx, buffer.ID, buffer.Fencing, target, changes)
 }
 
 // verifyCopySnapshot rechecks membership and revisions after staging, catching

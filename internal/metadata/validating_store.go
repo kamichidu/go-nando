@@ -23,33 +23,61 @@ func NewValidatingStore(next MetadataStore) *ValidatingStore {
 // Ensure ValidatingStore implements MetadataStore
 var _ MetadataStore = (*ValidatingStore)(nil)
 
-func (s *ValidatingStore) CreateDetachedRoot(ctx context.Context, entry Entry) (DetachedBuffer, error) {
+func (s *ValidatingStore) CreateDetachedRoot(ctx context.Context, entry Entry, ttl time.Duration) (DetachedBuffer, error) {
 	bufferStore, ok := s.next.(InternalBufferStore)
 	if !ok {
 		return DetachedBuffer{}, fmt.Errorf("metadata store does not support internal buffers")
 	}
-	return bufferStore.CreateDetachedRoot(ctx, entry)
+	return bufferStore.CreateDetachedRoot(ctx, entry, ttl)
 }
-func (s *ValidatingStore) CreateDetachedEntry(ctx context.Context, buffer BufferID, entry Entry) (Entry, error) {
+func (s *ValidatingStore) RenewDetachedBuffer(ctx context.Context, id BufferID, fence uint64, ttl time.Duration) (DetachedBuffer, error) {
 	bufferStore, ok := s.next.(InternalBufferStore)
 	if !ok {
-		return Entry{}, fmt.Errorf("metadata store does not support internal buffers")
+		return DetachedBuffer{}, fmt.Errorf("metadata store does not support internal buffers")
 	}
-	return bufferStore.CreateDetachedEntry(ctx, buffer, entry)
+	return bufferStore.RenewDetachedBuffer(ctx, id, fence, ttl)
 }
-func (s *ValidatingStore) SetDetachedDeadProperties(ctx context.Context, buffer BufferID, id EntryID, changes []DeadPropertyChange) error {
+func (s *ValidatingStore) ClaimExpiredDetachedBuffer(ctx context.Context, id BufferID, now Timestamp, ttl time.Duration) (DetachedBuffer, error) {
+	bufferStore, ok := s.next.(InternalBufferStore)
+	if !ok {
+		return DetachedBuffer{}, fmt.Errorf("metadata store does not support internal buffers")
+	}
+	return bufferStore.ClaimExpiredDetachedBuffer(ctx, id, now, ttl)
+}
+func (s *ValidatingStore) ReleaseDetachedBuffer(ctx context.Context, id BufferID, fence uint64) error {
 	bufferStore, ok := s.next.(InternalBufferStore)
 	if !ok {
 		return fmt.Errorf("metadata store does not support internal buffers")
 	}
-	return bufferStore.SetDetachedDeadProperties(ctx, buffer, id, changes)
+	return bufferStore.ReleaseDetachedBuffer(ctx, id, fence)
 }
-func (s *ValidatingStore) PublishDetachedRoot(ctx context.Context, buffer BufferID, parent EntryID, name string) (Entry, error) {
+func (s *ValidatingStore) ExpireDetachedBuffersAfterRestart(ctx context.Context, now Timestamp) error {
+	bufferStore, ok := s.next.(InternalBufferStore)
+	if !ok {
+		return fmt.Errorf("metadata store does not support internal buffers")
+	}
+	return bufferStore.ExpireDetachedBuffersAfterRestart(ctx, now)
+}
+func (s *ValidatingStore) CreateDetachedEntry(ctx context.Context, buffer BufferID, fence uint64, entry Entry) (Entry, error) {
 	bufferStore, ok := s.next.(InternalBufferStore)
 	if !ok {
 		return Entry{}, fmt.Errorf("metadata store does not support internal buffers")
 	}
-	return bufferStore.PublishDetachedRoot(ctx, buffer, parent, name)
+	return bufferStore.CreateDetachedEntry(ctx, buffer, fence, entry)
+}
+func (s *ValidatingStore) SetDetachedDeadProperties(ctx context.Context, buffer BufferID, fence uint64, id EntryID, changes []DeadPropertyChange) error {
+	bufferStore, ok := s.next.(InternalBufferStore)
+	if !ok {
+		return fmt.Errorf("metadata store does not support internal buffers")
+	}
+	return bufferStore.SetDetachedDeadProperties(ctx, buffer, fence, id, changes)
+}
+func (s *ValidatingStore) PublishDetachedRoot(ctx context.Context, buffer BufferID, fence uint64, parent EntryID, name string) (Entry, error) {
+	bufferStore, ok := s.next.(InternalBufferStore)
+	if !ok {
+		return Entry{}, fmt.Errorf("metadata store does not support internal buffers")
+	}
+	return bufferStore.PublishDetachedRoot(ctx, buffer, fence, parent, name)
 }
 
 func (s *ValidatingStore) DetachTree(ctx context.Context, id EntryID, revision uint64, expectedParent EntryID) (DetachedBuffer, error) {
@@ -66,19 +94,19 @@ func (s *ValidatingStore) DetachedBuffers(ctx context.Context) ([]DetachedBuffer
 	}
 	return bufferStore.DetachedBuffers(ctx)
 }
-func (s *ValidatingStore) ListDetachedChildren(ctx context.Context, buffer BufferID, parent EntryID) ([]Entry, error) {
+func (s *ValidatingStore) ListDetachedChildren(ctx context.Context, buffer BufferID, fence uint64, parent EntryID) ([]Entry, error) {
 	bufferStore, ok := s.next.(InternalBufferStore)
 	if !ok {
 		return nil, fmt.Errorf("metadata store does not support internal buffers")
 	}
-	return bufferStore.ListDetachedChildren(ctx, buffer, parent)
+	return bufferStore.ListDetachedChildren(ctx, buffer, fence, parent)
 }
-func (s *ValidatingStore) DeleteDetachedEntry(ctx context.Context, buffer BufferID, id EntryID) error {
+func (s *ValidatingStore) DeleteDetachedEntry(ctx context.Context, buffer BufferID, fence uint64, id EntryID) error {
 	bufferStore, ok := s.next.(InternalBufferStore)
 	if !ok {
 		return fmt.Errorf("metadata store does not support internal buffers")
 	}
-	return bufferStore.DeleteDetachedEntry(ctx, buffer, id)
+	return bufferStore.DeleteDetachedEntry(ctx, buffer, fence, id)
 }
 
 func (s *ValidatingStore) GetDeadProperties(ctx context.Context, id EntryID) ([]DeadProperty, error) {

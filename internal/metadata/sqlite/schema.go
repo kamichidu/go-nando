@@ -40,7 +40,10 @@ CREATE TABLE dead_properties (
 );
 CREATE TABLE internal_buffers (
     buffer_id TEXT PRIMARY KEY,
-    root_entry_id TEXT NOT NULL UNIQUE REFERENCES entries(entry_id) ON DELETE CASCADE
+    root_entry_id TEXT NOT NULL UNIQUE REFERENCES entries(entry_id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL DEFAULT 0,
+    fencing INTEGER NOT NULL DEFAULT 1,
+    claimed INTEGER NOT NULL DEFAULT 0
 );
 `
 

@@ -41,6 +41,25 @@ type failNamedCreateMetadataStore struct {
 	failID metadata.EntryID
 }
 
+type blockingDetachedCreateStore struct {
+	metadata.MetadataStore
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingDetachedCreateStore) CreateDetachedEntry(ctx context.Context, buffer metadata.BufferID, fence uint64, entry metadata.Entry) (metadata.Entry, error) {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return metadata.Entry{}, ctx.Err()
+	}
+	return s.MetadataStore.CreateDetachedEntry(ctx, buffer, fence, entry)
+}
+
 func (s *failNamedCreateMetadataStore) Create(ctx context.Context, entry metadata.Entry) (metadata.Entry, error) {
 	if entry.Name == s.name {
 		return metadata.Entry{}, errors.New("injected COPY staging create failure")
@@ -48,8 +67,8 @@ func (s *failNamedCreateMetadataStore) Create(ctx context.Context, entry metadat
 	return s.MetadataStore.Create(ctx, entry)
 }
 
-func (s *failNamedCreateMetadataStore) CreateDetachedEntry(ctx context.Context, buffer metadata.BufferID, entry metadata.Entry) (metadata.Entry, error) {
-	created, err := s.MetadataStore.CreateDetachedEntry(ctx, buffer, entry)
+func (s *failNamedCreateMetadataStore) CreateDetachedEntry(ctx context.Context, buffer metadata.BufferID, fence uint64, entry metadata.Entry) (metadata.Entry, error) {
+	created, err := s.MetadataStore.CreateDetachedEntry(ctx, buffer, fence, entry)
 	if err != nil {
 		return metadata.Entry{}, err
 	}
@@ -60,11 +79,11 @@ func (s *failNamedCreateMetadataStore) CreateDetachedEntry(ctx context.Context, 
 	return created, nil
 }
 
-func (s *failNamedCreateMetadataStore) DeleteDetachedEntry(ctx context.Context, buffer metadata.BufferID, id metadata.EntryID) error {
+func (s *failNamedCreateMetadataStore) DeleteDetachedEntry(ctx context.Context, buffer metadata.BufferID, fence uint64, id metadata.EntryID) error {
 	if id == s.failID {
 		return errors.New("injected detached COPY reclaim failure")
 	}
-	return s.MetadataStore.DeleteDetachedEntry(ctx, buffer, id)
+	return s.MetadataStore.DeleteDetachedEntry(ctx, buffer, fence, id)
 }
 
 func (s *failDeleteMetadataStore) ListChildren(ctx context.Context, id metadata.EntryID) ([]metadata.Entry, error) {
@@ -80,11 +99,11 @@ func (s *failDeleteMetadataStore) Delete(ctx context.Context, id metadata.EntryI
 	return s.MetadataStore.Delete(ctx, id)
 }
 
-func (s *failDeleteMetadataStore) DeleteDetachedEntry(ctx context.Context, buffer metadata.BufferID, id metadata.EntryID) error {
+func (s *failDeleteMetadataStore) DeleteDetachedEntry(ctx context.Context, buffer metadata.BufferID, fence uint64, id metadata.EntryID) error {
 	if id == s.failID {
 		return errors.New("injected metadata delete failure")
 	}
-	return s.MetadataStore.DeleteDetachedEntry(ctx, buffer, id)
+	return s.MetadataStore.DeleteDetachedEntry(ctx, buffer, fence, id)
 }
 
 type fakeRemoteObjectStore struct {
@@ -1818,6 +1837,66 @@ func TestCollectionCopySharesObjectsAndSupportsDepthAndOverwrite(t *testing.T) {
 	}
 }
 
+func TestActiveCollectionCopyLeaseProtectsStagingFromReclaimer(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	hasher := content.NewHasher()
+	meta := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
+	objects, err := local.NewStore(filepath.Join(tempDir, "objects"), filepath.Join(tempDir, "temp"), hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := openRepositoryInstance(t, tempDir, meta, objects, hasher)
+	if err := repo.Mkdir(ctx, "/source", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(tempDir, "payload")
+	if err := os.WriteFile(file, []byte("copy bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Put(ctx, file, "/source/file"); err != nil {
+		t.Fatal(err)
+	}
+	source, err := repo.Stat(ctx, "/source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocking := &blockingDetachedCreateStore{MetadataStore: meta, entered: make(chan struct{}, 1), release: make(chan struct{})}
+	copyRepo := openRepositoryInstance(t, tempDir, blocking, objects, hasher)
+	done := make(chan error, 1)
+	go func() {
+		_, err := copyRepo.CopyEntry(ctx, source.ID, "/source", source.Revision, "/copy", "infinity", false)
+		done <- err
+	}()
+	select {
+	case <-blocking.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("COPY did not reach staged child creation")
+	}
+	if err := repo.ReclaimDetached(ctx); err != nil {
+		t.Fatalf("reclaimer raced active COPY: %v", err)
+	}
+	buffers, err := meta.DetachedBuffers(ctx)
+	if err != nil || len(buffers) != 1 {
+		t.Fatalf("active COPY buffer lost: %+v err=%v", buffers, err)
+	}
+	if buffers[0].Claimed {
+		t.Fatal("reclaimer claimed an unexpired active COPY lease")
+	}
+	close(blocking.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("COPY after reclaimer pass: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("COPY did not finish")
+	}
+	if _, err := repo.Stat(ctx, "/copy/file"); err != nil {
+		t.Fatalf("COPY was not published: %v", err)
+	}
+}
+
 func TestCollectionCopyFailureKeepsPrivateBufferForRestartReclaim(t *testing.T) {
 	ctx := context.Background()
 	tempDir := t.TempDir()
@@ -1863,7 +1942,7 @@ func TestCollectionCopyFailureKeepsPrivateBufferForRestartReclaim(t *testing.T) 
 	}
 	reopened := openInitializedMetadataStore(t, filepath.Join(tempDir, "metadata.sqlite"), ctx)
 	reopenedRepo := openRepositoryInstance(t, tempDir, reopened, objects, hasher)
-	if err := reopenedRepo.ReclaimDetached(ctx); err != nil {
+	if err := reopenedRepo.RecoverDetachedAfterRestart(ctx); err != nil {
 		t.Fatalf("restart did not reclaim failed COPY staging: %v", err)
 	}
 	if buffers, err := reopened.DetachedBuffers(ctx); err != nil || len(buffers) != 0 {
@@ -1970,7 +2049,7 @@ func TestRemoveCollectionReportsPartialFailure(t *testing.T) {
 		}
 	})
 	restarted := openRepositoryInstance(t, tempDir, reopened, objects, hasher)
-	if err := restarted.ReclaimDetached(ctx); err != nil {
+	if err := restarted.RecoverDetachedAfterRestart(ctx); err != nil {
 		t.Fatalf("resume detached-tree reclamation after restart: %v", err)
 	}
 	if buffers, err := reopened.DetachedBuffers(ctx); err != nil || len(buffers) != 0 {

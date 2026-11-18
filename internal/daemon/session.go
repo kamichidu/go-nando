@@ -390,6 +390,22 @@ func (m *sessionManager) commit(ctx context.Context, id string) error {
 		commitErr = m.putSessionContent(ctx, input, session.recoveryRecord)
 	}
 	if commitErr != nil {
+		if session.FollowEntryID && (errors.Is(commitErr, metadata.ErrEntryNotFound) || errors.Is(commitErr, metadata.ErrEntryConflict)) {
+			if err := m.markDiscarding(&session.recoveryRecord, "stable FUSE Entry was detached before Commit"); err != nil {
+				m.mu.Lock()
+				session.inFlight = false
+				m.mu.Unlock()
+				return errors.Join(commitErr, err)
+			}
+			discardErr := m.finishDiscardedRecord(&session.recoveryRecord)
+			m.mu.Lock()
+			session.inFlight = false
+			if discardErr == nil {
+				delete(m.sessions, id)
+			}
+			m.mu.Unlock()
+			return errors.Join(commitErr, discardErr)
+		}
 		preserveErr := m.preserve(&session.recoveryRecord, commitErr.Error())
 		m.mu.Lock()
 		session.inFlight = false

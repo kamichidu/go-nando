@@ -237,7 +237,7 @@ func (s *Store) CheckMigrations(ctx context.Context) error {
 		"transfer_queue":    {"content_id", "enqueued_at"},
 		"content_metadata":  {"content_id", "md5"},
 		"dead_properties":   {"entry_id", "namespace_uri", "localname", "xml_value"},
-		"internal_buffers":  {"buffer_id", "root_entry_id"},
+		"internal_buffers":  {"buffer_id", "root_entry_id", "expires_at", "fencing", "claimed"},
 	} {
 		columns, err := s.tableColumns(ctx, table)
 		if err != nil {
@@ -283,7 +283,7 @@ func (s *Store) CheckMigrations(ctx context.Context) error {
 				v = strings.ReplaceAll(v, ", ", ",")
 				return v
 			}
-			expected := "CREATE TABLE internal_buffers (buffer_id TEXT PRIMARY KEY, root_entry_id TEXT NOT NULL UNIQUE REFERENCES entries(entry_id) ON DELETE CASCADE)"
+			expected := "CREATE TABLE internal_buffers (buffer_id TEXT PRIMARY KEY, root_entry_id TEXT NOT NULL UNIQUE REFERENCES entries(entry_id) ON DELETE CASCADE, expires_at INTEGER NOT NULL DEFAULT 0, fencing INTEGER NOT NULL DEFAULT 1, claimed INTEGER NOT NULL DEFAULT 0)"
 			if normalize(ddl) != normalize(expected) {
 				return fmt.Errorf("%w: internal_buffers has an unknown definition", ErrSchemaVersionUnsupported)
 			}
@@ -306,6 +306,45 @@ func (s *Store) CompletePreReleaseV1(ctx context.Context) error {
 		return fmt.Errorf("%w: completion requires v1", ErrSchemaVersionUnsupported)
 	}
 	if tables == 6 {
+		if err := s.CheckMigrations(ctx); err == nil {
+			return nil
+		}
+		cols, err := s.tableColumns(ctx, "internal_buffers")
+		if err != nil || len(cols) != 2 || !cols["buffer_id"] || !cols["root_entry_id"] {
+			return fmt.Errorf("%w: unknown six-table pre-release schema", ErrSchemaVersionUnsupported)
+		}
+		var ddl string
+		if err := s.db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='internal_buffers'").Scan(&ddl); err != nil {
+			return err
+		}
+		normalize := func(v string) string {
+			v = strings.Join(strings.Fields(strings.ToLower(v)), " ")
+			v = strings.ReplaceAll(v, "( ", "(")
+			v = strings.ReplaceAll(v, " )", ")")
+			v = strings.ReplaceAll(v, ", ", ",")
+			return v
+		}
+		want := "CREATE TABLE internal_buffers (buffer_id TEXT PRIMARY KEY, root_entry_id TEXT NOT NULL UNIQUE REFERENCES entries(entry_id) ON DELETE CASCADE)"
+		if normalize(ddl) != normalize(want) {
+			return fmt.Errorf("%w: unknown pre-release internal_buffers schema", ErrSchemaVersionUnsupported)
+		}
+		tx, err := s.beginTx(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		for _, stmt := range []string{
+			`ALTER TABLE internal_buffers ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE internal_buffers ADD COLUMN fencing INTEGER NOT NULL DEFAULT 1`,
+			`ALTER TABLE internal_buffers ADD COLUMN claimed INTEGER NOT NULL DEFAULT 0`,
+		} {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 		return s.CheckMigrations(ctx)
 	}
 	if tables != 4 && tables != 5 {
@@ -397,7 +436,7 @@ func (s *Store) CompletePreReleaseV1(ctx context.Context) error {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `CREATE TABLE internal_buffers (buffer_id TEXT PRIMARY KEY, root_entry_id TEXT NOT NULL UNIQUE REFERENCES entries(entry_id) ON DELETE CASCADE)`); err != nil {
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE internal_buffers (buffer_id TEXT PRIMARY KEY, root_entry_id TEXT NOT NULL UNIQUE REFERENCES entries(entry_id) ON DELETE CASCADE, expires_at INTEGER NOT NULL DEFAULT 0, fencing INTEGER NOT NULL DEFAULT 1, claimed INTEGER NOT NULL DEFAULT 0)`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -408,12 +447,18 @@ func (s *Store) IsPreReleaseV1Candidate(ctx context.Context) bool {
 	if s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version) != nil || version != 1 {
 		return false
 	}
-	if s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables) != nil || (tables != 4 && tables != 5) {
+	if s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables) != nil || (tables != 4 && tables != 5 && tables != 6) {
 		return false
 	}
 	var objects int
 	if s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(&objects) != nil || objects != tables {
 		return false
+	}
+	if tables == 6 {
+		cols, err := s.tableColumns(ctx, "internal_buffers")
+		if err != nil || len(cols) != 2 || !cols["buffer_id"] || !cols["root_entry_id"] {
+			return false
+		}
 	}
 	return true
 }
@@ -975,6 +1020,14 @@ func (s *Store) CommitPut(ctx context.Context, entry metadata.Entry, enqueueTran
 
 	existing, getErr := s.getByID(ctx, tx, entry.ID)
 	if errors.Is(getErr, metadata.ErrEntryNotFound) {
+		if entry.ID != "" {
+			var exists int
+			if err := tx.QueryRowContext(ctx, `SELECT 1 FROM entries WHERE entry_id=?`, entry.ID.String()).Scan(&exists); err == nil {
+				return metadata.Entry{}, metadata.ErrEntryNotFound
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return metadata.Entry{}, err
+			}
+		}
 		if err := s.validateCreateInvariants(ctx, tx, entry); err != nil {
 			return metadata.Entry{}, err
 		}
@@ -1366,7 +1419,7 @@ func (s *Store) ListAll(ctx context.Context) ([]metadata.Entry, error) {
 
 // DetachTree atomically removes a public subtree root from path lookup and
 // registers it as one private, independently reclaimable buffer.
-func (s *Store) CreateDetachedRoot(ctx context.Context, entry metadata.Entry) (metadata.DetachedBuffer, error) {
+func (s *Store) CreateDetachedRoot(ctx context.Context, entry metadata.Entry, ttl time.Duration) (metadata.DetachedBuffer, error) {
 	if entry.ID == "" || entry.ID == "root" || entry.ParentID != nil || entry.Name != "" || entry.Kind != metadata.EntryKindDirectory || entry.Revision == 0 {
 		return metadata.DetachedBuffer{}, fmt.Errorf("invalid detached root entry")
 	}
@@ -1378,8 +1431,8 @@ func (s *Store) CreateDetachedRoot(ctx context.Context, entry metadata.Entry) (m
 	if err := insertEntry(ctx, tx, entry); err != nil {
 		return metadata.DetachedBuffer{}, err
 	}
-	buffer := metadata.DetachedBuffer{ID: metadata.BufferID(uuid.NewString()), RootID: entry.ID}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO internal_buffers(buffer_id,root_entry_id) VALUES(?,?)`, string(buffer.ID), entry.ID.String()); err != nil {
+	buffer := metadata.DetachedBuffer{ID: metadata.BufferID(uuid.NewString()), RootID: entry.ID, ExpiresAt: metadata.TimestampFromTime(time.Now().Add(ttl)), Fencing: 1}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO internal_buffers(buffer_id,root_entry_id,expires_at,fencing,claimed) VALUES(?,?,?,?,0)`, string(buffer.ID), entry.ID.String(), int64(buffer.ExpiresAt), buffer.Fencing); err != nil {
 		return metadata.DetachedBuffer{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1409,7 +1462,7 @@ func insertEntry(ctx context.Context, tx *sql.Tx, entry metadata.Entry) error {
 	return nil
 }
 
-func (s *Store) CreateDetachedEntry(ctx context.Context, buffer metadata.BufferID, entry metadata.Entry) (metadata.Entry, error) {
+func (s *Store) CreateDetachedEntry(ctx context.Context, buffer metadata.BufferID, fence uint64, entry metadata.Entry) (metadata.Entry, error) {
 	if entry.ID == "" || entry.ParentID == nil || entry.Name == "" || entry.Revision == 0 || (entry.Kind != metadata.EntryKindFile && entry.Kind != metadata.EntryKindDirectory) {
 		return metadata.Entry{}, fmt.Errorf("invalid detached child entry")
 	}
@@ -1419,7 +1472,7 @@ func (s *Store) CreateDetachedEntry(ctx context.Context, buffer metadata.BufferI
 	}
 	defer tx.Rollback()
 	var belongs int
-	if err := tx.QueryRowContext(ctx, `WITH RECURSIVE tree(entry_id) AS (SELECT root_entry_id FROM internal_buffers WHERE buffer_id=? UNION ALL SELECT entries.entry_id FROM entries JOIN tree ON entries.parent_id=tree.entry_id) SELECT EXISTS(SELECT 1 FROM tree WHERE entry_id=?)`, string(buffer), entry.ParentID.String()).Scan(&belongs); err != nil {
+	if err := tx.QueryRowContext(ctx, `WITH RECURSIVE tree(entry_id) AS (SELECT root_entry_id FROM internal_buffers WHERE buffer_id=? AND fencing=? AND claimed=0 AND expires_at>? UNION ALL SELECT entries.entry_id FROM entries JOIN tree ON entries.parent_id=tree.entry_id) SELECT EXISTS(SELECT 1 FROM tree WHERE entry_id=?)`, string(buffer), fence, int64(metadata.TimestampFromTime(time.Now())), entry.ParentID.String()).Scan(&belongs); err != nil {
 		return metadata.Entry{}, err
 	}
 	if belongs == 0 {
@@ -1440,14 +1493,14 @@ func (s *Store) CreateDetachedEntry(ctx context.Context, buffer metadata.BufferI
 	return entry, nil
 }
 
-func (s *Store) SetDetachedDeadProperties(ctx context.Context, buffer metadata.BufferID, id metadata.EntryID, changes []metadata.DeadPropertyChange) error {
+func (s *Store) SetDetachedDeadProperties(ctx context.Context, buffer metadata.BufferID, fence uint64, id metadata.EntryID, changes []metadata.DeadPropertyChange) error {
 	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	var belongs int
-	if err := tx.QueryRowContext(ctx, `WITH RECURSIVE tree(entry_id) AS (SELECT root_entry_id FROM internal_buffers WHERE buffer_id=? UNION ALL SELECT entries.entry_id FROM entries JOIN tree ON entries.parent_id=tree.entry_id) SELECT EXISTS(SELECT 1 FROM tree WHERE entry_id=?)`, string(buffer), id.String()).Scan(&belongs); err != nil {
+	if err := tx.QueryRowContext(ctx, `WITH RECURSIVE tree(entry_id) AS (SELECT root_entry_id FROM internal_buffers WHERE buffer_id=? AND fencing=? AND claimed=0 AND expires_at>? UNION ALL SELECT entries.entry_id FROM entries JOIN tree ON entries.parent_id=tree.entry_id) SELECT EXISTS(SELECT 1 FROM tree WHERE entry_id=?)`, string(buffer), fence, int64(metadata.TimestampFromTime(time.Now())), id.String()).Scan(&belongs); err != nil {
 		return err
 	}
 	if belongs == 0 {
@@ -1469,7 +1522,7 @@ func (s *Store) SetDetachedDeadProperties(ctx context.Context, buffer metadata.B
 	return tx.Commit()
 }
 
-func (s *Store) PublishDetachedRoot(ctx context.Context, buffer metadata.BufferID, parentID metadata.EntryID, name string) (metadata.Entry, error) {
+func (s *Store) PublishDetachedRoot(ctx context.Context, buffer metadata.BufferID, fence uint64, parentID metadata.EntryID, name string) (metadata.Entry, error) {
 	if name == "" {
 		return metadata.Entry{}, metadata.ErrEntryConflict
 	}
@@ -1498,8 +1551,12 @@ func (s *Store) PublishDetachedRoot(ctx context.Context, buffer metadata.BufferI
 		return metadata.Entry{}, err
 	}
 	var rootID string
-	if err := tx.QueryRowContext(ctx, `SELECT root_entry_id FROM internal_buffers WHERE buffer_id=?`, string(buffer)).Scan(&rootID); err != nil {
-		return metadata.Entry{}, metadata.ErrEntryNotFound
+	var claimed int
+	if err := tx.QueryRowContext(ctx, `SELECT root_entry_id,claimed FROM internal_buffers WHERE buffer_id=? AND fencing=? AND expires_at>?`, string(buffer), fence, int64(metadata.TimestampFromTime(time.Now().UTC()))).Scan(&rootID, &claimed); err != nil {
+		return metadata.Entry{}, metadata.ErrEntryConflict
+	}
+	if claimed != 0 {
+		return metadata.Entry{}, metadata.ErrEntryConflict
 	}
 	root, err := s.getByID(ctx, tx, metadata.EntryID(rootID))
 	if err != nil {
@@ -1543,7 +1600,7 @@ func (s *Store) DetachTree(ctx context.Context, id metadata.EntryID, revision ui
 	if entry.Revision != revision || entry.ParentID == nil || *entry.ParentID != expectedParent {
 		return metadata.DetachedBuffer{}, metadata.ErrEntryConflict
 	}
-	buffer := metadata.DetachedBuffer{ID: metadata.BufferID(uuid.NewString()), RootID: id}
+	buffer := metadata.DetachedBuffer{ID: metadata.BufferID(uuid.NewString()), RootID: id, Fencing: 1, ExpiresAt: metadata.TimestampFromTime(time.Now())}
 	res, err := tx.ExecContext(ctx, `UPDATE entries SET parent_id=NULL,name='',revision=revision+1,updated_at=? WHERE entry_id=? AND revision=?`, int64(metadata.TimestampFromTime(time.Now().UTC())), id.String(), revision)
 	if err != nil {
 		return metadata.DetachedBuffer{}, err
@@ -1551,7 +1608,7 @@ func (s *Store) DetachTree(ctx context.Context, id metadata.EntryID, revision ui
 	if n, _ := res.RowsAffected(); n != 1 {
 		return metadata.DetachedBuffer{}, metadata.ErrEntryConflict
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO internal_buffers(buffer_id,root_entry_id) VALUES(?,?)`, buffer.ID, id.String()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO internal_buffers(buffer_id,root_entry_id,expires_at,fencing,claimed) VALUES(?,?,?,?,0)`, buffer.ID, id.String(), int64(buffer.ExpiresAt), buffer.Fencing); err != nil {
 		return metadata.DetachedBuffer{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1561,7 +1618,7 @@ func (s *Store) DetachTree(ctx context.Context, id metadata.EntryID, revision ui
 }
 
 func (s *Store) DetachedBuffers(ctx context.Context) ([]metadata.DetachedBuffer, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT buffer_id,root_entry_id FROM internal_buffers ORDER BY buffer_id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT buffer_id,root_entry_id,expires_at,fencing,claimed FROM internal_buffers ORDER BY buffer_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -1570,21 +1627,23 @@ func (s *Store) DetachedBuffers(ctx context.Context) ([]metadata.DetachedBuffer,
 	for rows.Next() {
 		var buffer metadata.DetachedBuffer
 		var id, root string
-		if err := rows.Scan(&id, &root); err != nil {
+		var expires int64
+		var claimed int
+		if err := rows.Scan(&id, &root, &expires, &buffer.Fencing, &claimed); err != nil {
 			return nil, err
 		}
-		buffer.ID, buffer.RootID = metadata.BufferID(id), metadata.EntryID(root)
+		buffer.ID, buffer.RootID, buffer.ExpiresAt, buffer.Claimed = metadata.BufferID(id), metadata.EntryID(root), metadata.Timestamp(expires), claimed != 0
 		buffers = append(buffers, buffer)
 	}
 	return buffers, rows.Err()
 }
 
-func (s *Store) ListDetachedChildren(ctx context.Context, bufferID metadata.BufferID, parentID metadata.EntryID) ([]metadata.Entry, error) {
+func (s *Store) ListDetachedChildren(ctx context.Context, bufferID metadata.BufferID, fence uint64, parentID metadata.EntryID) ([]metadata.Entry, error) {
 	var belongs int
 	if err := s.db.QueryRowContext(ctx, `WITH RECURSIVE tree(entry_id) AS (
-		SELECT root_entry_id FROM internal_buffers WHERE buffer_id=?
+		SELECT root_entry_id FROM internal_buffers WHERE buffer_id=? AND fencing=? AND claimed=1
 		UNION ALL SELECT entries.entry_id FROM entries JOIN tree ON entries.parent_id=tree.entry_id
-	) SELECT EXISTS(SELECT 1 FROM tree WHERE entry_id=?)`, string(bufferID), parentID.String()).Scan(&belongs); err != nil {
+	) SELECT EXISTS(SELECT 1 FROM tree WHERE entry_id=?)`, string(bufferID), fence, parentID.String()).Scan(&belongs); err != nil {
 		return nil, err
 	}
 	if belongs == 0 {
@@ -1606,7 +1665,7 @@ func (s *Store) ListDetachedChildren(ctx context.Context, bufferID metadata.Buff
 	return children, rows.Err()
 }
 
-func (s *Store) DeleteDetachedEntry(ctx context.Context, bufferID metadata.BufferID, id metadata.EntryID) error {
+func (s *Store) DeleteDetachedEntry(ctx context.Context, bufferID metadata.BufferID, fence uint64, id metadata.EntryID) error {
 	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return err
@@ -1614,9 +1673,9 @@ func (s *Store) DeleteDetachedEntry(ctx context.Context, bufferID metadata.Buffe
 	defer tx.Rollback()
 	var belongs int
 	if err := tx.QueryRowContext(ctx, `WITH RECURSIVE tree(entry_id) AS (
-		SELECT root_entry_id FROM internal_buffers WHERE buffer_id=?
+		SELECT root_entry_id FROM internal_buffers WHERE buffer_id=? AND fencing=? AND claimed=1
 		UNION ALL SELECT entries.entry_id FROM entries JOIN tree ON entries.parent_id=tree.entry_id
-	) SELECT EXISTS(SELECT 1 FROM tree WHERE entry_id=?)`, string(bufferID), id.String()).Scan(&belongs); err != nil {
+	) SELECT EXISTS(SELECT 1 FROM tree WHERE entry_id=?)`, string(bufferID), fence, id.String()).Scan(&belongs); err != nil {
 		return err
 	}
 	if belongs == 0 {
@@ -1633,4 +1692,85 @@ func (s *Store) DeleteDetachedEntry(ctx context.Context, bufferID metadata.Buffe
 		return err
 	}
 	return nil
+}
+
+func (s *Store) RenewDetachedBuffer(ctx context.Context, id metadata.BufferID, fence uint64, ttl time.Duration) (metadata.DetachedBuffer, error) {
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	defer tx.Rollback()
+	now := metadata.TimestampFromTime(time.Now())
+	res, err := tx.ExecContext(ctx, `UPDATE internal_buffers SET expires_at=? WHERE buffer_id=? AND fencing=? AND claimed=0 AND expires_at>?`, int64(now)+int64(ttl), string(id), fence, int64(now))
+	if err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return metadata.DetachedBuffer{}, metadata.ErrEntryConflict
+	}
+	var b metadata.DetachedBuffer
+	var root string
+	var expires int64
+	if err := tx.QueryRowContext(ctx, `SELECT buffer_id,root_entry_id,expires_at,fencing,claimed FROM internal_buffers WHERE buffer_id=?`, string(id)).Scan(&id, &root, &expires, &b.Fencing, &b.Claimed); err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	b.ID, b.RootID, b.ExpiresAt = id, metadata.EntryID(root), metadata.Timestamp(expires)
+	if err := tx.Commit(); err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	return b, nil
+}
+
+func (s *Store) ClaimExpiredDetachedBuffer(ctx context.Context, id metadata.BufferID, now metadata.Timestamp, ttl time.Duration) (metadata.DetachedBuffer, error) {
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE internal_buffers SET claimed=1,fencing=fencing+1,expires_at=? WHERE buffer_id=? AND claimed=0 AND expires_at<=?`, int64(now)+int64(ttl), string(id), int64(now))
+	if err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return metadata.DetachedBuffer{}, metadata.ErrEntryConflict
+	}
+	var b metadata.DetachedBuffer
+	var root string
+	var expires int64
+	if err := tx.QueryRowContext(ctx, `SELECT buffer_id,root_entry_id,expires_at,fencing,claimed FROM internal_buffers WHERE buffer_id=?`, string(id)).Scan(&id, &root, &expires, &b.Fencing, &b.Claimed); err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	b.ID, b.RootID, b.ExpiresAt = id, metadata.EntryID(root), metadata.Timestamp(expires)
+	if err := tx.Commit(); err != nil {
+		return metadata.DetachedBuffer{}, err
+	}
+	return b, nil
+}
+
+func (s *Store) ReleaseDetachedBuffer(ctx context.Context, id metadata.BufferID, fence uint64) error {
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE internal_buffers SET claimed=0,expires_at=? WHERE buffer_id=? AND fencing=? AND claimed=1`, int64(metadata.TimestampFromTime(time.Now().Add(24*time.Hour))), string(id), fence)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return metadata.ErrEntryConflict
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ExpireDetachedBuffersAfterRestart(ctx context.Context, now metadata.Timestamp) error {
+	tx, err := s.beginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE internal_buffers SET expires_at=?,fencing=fencing+1,claimed=0`, int64(now)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

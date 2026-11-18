@@ -122,6 +122,11 @@ func (r *Repository) putWithMode(ctx context.Context, localPath string, repoPath
 	if localStat.IsDir() {
 		return fmt.Errorf("local path %q is a directory, directories cannot be put", localPath)
 	}
+	if expected != nil && !expected.MustBeAbsent && expected.EntryID != "" {
+		if _, err := r.metaStore.GetByID(ctx, expected.EntryID); err != nil {
+			return fmt.Errorf("expected Put Entry is no longer public: %w", metadata.ErrEntryConflict)
+		}
+	}
 
 	if err := r.cleanupExpiredStaging(ctx); err != nil {
 		return fmt.Errorf("clean expired Put staging: %w", err)
