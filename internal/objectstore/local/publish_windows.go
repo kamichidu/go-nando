@@ -20,8 +20,9 @@ func publishNoReplace(tempPath, finalPath string) (bool, error) {
 		return false, err
 	}
 
-	// We specify no flags (0), which means no replace.
-	err = windows.MoveFileEx(tempPtr, finalPtr, 0)
+	// WRITE_THROUGH requires the move to complete before the call returns.
+	// No REPLACE_EXISTING flag preserves immutable object publication.
+	err = windows.MoveFileEx(tempPtr, finalPtr, windows.MOVEFILE_WRITE_THROUGH)
 	if err == nil {
 		return true, nil
 	}

@@ -22,21 +22,45 @@ type Store struct {
 	objectsDir string
 	tempDir    string
 	hasher     content.Hasher
+	syncDir    func(string) error
+}
+
+func mkdirAllDurable(path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return os.MkdirAll(path, 0o755)
+	}
+	if err := mkdirAllDurable(parent); err != nil {
+		return err
+	}
+	if err := os.Mkdir(path, 0o755); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return syncDirectory(parent)
+		}
+		return err
+	}
+	return syncDirectory(parent)
 }
 
 // ObjectInfo describes a committed Local object for capacity accounting.
 // NewStore initializes a new local ObjectStore.
 func NewStore(objectsDir, tempDir string, hasher content.Hasher) (*Store, error) {
-	if err := os.MkdirAll(objectsDir, 0o755); err != nil {
+	if err := mkdirAllDurable(objectsDir); err != nil {
 		return nil, fmt.Errorf("failed to create objects directory %q: %w", objectsDir, err)
 	}
-	if err := os.MkdirAll(tempDir, 0o755); err != nil {
+	if err := mkdirAllDurable(tempDir); err != nil {
 		return nil, fmt.Errorf("failed to create temp directory %q: %w", tempDir, err)
 	}
 	return &Store{
 		objectsDir: objectsDir,
 		tempDir:    tempDir,
 		hasher:     hasher,
+		syncDir:    syncDirectory,
 	}, nil
 }
 
