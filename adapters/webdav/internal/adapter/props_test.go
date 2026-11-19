@@ -64,6 +64,20 @@ func TestPropertiesPropfindAndAtomicProppatch(t *testing.T) {
 	if response.Code != 207 || client.updates != 1 || len(client.last.Changes) != 1 || !strings.Contains(client.last.Changes[0].Property.XML, "green") {
 		t.Fatalf("PROPPATCH status=%d updates=%d params=%+v body=%s", response.Code, client.updates, client.last, response.Body.String())
 	}
+	for _, body := range []string{
+		`<D:other xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><X:color>red</X:color></D:prop></D:set></D:other>`,
+		`<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:remove><D:prop><X:color/></D:prop></D:remove></D:set></D:propertyupdate>`,
+		`<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><X:color>red</X:color></D:set></D:propertyupdate>`,
+		`<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop/></D:set></D:propertyupdate>`,
+		`<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><X:color>red</X:color></D:propertyupdate>`,
+	} {
+		invalid := httptest.NewRequest("PROPPATCH", "http://example.test/file", strings.NewReader(body))
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, invalid)
+		if response.Code != 400 || client.updates != 1 {
+			t.Fatalf("invalid PROPPATCH mutated state: status=%d updates=%d body=%s", response.Code, client.updates, response.Body.String())
+		}
+	}
 	protected := httptest.NewRequest("PROPPATCH", "http://example.test/file", strings.NewReader(`<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><D:getetag/><X:color>red</X:color></D:prop></D:set></D:propertyupdate>`))
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, protected)
