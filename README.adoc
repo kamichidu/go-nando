@@ -80,6 +80,29 @@ cleanup. S3-compatible uploads use one conditional PutObject and reconcile by
 HEAD metadata. Multipart upload is unsupported; compatibility is limited to the
 single-part operations and endpoint behavior documented here.
 
+== Local object publication durability
+
+|===
+|Platform |Publication behavior |Durability limit
+
+|Unix-like
+|Syncs staged file contents before publication, then syncs the destination
+directory and returns directory-sync errors to the caller.
+|Relies on the operating system, filesystem, storage device, and intermediate
+caches honoring successful flush requests. It cannot guarantee survival of
+power loss or hardware failure if a layer reports a flush complete before data
+is stable.
+
+|Windows
+|Requests `MOVEFILE_WRITE_THROUGH` for publication.
+|This best-effort request does not provide a portable directory flush and does
+not guarantee that the published name survives sudden power loss.
+|===
+
+Unit tests exercise software-visible publication, error handling, and retry
+behavior. They do not simulate or prove recovery after an operating-system or
+hardware power failure.
+
 == Requirements
 
 Using a prebuilt release requires a supported operating system and
