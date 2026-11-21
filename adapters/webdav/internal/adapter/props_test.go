@@ -3,6 +3,8 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -13,6 +15,49 @@ import (
 type propertyClient struct {
 	updates int
 	last    controlrpc.DeadPropertiesParams
+}
+
+func TestParsePatchNamespaceAndAttributeExpansion(t *testing.T) {
+	body := `<D:propertyupdate xmlns:D="DAV:" xmlns:P="urn:property" xmlns:A="urn:attribute" xmlns:N="urn:nested"><D:set><D:prop><P:item A:flag="yes" plain="kept"><N:child N:code="nested"/></P:item><unqualified/></D:prop></D:set></D:propertyupdate>`
+	ops, err := parsePatch([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 2 || ops[0].name != (propName{"urn:property", "item"}) || ops[1].name != (propName{"", "unqualified"}) {
+		t.Fatalf("expanded property names=%+v", ops)
+	}
+
+	var starts []xml.StartElement
+	d := xml.NewDecoder(strings.NewReader(ops[0].xml))
+	for {
+		tok, err := d.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("decode stored property XML: %v", err)
+		}
+		if start, ok := tok.(xml.StartElement); ok {
+			starts = append(starts, start)
+		}
+	}
+	if len(starts) != 2 || starts[0].Name != (xml.Name{Space: "urn:property", Local: "item"}) || starts[1].Name != (xml.Name{Space: "urn:nested", Local: "child"}) {
+		t.Fatalf("stored element namespaces=%+v", starts)
+	}
+	attrs := map[xml.Name]string{}
+	for _, attr := range starts[0].Attr {
+		attrs[attr.Name] = attr.Value
+	}
+	if attrs[xml.Name{Space: "urn:attribute", Local: "flag"}] != "yes" || attrs[xml.Name{Local: "plain"}] != "kept" {
+		t.Fatalf("stored property attributes=%v", attrs)
+	}
+	nestedAttrs := map[xml.Name]string{}
+	for _, attr := range starts[1].Attr {
+		nestedAttrs[attr.Name] = attr.Value
+	}
+	if nestedAttrs[xml.Name{Space: "urn:nested", Local: "code"}] != "nested" {
+		t.Fatalf("stored nested attributes=%v", starts[1].Attr)
+	}
 }
 
 func (c *propertyClient) Call(_ context.Context, method string, params any, result any) error {
@@ -63,6 +108,22 @@ func TestPropertiesPropfindAndAtomicProppatch(t *testing.T) {
 	handler.ServeHTTP(response, patch)
 	if response.Code != 207 || client.updates != 1 || len(client.last.Changes) != 1 || !strings.Contains(client.last.Changes[0].Property.XML, "green") {
 		t.Fatalf("PROPPATCH status=%d updates=%d params=%+v body=%s", response.Code, client.updates, client.last, response.Body.String())
+	}
+	for _, body := range []string{
+		`<D:other xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><X:color>red</X:color></D:prop></D:set></D:other>`,
+		`<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:remove><D:prop><X:color/></D:prop></D:remove></D:set></D:propertyupdate>`,
+		`<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><X:color>red</X:color></D:set></D:propertyupdate>`,
+		`<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop/></D:set></D:propertyupdate>`,
+		`<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><X:color>red</X:color></D:propertyupdate>`,
+		`<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><X:color></D:prop></D:set></D:propertyupdate>`,
+		`<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><X:color/></D:prop></D:set></D:propertyupdate><D:propertyupdate xmlns:D="DAV:"/>`,
+	} {
+		invalid := httptest.NewRequest("PROPPATCH", "http://example.test/file", strings.NewReader(body))
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, invalid)
+		if response.Code != 400 || client.updates != 1 {
+			t.Fatalf("invalid PROPPATCH mutated state: status=%d updates=%d body=%s", response.Code, client.updates, response.Body.String())
+		}
 	}
 	protected := httptest.NewRequest("PROPPATCH", "http://example.test/file", strings.NewReader(`<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><D:getetag/><X:color>red</X:color></D:prop></D:set></D:propertyupdate>`))
 	response = httptest.NewRecorder()

@@ -143,6 +143,122 @@ func TestStageComputesSHA256AndMD5InSamePass(t *testing.T) {
 	}
 }
 
+func TestPublishSyncsObjectDirectoryAndRetainsStageOnSyncFailure(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := NewStore(filepath.Join(root, "objects"), filepath.Join(root, "temp"), content.NewHasher())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const operationID = "83ce94d1-086b-44d1-a061-e4451b7d020a"
+	session, err := store.BeginStage(ctx, operationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := session.Stage(ctx, strings.NewReader("durable publication"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("injected directory sync failure")
+	store.syncDir = func(string) error { return wantErr }
+	if _, err := store.Publish(ctx, staged); !errors.Is(err, wantErr) {
+		t.Fatalf("Publish error=%v, want injected sync failure", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.objectsDir, staged.ID().String())); err != nil {
+		t.Fatalf("published link should remain visible after ambiguous sync failure: %v", err)
+	}
+	if _, err := os.Stat(staged.(*stagedObject).path); err != nil {
+		t.Fatalf("staging link was removed after ambiguous sync failure: %v", err)
+	}
+	syncCalls := 0
+	store.syncDir = func(path string) error {
+		syncCalls++
+		if path != store.objectsDir {
+			t.Fatalf("synced unexpected directory %q", path)
+		}
+		return nil
+	}
+	if _, err := store.Publish(ctx, staged); err != nil {
+		t.Fatalf("retry after ambiguous publication: %v", err)
+	}
+	if syncCalls != 1 {
+		t.Fatalf("directory sync calls=%d, want 1", syncCalls)
+	}
+	if _, err := os.Stat(staged.(*stagedObject).path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging link remains after successful retry: %v", err)
+	}
+	if err := store.Verify(ctx, staged.ID()); err != nil {
+		t.Fatalf("published object failed content-ID verification after retry: %v", err)
+	}
+	objects, err := os.ReadDir(store.objectsDir)
+	if err != nil || len(objects) != 1 || objects[0].Name() != staged.ID().String() {
+		t.Fatalf("retry changed publication set: objects=%v err=%v", objects, err)
+	}
+}
+
+func TestPublishReusesExistingObjectAndSyncsBeforeRemovingStage(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := NewStore(filepath.Join(root, "objects"), filepath.Join(root, "temp"), content.NewHasher())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := func(operationID string) objectstore.StagedObject {
+		t.Helper()
+		session, err := store.BeginStage(ctx, operationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		staged, err := session.Stage(ctx, strings.NewReader("same immutable object"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := session.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return staged
+	}
+	first := stage("76f31230-bcc3-4428-badb-031252148bc4")
+	if _, err := store.Publish(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	objectPath := filepath.Join(store.objectsDir, first.ID().String())
+	before, err := os.ReadFile(objectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := stage("88feefc7-bd08-44bb-bff3-d8591f3f81d9")
+	syncCalls := 0
+	store.syncDir = func(path string) error {
+		syncCalls++
+		if path != store.objectsDir {
+			t.Fatalf("synced unexpected directory %q", path)
+		}
+		return nil
+	}
+	result, err := store.Publish(ctx, second)
+	if err != nil {
+		t.Fatalf("publish duplicate staged content: %v", err)
+	}
+	if result.ID != first.ID() || result.Size != first.Size() || syncCalls != 1 {
+		t.Fatalf("duplicate publish result=%+v syncCalls=%d", result, syncCalls)
+	}
+	after, err := os.ReadFile(objectPath)
+	if err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("existing object changed: before=%q after=%q err=%v", before, after, err)
+	}
+	if _, err := os.Stat(second.(*stagedObject).path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("duplicate staging link was not removed after sync: %v", err)
+	}
+	objects, err := os.ReadDir(store.objectsDir)
+	if err != nil || len(objects) != 1 || objects[0].Name() != first.ID().String() {
+		t.Fatalf("duplicate publish created another object: objects=%v err=%v", objects, err)
+	}
+}
+
 func TestManualStagingRemovalCannotBeRecreated(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

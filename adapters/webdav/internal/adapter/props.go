@@ -262,38 +262,88 @@ type patchInstruction struct {
 func parsePatch(body []byte) ([]patchInstruction, error) {
 	d := xml.NewDecoder(bytes.NewReader(body))
 	var out []patchInstruction
-	var op string
+	next := func() (xml.Token, error) {
+		for {
+			tok, err := d.Token()
+			if err != nil {
+				return nil, err
+			}
+			if text, ok := tok.(xml.CharData); ok && strings.TrimSpace(string(text)) == "" {
+				continue
+			}
+			if _, ok := tok.(xml.Comment); ok {
+				continue
+			}
+			if _, ok := tok.(xml.ProcInst); ok {
+				continue
+			}
+			return tok, nil
+		}
+	}
+	expectStart := func(name xml.Name) (xml.StartElement, error) {
+		tok, err := next()
+		if err != nil {
+			return xml.StartElement{}, err
+		}
+		start, ok := tok.(xml.StartElement)
+		if !ok || start.Name != name {
+			return xml.StartElement{}, fmt.Errorf("unexpected PROPPATCH element")
+		}
+		return start, nil
+	}
+	expectEnd := func(name xml.Name) error {
+		tok, err := next()
+		if err != nil {
+			return err
+		}
+		end, ok := tok.(xml.EndElement)
+		if !ok || end.Name != name {
+			return fmt.Errorf("unexpected PROPPATCH element")
+		}
+		return nil
+	}
+	root, err := expectStart(davName("propertyupdate"))
+	if err != nil {
+		return nil, err
+	}
 	for {
-		t, e := d.Token()
-		if e == io.EOF {
+		tok, err := next()
+		if err != nil {
+			return nil, err
+		}
+		if end, ok := tok.(xml.EndElement); ok {
+			if end.Name != root.Name {
+				return nil, fmt.Errorf("unexpected PROPPATCH root end")
+			}
 			break
 		}
-		if e != nil {
-			return nil, e
+		action, ok := tok.(xml.StartElement)
+		if !ok || (action.Name != davName("set") && action.Name != davName("remove")) {
+			return nil, fmt.Errorf("expected DAV:set or DAV:remove")
 		}
-		x, ok := t.(xml.StartElement)
-		if !ok {
-			continue
+		beforeAction := len(out)
+		if _, err := expectStart(davName("prop")); err != nil {
+			return nil, err
 		}
-		if x.Name == davName("set") {
-			op = "set"
-			continue
-		}
-		if x.Name == davName("remove") {
-			op = "remove"
-			continue
-		}
-		if x.Name == davName("prop") {
-			continue
-		}
-		if op != "" {
-			if !validNamespace(x.Name.Space) {
-				return nil, fmt.Errorf("unbound property namespace")
+		for {
+			tok, err := next()
+			if err != nil {
+				return nil, err
+			}
+			if end, ok := tok.(xml.EndElement); ok {
+				if end.Name != davName("prop") {
+					return nil, fmt.Errorf("unexpected DAV:prop end")
+				}
+				break
+			}
+			property, ok := tok.(xml.StartElement)
+			if !ok || !validNamespace(property.Name.Space) {
+				return nil, fmt.Errorf("invalid PROPPATCH property")
 			}
 			var raw bytes.Buffer
 			enc := xml.NewEncoder(&raw)
-			x.Attr = withoutNamespaceDeclarations(x.Attr)
-			if err := enc.EncodeToken(x); err != nil {
+			property.Attr = withoutNamespaceDeclarations(property.Attr)
+			if err := enc.EncodeToken(property); err != nil {
 				return nil, err
 			}
 			level := 1
@@ -317,8 +367,20 @@ func parsePatch(body []byte) ([]patchInstruction, error) {
 			if err := enc.Flush(); err != nil {
 				return nil, err
 			}
-			out = append(out, patchInstruction{set: op == "set", name: propName{x.Name.Space, x.Name.Local}, xml: raw.String()})
+			out = append(out, patchInstruction{set: action.Name == davName("set"), name: propName{property.Name.Space, property.Name.Local}, xml: raw.String()})
 		}
+		if len(out) == beforeAction {
+			return nil, fmt.Errorf("empty PROPPATCH action")
+		}
+		if err := expectEnd(action.Name); err != nil {
+			return nil, err
+		}
+	}
+	if tok, err := next(); err != io.EOF || tok != nil {
+		if err == nil {
+			return nil, fmt.Errorf("trailing PROPPATCH content")
+		}
+		return nil, err
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("missing property instructions")

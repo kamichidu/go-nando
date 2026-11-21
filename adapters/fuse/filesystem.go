@@ -893,6 +893,11 @@ func (n *entryNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 				}
 				if modeSet {
 					h.write.logicalMode = mode & 0o7777
+					if h.modeState != nil {
+						h.modeState.mu.Lock()
+						h.modeState.mode = mode & 0o7777
+						h.modeState.mu.Unlock()
+					}
 				}
 				info, err := h.write.file.Stat()
 				if err != nil {

@@ -158,6 +158,9 @@ func (s *Store) Publish(ctx context.Context, staged objectstore.StagedObject) (o
 		if err := s.Verify(ctx, localStage.id); err != nil {
 			return objectstore.CommitResult{}, fmt.Errorf("existing object %s is corrupt: %w", localStage.id, err)
 		}
+		if err := s.syncDir(s.objectsDir); err != nil {
+			return objectstore.CommitResult{}, fmt.Errorf("sync object directory after verifying existing object: %w", err)
+		}
 		if err := os.Remove(localStage.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return objectstore.CommitResult{}, fmt.Errorf("remove reused staged object: %w", err)
 		}
@@ -171,10 +174,18 @@ func (s *Store) Publish(ctx context.Context, staged objectstore.StagedObject) (o
 		if err := s.Verify(ctx, localStage.id); err != nil {
 			return objectstore.CommitResult{}, fmt.Errorf("existing object %s is corrupt: %w", localStage.id, err)
 		}
+		if err := s.syncDir(s.objectsDir); err != nil {
+			return objectstore.CommitResult{}, fmt.Errorf("sync object directory after verifying existing object: %w", err)
+		}
 		if err := os.Remove(localStage.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return objectstore.CommitResult{}, fmt.Errorf("remove duplicate staged object: %w", err)
 		}
 		return objectstore.CommitResult{ID: localStage.id, Size: localStage.size}, nil
+	}
+	if err := s.syncDir(s.objectsDir); err != nil {
+		// The link may already be visible, but its durability is unknown. Keep
+		// the staging link so a retry can verify and sync the published object.
+		return objectstore.CommitResult{}, fmt.Errorf("object published but object directory sync failed: %w", err)
 	}
 	if err := os.Remove(localStage.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return objectstore.CommitResult{}, fmt.Errorf("object published but staged link cleanup failed: %w", err)
