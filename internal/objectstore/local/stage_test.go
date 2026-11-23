@@ -175,7 +175,11 @@ func TestPublishReusesExistingObjectAndSyncsBeforeRemovingStage(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := stage("88feefc7-bd08-44bb-bff3-d8591f3f81d9")
-	stagePath := second.(*stagedObject).path
+	localSecond, ok := second.(*stagedObject)
+	if !ok {
+		t.Fatalf("Stage returned unexpected type %T", second)
+	}
+	stagePath := localSecond.path
 	syncCalls := 0
 	store.syncDir = func(path string) error {
 		syncCalls++
@@ -198,7 +202,7 @@ func TestPublishReusesExistingObjectAndSyncsBeforeRemovingStage(t *testing.T) {
 	if err != nil || !bytes.Equal(after, before) {
 		t.Fatalf("existing object changed: before=%q after=%q err=%v", before, after, err)
 	}
-	if _, err := os.Stat(second.(*stagedObject).path); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(localSecond.path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("duplicate staging link was not removed after sync: %v", err)
 	}
 	objects, err := os.ReadDir(store.objectsDir)
