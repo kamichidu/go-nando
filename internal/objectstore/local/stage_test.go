@@ -186,7 +186,7 @@ func TestPublishReusesExistingObjectAndSyncsBeforeRemovingStage(t *testing.T) {
 		if path != store.objectsDir {
 			t.Fatalf("synced unexpected directory %q", path)
 		}
-		if _, err := os.Stat(stagePath); err != nil {
+		if _, err := os.Lstat(stagePath); err != nil {
 			t.Fatalf("staged link must remain until object directory sync completes: %v", err)
 		}
 		return nil
@@ -202,7 +202,7 @@ func TestPublishReusesExistingObjectAndSyncsBeforeRemovingStage(t *testing.T) {
 	if err != nil || !bytes.Equal(after, before) {
 		t.Fatalf("existing object changed: before=%q after=%q err=%v", before, after, err)
 	}
-	if _, err := os.Stat(localSecond.path); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(stagePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("duplicate staging link was not removed after sync: %v", err)
 	}
 	objects, err := os.ReadDir(store.objectsDir)

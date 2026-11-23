@@ -41,10 +41,10 @@ func TestPublishSyncsObjectDirectoryAndRetainsStageOnSyncFailure(t *testing.T) {
 	if _, err := store.Publish(ctx, staged); !errors.Is(err, wantErr) {
 		t.Fatalf("Publish error=%v, want injected sync failure", err)
 	}
-	if _, err := os.Stat(filepath.Join(store.objectsDir, staged.ID().String())); err != nil {
+	if _, err := os.Lstat(filepath.Join(store.objectsDir, staged.ID().String())); err != nil {
 		t.Fatalf("published link should remain visible after ambiguous sync failure: %v", err)
 	}
-	if _, err := os.Stat(localStaged.path); err != nil {
+	if _, err := os.Lstat(localStaged.path); err != nil {
 		t.Fatalf("staging link was removed after ambiguous sync failure: %v", err)
 	}
 	syncCalls := 0
@@ -61,7 +61,7 @@ func TestPublishSyncsObjectDirectoryAndRetainsStageOnSyncFailure(t *testing.T) {
 	if syncCalls != 1 {
 		t.Fatalf("directory sync calls=%d, want 1", syncCalls)
 	}
-	if _, err := os.Stat(localStaged.path); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(localStaged.path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("staging link remains after successful retry: %v", err)
 	}
 	if err := store.Verify(ctx, staged.ID()); err != nil {

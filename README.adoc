@@ -83,20 +83,16 @@ single-part operations and endpoint behavior documented here.
 == Local object publication durability
 
 |===
-|Platform |Publication behavior |Durability limit
+|Platform |What publication means
 
 |Unix-like
-|Syncs staged file contents before publication, then syncs the destination
-directory and returns directory-sync errors to the caller.
-|Relies on the operating system, filesystem, storage device, and intermediate
-caches honoring successful flush requests. It cannot guarantee survival of
-power loss or hardware failure if a layer reports a flush complete before data
-is stable.
+|nando syncs the file and destination directory, and reports directory-sync
+errors. Power-loss protection depends on the OS, filesystem, and storage
+hardware honoring those flushes.
 
 |Windows
-|Requests `MOVEFILE_WRITE_THROUGH` for publication.
-|This best-effort request does not provide a portable directory flush and does
-not guarantee that the published name survives sudden power loss.
+|nando requests best-effort write-through publication. It cannot guarantee
+that the new object name survives sudden power loss.
 |===
 
 Unit tests exercise software-visible publication, error handling, and retry

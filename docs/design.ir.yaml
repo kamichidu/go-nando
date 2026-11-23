@@ -24,13 +24,34 @@ nodes:
   - id: REQ-OBJECT-SSOT
     level: system_requirement
     kind: authority-invariant
-    statement: The Object Store MUST own immutable bytes identified by each content ID. Local mode uses Local Object Storage as its durable authority. Remote mode uses Local durable staging/cache and exactly one selected remote object-storage backend; remote placement MUST NOT determine logical Entry visibility, which remains Metadata Store authority.
+    statement: >-
+      The Object Store MUST own immutable bytes identified by each content ID.
+      Local mode uses Local Object Storage as its durable authority, subject to
+      the platform-specific physical persistence limits in REQ-OBJECT-COMMIT.
+      Remote mode uses Local durable staging/cache and exactly one selected
+      remote object-storage backend; remote placement MUST NOT determine
+      logical Entry visibility, which remains Metadata Store authority.
     provenance:
       origin: imported
   - id: REQ-OBJECT-COMMIT
     level: system_requirement
     kind: commit-invariant
-    statement: A successful Object Store Commit MUST atomically publish a complete immutable Object, and subsequent Open MUST read it while Exists MUST report it present.
+    statement: >-
+      A successful Object Store Commit MUST atomically publish a complete
+      immutable Object, and subsequent Open MUST read it while Exists MUST
+      report it present. For Local Object Storage, Stage MUST sync staged file
+      contents before publication. Unix-like publication MUST sync the
+      destination objects directory after publication and propagate directory
+      sync errors. This physical power-loss persistence relies on the operating
+      system, filesystem, storage device, and intermediate caches honoring
+      successful flush requests; a successful flush request cannot guarantee
+      survival when any layer reports completion before data is stable. On
+      Windows, Local publication requests MOVEFILE_WRITE_THROUGH as a best-effort
+      operation; it does not provide a portable directory flush or guarantee
+      that the published name survives sudden power loss. These platform limits
+      scope physical power-loss persistence only and MUST NOT weaken complete
+      immutable no-replace publication or the metadata ordering in
+      REQ-METADATA-ORDER.
     provenance:
       origin: imported
   - id: REQ-METADATA-ORDER
@@ -84,7 +105,17 @@ nodes:
   - id: REQ-DELIVERY-MODES
     level: system_requirement
     kind: deployment-invariant
-    statement: The repository MUST support Local delivery mode, where Local Object Storage is the durable authority, and Remote delivery mode, where each write first durably commits complete content to Local and atomically commits Metadata plus its remote delivery obligation. Exactly one remote object-storage backend is selected per repository. Phase A exposes the committed state immediately through the single daemon; asynchronous delivery follows the configured idle/periodic/maximum-delay policy. The selected remote backend is GCS or the S3-compatible adapter, with exactly one selected per repository.
+    statement: >-
+      The repository MUST support Local delivery mode, where Local Object
+      Storage is the durable authority under the platform-specific physical
+      persistence scope in REQ-OBJECT-COMMIT, and Remote delivery mode, where
+      each write first durably commits complete content to Local and atomically
+      commits Metadata plus its remote delivery obligation. Exactly one remote
+      object-storage backend is selected per repository. Phase A exposes the
+      committed state immediately through the single daemon; asynchronous
+      delivery follows the configured idle/periodic/maximum-delay policy. The
+      selected remote backend is GCS or the S3-compatible adapter, with exactly
+      one selected per repository.
     provenance:
       origin: human-authored
   - id: REQ-REMOTE-BACKEND-SELECTION
@@ -102,7 +133,41 @@ nodes:
   - id: REQ-FUSE-DURABILITY
     level: system_requirement
     kind: filesystem-commit-invariant
-    statement: A successful FUSE Fsync MUST mean the complete file bytes have been durably published as an immutable Local Object and the corresponding Metadata revision plus any selected-backend delivery obligation have committed atomically; this visibility is synchronous before the Fsync call returns. Remote upload is asynchronous and is not part of Fsync. A crash after successful Fsync but before Flush, Close, or Release MUST preserve that committed revision and its queued delivery obligation. The daemon's generic Resource Release MUST NOT commit bytes. The FUSE adapter MUST attempt Commit for remaining dirty staging on Fsync and final close, before sending daemon Release; a failed attempt MUST leave staging and a durable or Begin-anchored recovery manifest. Linux/go-fuse may dispatch final-close RELEASE asynchronously with respect to close(2), so close return alone does not guarantee that final-close Commit has completed or become visible; callers that require a synchronous visibility boundary MUST use successful Fsync. The adapter's ordinary handle close is distinct from explicit daemon Abort and explicit recovery discard. A failed CAS MUST never silently retry against a newer revision. Before a commit attempt, the last committed revision remains visible and intact. For a stable Entry detached by another adapter, a successful Commit MUST yield Fsync or final-Release success; authoritative Entry-not-found followed by successful discard MUST also return success while discarding private open-handle writes without resurrection. If Fsync reports detached-discard cleanup incomplete, it MUST return EIO, and repeated Fsync MUST continue to return EIO while cleanup remains pending, even though it syncs the held staging file. A later final Release retries cleanup with Abort. Abort failure MUST return EIO; Abort success MUST return Release success to confirm Resource cleanup only, without retroactively succeeding an earlier Fsync or persisting the discarded writes. When final Release itself first attempts Commit, successful detached discard returns success; incomplete discard cleanup returns EIO even if a subsequent Abort retry completes cleanup.
+    statement: >-
+      A successful FUSE Fsync MUST mean the complete file bytes have been
+      durably published as an immutable Local Object under the physical
+      persistence limits in REQ-OBJECT-COMMIT and the corresponding Metadata
+      revision plus any selected-backend delivery obligation have committed
+      atomically before Fsync returns. Physical power-loss persistence MUST
+      NOT be inferred beyond that platform-specific scope. Remote upload is
+      asynchronous and is not part of Fsync. A process crash after successful
+      Fsync but before Flush, Close, or Release MUST preserve that committed
+      revision and its queued delivery obligation. The daemon's generic
+      Resource Release MUST NOT commit bytes.
+      The FUSE adapter MUST attempt Commit for remaining dirty staging on Fsync
+      and final close, before sending daemon Release; a failed attempt MUST
+      leave staging and a durable or Begin-anchored recovery manifest.
+      Linux/go-fuse may dispatch final-close RELEASE asynchronously with
+      respect to close(2), so close return alone does not guarantee that
+      final-close Commit has completed or become visible; callers that require
+      a synchronous visibility boundary MUST use successful Fsync. The
+      adapter's ordinary handle close is distinct from explicit daemon Abort
+      and explicit recovery discard. A failed CAS MUST never silently retry
+      against a newer revision. Before a commit attempt, the last committed
+      revision remains visible and intact. For a stable Entry detached by
+      another adapter, a successful Commit MUST yield Fsync or final-Release
+      success; authoritative Entry-not-found followed by successful discard
+      MUST also return success while discarding private open-handle writes
+      without resurrection. If Fsync reports detached-discard cleanup
+      incomplete, it MUST return EIO, and repeated Fsync MUST continue to
+      return EIO while cleanup remains pending, even though it syncs the held
+      staging file. A later final Release retries cleanup with Abort. Abort
+      failure MUST return EIO; Abort success MUST return Release success to
+      confirm Resource cleanup only, without retroactively succeeding an
+      earlier Fsync or persisting the discarded writes. When final Release
+      itself first attempts Commit, successful detached discard returns
+      success; incomplete discard cleanup returns EIO even if a subsequent
+      Abort retry completes cleanup.
     provenance:
       origin: human-authored
   - id: REQ-FUSE-FILE-HANDLES
@@ -116,7 +181,7 @@ nodes:
     level: system_requirement
     kind: filesystem-handle-invariant
     statement: >-
-      While linked, Entry metadata is authoritative for logical mode. FUSE fchmod MUST use the ordinary repository metadata chmod operation by stable Entry ID, including on O_RDONLY and O_WRONLY handles and path chmod; path stat and every retained handle Getattr MUST refresh Entry metadata by stable ID and observe updates made by this adapter or any other repository client/adapter. After successful namespace removal, retained handles use the shared volatile open-inode mode state. A durable unlink discard intent alone MUST NOT transfer mode authority away from the still-linked Entry. Chmod is independent of staging and write-session lifetimes. Existing-entry content-only commits MUST preserve the latest Entry mode. A chmod racing a content commit is serialized by metadata revision CAS: whichever metadata update linearizes first is included by a later content update; if an update races after its CAS snapshot, that operation fails with EAGAIN and MUST NOT overwrite the winner. Failed chmod RPC leaves Entry mode unchanged and Setattr reports the mapped error. After successful unlink, logical mode becomes volatile in a shared FUSE open-inode mode state keyed by stable Entry ID, shared by read and write handles; fchmod through any retained handle updates it and fstat through every retained handle observes it. Detached chmod MUST NOT call daemon metadata methods, begin or commit a session, or recreate the name. The volatile mode state is discarded after the last handle closes. An open FUSE handle owns its retained Resource and attribute view. Successful Unlink detaches the namespace Entry while preserving resources. The same handle guarantees apply when another adapter detaches a parent subtree without FUSE Unlink: handle-based Getattr and Setattr MUST use the held Resource and cached inode state without requiring public Entry resolution. A stable-ID write Commit after external detach MUST be discard-only, MUST NOT recreate the Entry, and MUST NOT leave an ordinary failed-write Recovery record. Detached write handles may continue private staging I/O; size changes truncate staging and Fsync syncs staging only. Detached reads continue from immutable resources; ftruncate fails EBADF. Write staging files remain physically mode 0600 and this invariant is independent of logical mode. Setattr responses describe the mutation's captured state snapshot. Final Release cleans the retained daemon resource and final close removes detached mode state. Daemon restart finishes durable unlink tombstone cleanup without exposing staging as ordinary Recovery.
+      While linked, Entry metadata is authoritative for logical mode. FUSE fchmod MUST use the ordinary repository metadata chmod operation by stable Entry ID, including on O_RDONLY and O_WRONLY handles and path chmod; path stat and every retained handle Getattr MUST refresh Entry metadata by stable ID and observe updates made by this adapter or any other repository client/adapter. After successful namespace removal, retained handles use the shared volatile open-inode mode state. A durable unlink discard intent alone MUST NOT transfer mode authority away from the still-linked Entry. Chmod is independent of staging and write-session lifetimes. Existing-entry content-only commits MUST preserve the latest Entry mode. A chmod racing a content commit is serialized by metadata revision CAS: whichever metadata update linearizes first is included by a later content update; if an update races after its CAS snapshot, that operation fails with EAGAIN and MUST NOT overwrite the winner. Failed chmod RPC leaves Entry mode unchanged and Setattr reports the mapped error. Successful FUSE Unlink and external detach after authoritative Entry-not-found MUST transfer logical mode ownership to the same volatile open-inode mode state keyed by stable Entry ID, shared by read and write handles. On external detach, that state MUST inherit the last resolved linked Entry mode. Fchmod through either retained handle type MUST update the shared state and return an Attr snapshot containing that mutation's mode; fstat through both retained handle types MUST observe the shared mode. Detached chmod MUST NOT call daemon metadata mutation methods, begin or commit a session, or recreate the name. The volatile mode state is discarded after the last handle closes. An open FUSE handle owns its retained Resource and attribute view. Successful Unlink detaches the namespace Entry while preserving resources. The same handle guarantees apply when another adapter detaches a parent subtree without FUSE Unlink: handle-based Getattr and Setattr MUST use the held Resource and cached inode state without requiring public Entry resolution. A stable-ID write Commit after external detach MUST be discard-only, MUST NOT recreate the Entry, and MUST NOT leave an ordinary failed-write Recovery record. Detached write handles may continue private staging I/O; size changes truncate staging and Fsync syncs staging only. Detached reads continue from immutable resources; ftruncate fails EBADF. Write staging files remain physically mode 0600 and this invariant is independent of logical mode. Setattr responses describe the mutation's captured state snapshot. Final Release cleans the retained daemon resource and final close removes detached mode state. Daemon restart finishes durable unlink tombstone cleanup without exposing staging as ordinary Recovery.
     provenance:
       origin: human-authored
   - id: REQ-REPRODUCIBLE-E2E-GATES
@@ -712,7 +777,21 @@ nodes:
   - id: DES-OBJECT-MODEL
     level: system_design
     kind: object-model
-    statement: Object Stores own immutable content bytes identified by algorithm-namespaced content IDs, independent of logical names or paths. Local and the single selected remote object-storage backend are physical copies whose durability role depends on delivery mode; committed immutable publication, verification, enumeration, and deletion never assign logical paths. GCS and the single S3-compatible adapter are supported remote backends.
+    statement: >-
+      Object Stores own immutable content bytes identified by
+      algorithm-namespaced content IDs, independent of logical names or paths.
+      Local and the single selected remote object-storage backend are physical
+      copies whose durability role depends on delivery mode; committed
+      immutable publication, verification, enumeration, and deletion never
+      assign logical paths. Local staged files are synced before publication.
+      Unix-like Local publication syncs the destination objects directory and
+      propagates errors, with power-loss persistence conditional on the OS,
+      filesystem, device, and intermediate caches honoring flushes. Windows
+      Local publication requests MOVEFILE_WRITE_THROUGH best effort; published
+      name survival after sudden power loss is not guaranteed. These are
+      physical persistence limits and do not change atomic publication,
+      immutability, or metadata-before-reference ordering. GCS and the single
+      S3-compatible adapter are supported remote backends.
     provenance:
       origin: imported
   - id: DES-DOCTOR
@@ -787,7 +866,23 @@ nodes:
   - id: DES-DELIVERY-MODES
     level: system_design
     kind: storage-delivery-model
-    statement: Local delivery mode does not construct or contact a remote backend and treats Local as the durable authoritative Object copy. In Phase A Remote mode, each write first persists a complete immutable Local Object and atomically commits Metadata plus a content-ID delivery obligation, making the committed Entry immediately visible through the single daemon; asynchronous transfer waits for the configured scheduler. Local data remains the durable source until delivery is confirmed. After confirmation, Local may act as an evictable cache while SQLite Metadata remains the Phase A authority for logical Entries and paths. Exactly one remote backend is selected for a repository; the supported implementations are GCS and S3-compatible storage. In Phase B, Local Commit and Global Publish are separate and shared Metadata exposes only the Published Head. A content ID can be referenced by multiple Entries and is delivered once per content identity, independent of logical names.
+    statement: >-
+      Local delivery mode does not construct or contact a remote backend and
+      treats Local as the durable authoritative Object copy under the physical
+      persistence limits in REQ-OBJECT-COMMIT. In Phase A Remote mode, each
+      write first persists a complete immutable Local Object and atomically
+      commits Metadata plus a content-ID delivery obligation, making the
+      committed Entry immediately visible through the single daemon;
+      asynchronous transfer waits for the configured scheduler. Local data
+      remains the durable source until delivery is confirmed, subject to the
+      same platform-specific power-loss limits. After confirmation, Local may
+      act as an evictable cache while SQLite Metadata remains the Phase A
+      authority for logical Entries and paths. Exactly one remote backend is
+      selected for a repository; the supported implementations are GCS and
+      S3-compatible storage. In Phase B, Local Commit and Global Publish are
+      separate and shared Metadata exposes only the Published Head. A content
+      ID can be referenced by multiple Entries and is delivered once per
+      content identity, independent of logical names.
     attributes:
       modes: [local, remote]
       remote_backend_count: exactly-one

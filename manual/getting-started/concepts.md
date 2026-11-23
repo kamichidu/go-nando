@@ -1,58 +1,53 @@
-# How nando fits together
+# What happens to your files
 
-A repository is the place where nando keeps a file tree, local file data, and its settings. Start one daemon for a repository. The CLI, FUSE mount, and WebDAV service connect to that daemon; FUSE and WebDAV are separate programs that you start when needed.
+nando keeps your files in a repository that you can use through FUSE or
+WebDAV. The command-line tools help initialize and maintain that repository.
+See [FUSE](../use/fuse), [WebDAV](../use/webdav), and the [CLI reference](../reference/cli).
 
-```mermaid
-flowchart LR
-  user[You and file applications]
-  cli[nando CLI]
-  fuse[FUSE mount]
-  webdav[WebDAV service]
-  systemd[systemd]
-  daemon[nando daemon]
-  repo[(repository)]
-  remote[(selected remote storage)]
-  init[nando init]
+## When a change is committed
 
-  user --> fuse
-  user --> webdav
-  cli --> daemon
-  fuse --> daemon
-  webdav --> daemon
-  systemd -->|starts and supervises| daemon
-  init -->|creates| repo
-  daemon --> repo
-  daemon -->|optional background delivery| remote
-```
+nando prepares the complete new file content before making it the current
+version. Until the change is committed, the previously committed version
+remains current. A successful local commit means the new version is available
+from the repository; it does not necessarily mean that a remote copy exists.
 
-`nando init` creates a repository without a running daemon. The daemon provides access to that repository and, in Remote mode, delivers content to its selected GCS or S3-compatible backend in the background. Do not run two daemons against the same repository.
+In Local mode, the repository's local copy is the authoritative copy. In Remote
+mode, nando first commits the content locally and records the work needed to
+deliver it to the selected remote storage. Delivery runs later in the
+background. A successful local commit or FUSE `fsync` is not confirmation of
+remote delivery. Keep the local repository available until the selected remote
+service has accepted the content; there is no CLI command that reports when the
+delivery queue has drained. See [remote delivery](../use/remote-delivery).
 
-All clients must select the same repository and daemon endpoint. Repository selection uses the first available value in this order:
+## FUSE `fsync` and close
 
-1. An explicit `--repository` option.
-2. `[repository].path` in the shared TOML configuration.
-3. The XDG-style data default, `${XDG_DATA_HOME:-~/.local/share}/nando`.
+For a file opened through FUSE, a successful `fsync` is the synchronous point
+at which dirty content is committed locally. Closing the last writable handle
+also asks nando to commit remaining changes, but on Linux the final-close work
+may finish after the application's `close` call returns. `Flush` is not a
+commit signal. Applications that require a synchronous local commit should
+call `fsync` and check its result. See [FUSE write and commit behavior](../use/fuse#write-and-commit-behavior).
 
-The daemon endpoint follows the same precedence pattern: `--daemon-listen`, `[daemon].listen`, then a local Unix socket derived from the repository path. A system service usually selects its config and repository explicitly. Selecting a config file does not discover a system-wide repository or switch repositories automatically. See [configuration](../setup/configuration) and [systemd](../setup/systemd).
+An unlinked file is no longer part of the repository namespace. Existing
+handles may continue to use their retained data, but changes through a handle
+to an unlinked file are not committed back into the namespace.
 
-In Local mode, local content is the durable copy. In Remote mode, writes are committed locally first and delivered asynchronously to one selected backend. A successful write does not confirm remote durability. See [remote delivery](../use/remote-delivery).
+## Power-loss limits
 
-## Local object publication durability
+nando syncs staged file contents before publishing them. On Unix-like systems,
+it also syncs the destination directory and reports directory-sync errors. The
+result still depends on the operating system, filesystem, storage device, and
+any intermediate cache honoring successful flush requests. If one of those
+layers reports success before data is stable, nando cannot guarantee that a
+recent commit survives power loss or hardware failure.
 
-Local object publication syncs staged file contents on all supported platforms.
+On Windows, nando requests a best-effort write-through move when publishing an
+object. This does not guarantee that the published name survives sudden power
+loss. Unit tests cover software-visible publication and retry behavior; they
+do not prove recovery after an actual power failure.
 
-On Unix-like systems, nando also syncs the destination directory after
-publishing the object and returns directory-sync errors. This relies on the
-operating system, filesystem, storage device, and intermediate caches honoring
-successful flush requests. It cannot guarantee survival of power loss or
-hardware failure if a layer reports a flush complete before data is stable.
+For backups, stop clients and the daemon normally and capture the complete
+repository as one consistent set. See [backup and restore](../operations/backup-restore).
 
-On Windows, nando requests `MOVEFILE_WRITE_THROUGH` as a best-effort
-publication step. Windows publication does not provide a portable directory
-flush and does not guarantee that the published name survives sudden power
-loss.
-
-Software-level sync and retry behavior does not prove recovery after an actual
-operating-system or hardware power failure.
-
-For the canonical developer design, including internal component responsibilities and data contracts, see [`docs/design.ir.yaml`](https://github.com/kamichidu/go-nando/blob/main/docs/design.ir.yaml).
+The [developer design](https://github.com/kamichidu/go-nando/blob/main/docs/design.ir.yaml)
+records the detailed storage, commit, and recovery contracts.
