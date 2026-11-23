@@ -719,6 +719,171 @@ func TestOpenHandlesSurviveExternalRecursiveDeleteWithoutWriteResurrection(t *te
 	}
 }
 
+func TestExternalDetachSetattrUsesSharedRetainedMode(t *testing.T) {
+	ctx := context.Background()
+	d := newStub(t, []byte("original"))
+	f := New(d)
+	root := &entryNode{owner: f, entry: controlrpc.Entry{ID: "root", Kind: "directory", Mode: 0o755}, path: "/"}
+	_ = fs.NewNodeFS(root, &fs.Options{})
+	var ent fuse.EntryOut
+	if _, errno := root.Lookup(ctx, "file", &ent); errno != 0 {
+		t.Fatal(errno)
+	}
+	node := f.byID[d.entry.ID]
+	rh, _, errno := node.Open(ctx, uint32(os.O_RDONLY))
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	wh, _, errno := node.Open(ctx, uint32(os.O_WRONLY))
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	reader, writer := mustFileHandle(t, rh), mustFileHandle(t, wh)
+
+	// Observe an external chmod while the Entry is still linked, then detach it
+	// through another adapter before either handle changes mode.
+	d.mu.Lock()
+	d.entry.Mode = d.entry.Mode&^0o7777 | 0o604
+	d.entry.Revision++
+	d.mu.Unlock()
+	var attr fuse.AttrOut
+	if errno := reader.Getattr(ctx, &attr); errno != 0 || attr.Mode&0o7777 != 0o604 {
+		t.Fatalf("read handle did not observe external chmod: mode=%o errno=%v", attr.Mode&0o7777, errno)
+	}
+	d.mu.Lock()
+	d.exists = false
+	d.mu.Unlock()
+	size := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE, Size: 2}}
+	if errno := node.Setattr(ctx, wh, size, &attr); errno != 0 {
+		t.Fatalf("write-handle truncate while detecting external detach: %v", errno)
+	}
+	if attr.Size != 2 || attr.Mode&0o7777 != 0o604 {
+		t.Fatalf("external-detach Setattr snapshot size=%d mode=%o, want size=2 mode=0604", attr.Size, attr.Mode&0o7777)
+	}
+	if errno := writer.Getattr(ctx, &attr); errno != 0 || attr.Mode&0o7777 != 0o604 {
+		t.Fatalf("write fstat did not inherit external mode at detach: mode=%o errno=%v", attr.Mode&0o7777, errno)
+	}
+
+	chmod := func(mode uint32) *fuse.SetAttrIn {
+		return &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE, Mode: mode}}
+	}
+	if errno := node.Setattr(ctx, wh, chmod(0o620), &attr); errno != 0 {
+		t.Fatalf("write-handle fchmod after external detach: %v", errno)
+	}
+	if got := attr.Mode & 0o7777; got != 0o620 {
+		t.Fatalf("write-handle Setattr response mode=%o, want captured mode 0620", got)
+	}
+	if errno := reader.Getattr(ctx, &attr); errno != 0 || attr.Mode&0o7777 != 0o620 {
+		t.Fatalf("read fstat did not observe shared detached mode: mode=%o errno=%v", attr.Mode&0o7777, errno)
+	}
+
+	d.mu.Lock()
+	callsAfterDetach := len(d.calls)
+	d.mu.Unlock()
+	if errno := node.Setattr(ctx, rh, chmod(0o600), &attr); errno != 0 {
+		t.Fatalf("read-handle fchmod after external detach: %v", errno)
+	}
+	if got := attr.Mode & 0o7777; got != 0o600 {
+		t.Fatalf("read-handle Setattr response mode=%o, want captured mode 0600", got)
+	}
+	if errno := writer.Getattr(ctx, &attr); errno != 0 || attr.Mode&0o7777 != 0o600 {
+		t.Fatalf("write fstat did not observe shared detached mode: mode=%o errno=%v", attr.Mode&0o7777, errno)
+	}
+	readSize := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE, Size: 1}}
+	if errno := node.Setattr(ctx, rh, readSize, &attr); errno != syscall.EBADF {
+		t.Fatalf("read-handle ftruncate errno=%v, want EBADF", errno)
+	}
+	d.mu.Lock()
+	if len(d.calls) != callsAfterDetach {
+		calls := append([]string(nil), d.calls[callsAfterDetach:]...)
+		d.mu.Unlock()
+		t.Fatalf("detached handle attributes called daemon: %v", calls)
+	}
+	if d.exists || d.commits != 0 || d.entry.Mode&0o7777 != 0o604 {
+		t.Fatalf("detached fchmod mutated or resurrected Entry: exists=%v commits=%d mode=%o", d.exists, d.commits, d.entry.Mode&0o7777)
+	}
+	d.mu.Unlock()
+	if errno := writer.Release(ctx); errno != 0 {
+		t.Fatalf("release detached writer: %v", errno)
+	}
+	if errno := reader.Release(ctx); errno != 0 {
+		t.Fatalf("release detached reader: %v", errno)
+	}
+}
+
+func TestExternalDetachGetattrReturnsModeFromSharedSnapshot(t *testing.T) {
+	for _, detector := range []struct {
+		name     string
+		writable bool
+	}{
+		{name: "read-only", writable: false},
+		{name: "writable", writable: true},
+	} {
+		t.Run(detector.name+" first", func(t *testing.T) {
+			ctx := context.Background()
+			d := newStub(t, []byte("original"))
+			f := New(d)
+			root := &entryNode{owner: f, entry: controlrpc.Entry{ID: "root", Kind: "directory", Mode: 0o755}, path: "/"}
+			_ = fs.NewNodeFS(root, &fs.Options{})
+			var ent fuse.EntryOut
+			if _, errno := root.Lookup(ctx, "file", &ent); errno != 0 {
+				t.Fatal(errno)
+			}
+			node := f.byID[d.entry.ID]
+			rh, _, errno := node.Open(ctx, uint32(os.O_RDONLY))
+			if errno != 0 {
+				t.Fatal(errno)
+			}
+			wh, _, errno := node.Open(ctx, uint32(os.O_WRONLY))
+			if errno != 0 {
+				t.Fatal(errno)
+			}
+			reader, writer := mustFileHandle(t, rh), mustFileHandle(t, wh)
+
+			// First observe an external chmod while linked, so both handles cache
+			// the old mode before the next Getattr discovers external removal.
+			d.mu.Lock()
+			d.entry.Mode = d.entry.Mode&^0o7777 | 0o604
+			d.entry.Revision++
+			d.mu.Unlock()
+			var attr fuse.AttrOut
+			if errno := reader.Getattr(ctx, &attr); errno != 0 || attr.Mode&0o7777 != 0o604 {
+				t.Fatalf("linked read fstat did not observe external chmod: mode=%o errno=%v", attr.Mode&0o7777, errno)
+			}
+			if errno := writer.Getattr(ctx, &attr); errno != 0 || attr.Mode&0o7777 != 0o604 {
+				t.Fatalf("linked write fstat did not observe external chmod: mode=%o errno=%v", attr.Mode&0o7777, errno)
+			}
+			d.mu.Lock()
+			d.exists = false
+			d.mu.Unlock()
+
+			detectorHandle := reader
+			if detector.writable {
+				detectorHandle = writer
+			}
+			if errno := detectorHandle.Getattr(ctx, &attr); errno != 0 {
+				t.Fatalf("first detached fstat: %v", errno)
+			}
+			if got := attr.Mode & 0o7777; got != 0o604 {
+				t.Fatalf("first detached fstat returned stale mode %o, want 0604", got)
+			}
+			other := reader
+			if detector.writable {
+				other = writer
+			}
+			if errno := other.Getattr(ctx, &attr); errno != 0 || attr.Mode&0o7777 != 0o604 {
+				t.Fatalf("other detached fstat mode=%o errno=%v, want 0604", attr.Mode&0o7777, errno)
+			}
+			if errno := writer.Release(ctx); errno != 0 {
+				t.Fatalf("release write handle: %v", errno)
+			}
+			if errno := reader.Release(ctx); errno != 0 {
+				t.Fatalf("release read handle: %v", errno)
+			}
+		})
+	}
+}
+
 func TestExternalDeleteFinalReleaseAndConcurrentConflictClassification(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {

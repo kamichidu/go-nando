@@ -80,6 +80,25 @@ cleanup. S3-compatible uploads use one conditional PutObject and reconcile by
 HEAD metadata. Multipart upload is unsupported; compatibility is limited to the
 single-part operations and endpoint behavior documented here.
 
+== Local object publication durability
+
+|===
+|Platform |What publication means
+
+|Unix-like
+|nando syncs the file and destination directory, and reports directory-sync
+errors. Power-loss protection depends on the OS, filesystem, and storage
+hardware honoring those flushes.
+
+|Windows
+|nando requests best-effort write-through publication. It cannot guarantee
+that the new object name survives sudden power loss.
+|===
+
+Unit tests exercise software-visible publication, error handling, and retry
+behavior. They do not simulate or prove recovery after an operating-system or
+hardware power failure.
+
 == Requirements
 
 Using a prebuilt release requires a supported operating system and

@@ -85,7 +85,9 @@ func (h *Handler) propfind(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			for _, n := range missing {
-				fmt.Fprintf(w, `<x:%s xmlns:x="%s"/>`, xmlEscape(n.local), xmlEscape(n.space))
+				if _, err := io.WriteString(w, propertyElement(n)); err != nil {
+					return
+				}
 			}
 			if _, err := io.WriteString(w, `</D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat>`); err != nil {
 				return
@@ -207,7 +209,7 @@ func (h *Handler) responseProps(ctx context.Context, e propEntry, req propReques
 	var missing []propName
 	for _, n := range req.names {
 		if req.nameOnly {
-			good = append(good, fmt.Sprintf(`<x:%s xmlns:x="%s"/>`, xmlEscape(n.local), xmlEscape(n.space)))
+			good = append(good, propertyElement(n))
 			continue
 		}
 		if raw, ok := dead[n]; ok {
@@ -249,6 +251,14 @@ func (h *Handler) responseProps(ctx context.Context, e propEntry, req propReques
 	}
 	return good, missing, nil
 }
+
+func propertyElement(name propName) string {
+	if name.space == "" {
+		return fmt.Sprintf(`<%s/>`, xmlEscape(name.local))
+	}
+	return fmt.Sprintf(`<x:%s xmlns:x="%s"/>`, xmlEscape(name.local), xmlEscape(name.space))
+}
+
 func xmlEscape(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, `&quot;`, `'`, `&apos;`).Replace(s)
 }
@@ -262,38 +272,88 @@ type patchInstruction struct {
 func parsePatch(body []byte) ([]patchInstruction, error) {
 	d := xml.NewDecoder(bytes.NewReader(body))
 	var out []patchInstruction
-	var op string
+	next := func() (xml.Token, error) {
+		for {
+			tok, err := d.Token()
+			if err != nil {
+				return nil, err
+			}
+			if text, ok := tok.(xml.CharData); ok && strings.TrimSpace(string(text)) == "" {
+				continue
+			}
+			if _, ok := tok.(xml.Comment); ok {
+				continue
+			}
+			if _, ok := tok.(xml.ProcInst); ok {
+				continue
+			}
+			return tok, nil
+		}
+	}
+	expectStart := func(name xml.Name) (xml.StartElement, error) {
+		tok, err := next()
+		if err != nil {
+			return xml.StartElement{}, err
+		}
+		start, ok := tok.(xml.StartElement)
+		if !ok || start.Name != name {
+			return xml.StartElement{}, fmt.Errorf("unexpected PROPPATCH element")
+		}
+		return start, nil
+	}
+	expectEnd := func(name xml.Name) error {
+		tok, err := next()
+		if err != nil {
+			return err
+		}
+		end, ok := tok.(xml.EndElement)
+		if !ok || end.Name != name {
+			return fmt.Errorf("unexpected PROPPATCH element")
+		}
+		return nil
+	}
+	root, err := expectStart(davName("propertyupdate"))
+	if err != nil {
+		return nil, err
+	}
 	for {
-		t, e := d.Token()
-		if e == io.EOF {
+		tok, err := next()
+		if err != nil {
+			return nil, err
+		}
+		if end, ok := tok.(xml.EndElement); ok {
+			if end.Name != root.Name {
+				return nil, fmt.Errorf("unexpected PROPPATCH root end")
+			}
 			break
 		}
-		if e != nil {
-			return nil, e
+		action, ok := tok.(xml.StartElement)
+		if !ok || (action.Name != davName("set") && action.Name != davName("remove")) {
+			return nil, fmt.Errorf("expected DAV:set or DAV:remove")
 		}
-		x, ok := t.(xml.StartElement)
-		if !ok {
-			continue
+		beforeAction := len(out)
+		if _, err := expectStart(davName("prop")); err != nil {
+			return nil, err
 		}
-		if x.Name == davName("set") {
-			op = "set"
-			continue
-		}
-		if x.Name == davName("remove") {
-			op = "remove"
-			continue
-		}
-		if x.Name == davName("prop") {
-			continue
-		}
-		if op != "" {
-			if !validNamespace(x.Name.Space) {
-				return nil, fmt.Errorf("unbound property namespace")
+		for {
+			tok, err := next()
+			if err != nil {
+				return nil, err
+			}
+			if end, ok := tok.(xml.EndElement); ok {
+				if end.Name != davName("prop") {
+					return nil, fmt.Errorf("unexpected DAV:prop end")
+				}
+				break
+			}
+			property, ok := tok.(xml.StartElement)
+			if !ok || !validNamespace(property.Name.Space) {
+				return nil, fmt.Errorf("invalid PROPPATCH property")
 			}
 			var raw bytes.Buffer
 			enc := xml.NewEncoder(&raw)
-			x.Attr = withoutNamespaceDeclarations(x.Attr)
-			if err := enc.EncodeToken(x); err != nil {
+			property.Attr = withoutNamespaceDeclarations(property.Attr)
+			if err := enc.EncodeToken(property); err != nil {
 				return nil, err
 			}
 			level := 1
@@ -317,8 +377,20 @@ func parsePatch(body []byte) ([]patchInstruction, error) {
 			if err := enc.Flush(); err != nil {
 				return nil, err
 			}
-			out = append(out, patchInstruction{set: op == "set", name: propName{x.Name.Space, x.Name.Local}, xml: raw.String()})
+			out = append(out, patchInstruction{set: action.Name == davName("set"), name: propName{property.Name.Space, property.Name.Local}, xml: raw.String()})
 		}
+		if len(out) == beforeAction {
+			return nil, fmt.Errorf("empty PROPPATCH action")
+		}
+		if err := expectEnd(action.Name); err != nil {
+			return nil, err
+		}
+	}
+	if tok, err := next(); err != io.EOF || tok != nil {
+		if err == nil {
+			return nil, fmt.Errorf("trailing PROPPATCH content")
+		}
+		return nil, err
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("missing property instructions")
@@ -398,10 +470,10 @@ func (h *Handler) proppatch(w http.ResponseWriter, r *http.Request) {
 			status = 424
 		}
 		if status == 200 {
-			fmt.Fprintf(w, `<D:propstat><D:prop><x:%s xmlns:x="%s"/></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>`, xmlEscape(op.name.local), xmlEscape(op.name.space))
+			fmt.Fprintf(w, `<D:propstat><D:prop>%s</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>`, propertyElement(op.name))
 		} else {
 			reason := http.StatusText(status)
-			fmt.Fprintf(w, `<D:propstat><D:prop><x:%s xmlns:x="%s"/></D:prop><D:status>HTTP/1.1 %d %s</D:status></D:propstat>`, xmlEscape(op.name.local), xmlEscape(op.name.space), status, reason)
+			fmt.Fprintf(w, `<D:propstat><D:prop>%s</D:prop><D:status>HTTP/1.1 %d %s</D:status></D:propstat>`, propertyElement(op.name), status, reason)
 		}
 	}
 	if _, err := io.WriteString(w, `</D:response></D:multistatus>`); err != nil {
