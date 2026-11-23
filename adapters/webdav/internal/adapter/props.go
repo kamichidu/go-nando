@@ -85,7 +85,9 @@ func (h *Handler) propfind(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			for _, n := range missing {
-				fmt.Fprintf(w, `<x:%s xmlns:x="%s"/>`, xmlEscape(n.local), xmlEscape(n.space))
+				if _, err := io.WriteString(w, propertyElement(n)); err != nil {
+					return
+				}
 			}
 			if _, err := io.WriteString(w, `</D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat>`); err != nil {
 				return
@@ -207,7 +209,7 @@ func (h *Handler) responseProps(ctx context.Context, e propEntry, req propReques
 	var missing []propName
 	for _, n := range req.names {
 		if req.nameOnly {
-			good = append(good, fmt.Sprintf(`<x:%s xmlns:x="%s"/>`, xmlEscape(n.local), xmlEscape(n.space)))
+			good = append(good, propertyElement(n))
 			continue
 		}
 		if raw, ok := dead[n]; ok {
@@ -249,6 +251,14 @@ func (h *Handler) responseProps(ctx context.Context, e propEntry, req propReques
 	}
 	return good, missing, nil
 }
+
+func propertyElement(name propName) string {
+	if name.space == "" {
+		return fmt.Sprintf(`<%s/>`, xmlEscape(name.local))
+	}
+	return fmt.Sprintf(`<x:%s xmlns:x="%s"/>`, xmlEscape(name.local), xmlEscape(name.space))
+}
+
 func xmlEscape(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, `&quot;`, `'`, `&apos;`).Replace(s)
 }
@@ -460,10 +470,10 @@ func (h *Handler) proppatch(w http.ResponseWriter, r *http.Request) {
 			status = 424
 		}
 		if status == 200 {
-			fmt.Fprintf(w, `<D:propstat><D:prop><x:%s xmlns:x="%s"/></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>`, xmlEscape(op.name.local), xmlEscape(op.name.space))
+			fmt.Fprintf(w, `<D:propstat><D:prop>%s</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>`, propertyElement(op.name))
 		} else {
 			reason := http.StatusText(status)
-			fmt.Fprintf(w, `<D:propstat><D:prop><x:%s xmlns:x="%s"/></D:prop><D:status>HTTP/1.1 %d %s</D:status></D:propstat>`, xmlEscape(op.name.local), xmlEscape(op.name.space), status, reason)
+			fmt.Fprintf(w, `<D:propstat><D:prop>%s</D:prop><D:status>HTTP/1.1 %d %s</D:status></D:propstat>`, propertyElement(op.name), status, reason)
 		}
 	}
 	if _, err := io.WriteString(w, `</D:response></D:multistatus>`); err != nil {

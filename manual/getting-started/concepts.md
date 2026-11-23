@@ -37,4 +37,22 @@ The daemon endpoint follows the same precedence pattern: `--daemon-listen`, `[da
 
 In Local mode, local content is the durable copy. In Remote mode, writes are committed locally first and delivered asynchronously to one selected backend. A successful write does not confirm remote durability. See [remote delivery](../use/remote-delivery).
 
+## Local object publication durability
+
+Local object publication syncs staged file contents on all supported platforms.
+
+On Unix-like systems, nando also syncs the destination directory after
+publishing the object and returns directory-sync errors. This relies on the
+operating system, filesystem, storage device, and intermediate caches honoring
+successful flush requests. It cannot guarantee survival of power loss or
+hardware failure if a layer reports a flush complete before data is stable.
+
+On Windows, nando requests `MOVEFILE_WRITE_THROUGH` as a best-effort
+publication step. Windows publication does not provide a portable directory
+flush and does not guarantee that the published name survives sudden power
+loss.
+
+Software-level sync and retry behavior does not prove recovery after an actual
+operating-system or hardware power failure.
+
 For the canonical developer design, including internal component responsibilities and data contracts, see [`docs/design.ir.yaml`](https://github.com/kamichidu/go-nando/blob/main/docs/design.ir.yaml).

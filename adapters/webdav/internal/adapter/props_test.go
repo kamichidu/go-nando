@@ -109,6 +109,29 @@ func TestPropertiesPropfindAndAtomicProppatch(t *testing.T) {
 	if response.Code != 207 || client.updates != 1 || len(client.last.Changes) != 1 || !strings.Contains(client.last.Changes[0].Property.XML, "green") {
 		t.Fatalf("PROPPATCH status=%d updates=%d params=%+v body=%s", response.Code, client.updates, client.last, response.Body.String())
 	}
+	unqualified := httptest.NewRequest("PROPPATCH", "http://example.test/file", strings.NewReader(`<D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><plain>value</plain></D:prop></D:set></D:propertyupdate>`))
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, unqualified)
+	if response.Code != 207 || client.updates != 2 {
+		t.Fatalf("unqualified PROPPATCH status=%d updates=%d body=%s", response.Code, client.updates, response.Body.String())
+	}
+	foundUnqualified := false
+	decoder := xml.NewDecoder(strings.NewReader(response.Body.String()))
+	for {
+		tok, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("decode PROPPATCH response: %v body=%s", err, response.Body.String())
+		}
+		if start, ok := tok.(xml.StartElement); ok && start.Name == (xml.Name{Local: "plain"}) {
+			foundUnqualified = true
+		}
+	}
+	if !foundUnqualified || strings.Contains(response.Body.String(), `xmlns:x=""`) {
+		t.Fatalf("unqualified property was not returned as a non-prefixed element: %s", response.Body.String())
+	}
 	for _, body := range []string{
 		`<D:other xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><X:color>red</X:color></D:prop></D:set></D:other>`,
 		`<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:remove><D:prop><X:color/></D:prop></D:remove></D:set></D:propertyupdate>`,
@@ -121,14 +144,14 @@ func TestPropertiesPropfindAndAtomicProppatch(t *testing.T) {
 		invalid := httptest.NewRequest("PROPPATCH", "http://example.test/file", strings.NewReader(body))
 		response = httptest.NewRecorder()
 		handler.ServeHTTP(response, invalid)
-		if response.Code != 400 || client.updates != 1 {
+		if response.Code != 400 || client.updates != 2 {
 			t.Fatalf("invalid PROPPATCH mutated state: status=%d updates=%d body=%s", response.Code, client.updates, response.Body.String())
 		}
 	}
 	protected := httptest.NewRequest("PROPPATCH", "http://example.test/file", strings.NewReader(`<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><D:getetag/><X:color>red</X:color></D:prop></D:set></D:propertyupdate>`))
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, protected)
-	if response.Code != 207 || client.updates != 1 || !strings.Contains(response.Body.String(), "403 Forbidden") || !strings.Contains(response.Body.String(), "424 Failed Dependency") {
+	if response.Code != 207 || client.updates != 2 || !strings.Contains(response.Body.String(), "403 Forbidden") || !strings.Contains(response.Body.String(), "424 Failed Dependency") {
 		t.Fatalf("protected patch was not atomic: updates=%d body=%s", client.updates, response.Body.String())
 	}
 	invalid := httptest.NewRequest("PROPFIND", "http://example.test/file", strings.NewReader(`<D:propfind xmlns:D="DAV:"><D:prop><Q:bad/></D:prop></D:propfind>`))
