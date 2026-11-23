@@ -119,16 +119,18 @@ func (f *FileSystem) releaseMode(id string, s *openMode) {
 
 // markDeleted transfers logical-mode authority from linked Entry metadata to
 // the shared retained-inode state using the last Entry snapshot we resolved.
-func (h *fileHandle) markDeleted() {
+func (h *fileHandle) markDeleted() uint32 {
 	if h.modeState == nil {
-		return
+		return h.node.entryMode() & 0o7777
 	}
 	h.modeState.mu.Lock()
 	if !h.modeState.unlinked && !h.modeState.deleted {
 		h.modeState.mode = h.node.entryMode() & 0o7777
 	}
 	h.modeState.deleted = true
+	mode := h.modeState.mode
 	h.modeState.mu.Unlock()
+	return mode
 }
 
 func (f *FileSystem) Root() fs.InodeEmbedder {
@@ -1214,7 +1216,7 @@ func (h *fileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Err
 					if errno != syscall.ENOENT {
 						return errno
 					}
-					h.markDeleted()
+					mode = h.markDeleted()
 					h.write.unlinked = true
 				} else {
 					mode = h.node.currentEntry().Mode & 0o7777
@@ -1235,7 +1237,7 @@ func (h *fileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Err
 					if errno != syscall.ENOENT {
 						return errno
 					}
-					h.markDeleted()
+					mode = h.markDeleted()
 				} else {
 					mode = h.node.currentEntry().Mode & 0o7777
 				}

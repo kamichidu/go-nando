@@ -4,6 +4,45 @@ nando keeps your files in a repository that you can use through FUSE or
 WebDAV. The command-line tools help initialize and maintain that repository.
 See [FUSE](../use/fuse), [WebDAV](../use/webdav), and the [CLI reference](../reference/cli).
 
+## How the pieces fit together
+
+A repository holds the file tree, local file data, and repository settings.
+One daemon opens and owns that repository. The CLI, FUSE mount, and WebDAV
+service connect to the daemon; FUSE and WebDAV are separate adapter processes
+that you start when needed. On Debian or Ubuntu, systemd can start and supervise
+the daemon, but it does not start either adapter.
+
+```mermaid
+flowchart LR
+  user[You and file applications]
+  cli[nando CLI]
+  fuse[FUSE mount]
+  webdav[WebDAV service]
+  systemd[systemd]
+  daemon[nando daemon]
+  repo[(repository)]
+  remote[(selected remote storage)]
+  init[nando init]
+
+  user --> fuse
+  user --> webdav
+  cli --> daemon
+  fuse --> daemon
+  webdav --> daemon
+  systemd -->|starts and supervises| daemon
+  init -->|creates| repo
+  daemon --> repo
+  daemon -->|optional background delivery| remote
+```
+
+Initialize a repository with `nando init`; it does not start the daemon. Run
+only one daemon for a repository. Every client must select the same repository
+and daemon endpoint. A config file selection does not automatically discover a
+system-wide repository or switch a client to it. In particular, a personal
+repository and the separate system-service repository are different stores.
+See [configuration](../setup/configuration), [quick start](./quickstart), and
+[systemd setup](../setup/systemd) for matching client settings.
+
 ## When a change is committed
 
 nando prepares the complete new file content before making it the current
@@ -21,16 +60,19 @@ delivery queue has drained. See [remote delivery](../use/remote-delivery).
 
 ## FUSE `fsync` and close
 
-For a file opened through FUSE, a successful `fsync` is the synchronous point
-at which dirty content is committed locally. Closing the last writable handle
+For a linked file opened through FUSE, a successful `fsync` is the synchronous
+point at which dirty content is committed locally. Closing the last writable handle
 also asks nando to commit remaining changes, but on Linux the final-close work
 may finish after the application's `close` call returns. `Flush` is not a
 commit signal. Applications that require a synchronous local commit should
 call `fsync` and check its result. See [FUSE write and commit behavior](../use/fuse#write-and-commit-behavior).
 
-An unlinked file is no longer part of the repository namespace. Existing
-handles may continue to use their retained data, but changes through a handle
-to an unlinked file are not committed back into the namespace.
+An unlinked or externally detached file is no longer part of the repository
+namespace. Existing handles may continue to use their retained data. For a
+detached writable handle, `fsync` synchronizes only its private staging file;
+it does not commit to or recreate the repository namespace. See [FUSE write and
+commit behavior](../use/fuse#write-and-commit-behavior) for the linked and
+detached cases.
 
 ## Power-loss limits
 
